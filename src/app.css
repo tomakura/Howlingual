@@ -125,7 +125,7 @@ body {
 
 /* Scrollbar - Hidden by default, shown during scroll or hover */
 ::-webkit-scrollbar {
-	width: 8px;
+	width: 4px;
 }
 
 ::-webkit-scrollbar-track {
@@ -133,16 +133,19 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-	background: transparent;
-	border-radius: 4px;
-	transition: background 0.3s;
+	background-color: transparent;
+	border-radius: 2px;
+	/* Slow fade out */
+	transition: background-color 0.8s ease-out;
 }
 
 .is-scrolling::-webkit-scrollbar-thumb,
 ::-webkit-scrollbar-thumb:hover {
-	background: rgba(255, 255, 255, 0.2);
+	background-color: rgba(255, 255, 255, 0.2);
+	/* Fast fade in */
+	transition: background-color 0.1s ease-in;
 }
 
 ::-webkit-scrollbar-thumb:active {
-	background: rgba(255, 255, 255, 0.3);
+	background-color: rgba(255, 255, 255, 0.3);
 }

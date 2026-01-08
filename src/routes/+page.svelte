@@ -224,6 +224,8 @@
 
   let isScrolling = $state(false);
   let scrollTimeout: any;
+  let scrollThumbTop = $state(0);
+  let scrollThumbHeight = $state(0);
 
   function onMainScroll() {
     if (!scrollContainerEl || !textareaEl) return;
@@ -234,6 +236,22 @@
     scrollTimeout = setTimeout(() => {
       isScrolling = false;
     }, 1000);
+
+    // Calculate scrollbar thumb position and size
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainerEl;
+    const trackHeight = clientHeight;
+    const thumbHeight = Math.max(
+      (clientHeight / scrollHeight) * trackHeight,
+      30,
+    );
+    const scrollableHeight = scrollHeight - clientHeight;
+    const thumbTop =
+      scrollableHeight > 0
+        ? (scrollTop / scrollableHeight) * (trackHeight - thumbHeight)
+        : 0;
+
+    scrollThumbTop = thumbTop;
+    scrollThumbHeight = thumbHeight;
 
     const threshold = textareaEl.clientHeight + 40;
     isScrolledDown = scrollContainerEl.scrollTop > threshold;
@@ -477,243 +495,255 @@
   </header>
 
   <!-- Unified Scroll Container -->
-  <section
-    class="main-scroll glass"
-    class:is-scrolling={isScrolling}
-    bind:this={scrollContainerEl}
-    onscroll={onMainScroll}
-  >
-    <!-- Original Text Input -->
-    <div class="input-area">
-      <div class="textarea-container" class:has-overflow={showFade}>
-        <textarea
-          bind:this={textareaEl}
-          bind:value={inputQuery}
-          oninput={autoResize}
-          onscroll={checkScroll}
-          class:long-text={isLongText}
-          placeholder="テキストを入力または選択..."
-        ></textarea>
-        <div class="fade-overlay"></div>
-      </div>
-    </div>
-
-    <!-- Sticky Controls Bar (morphs based on scroll state) -->
-    <div class="controls-bar glass" class:scrolled={isScrolledDown}>
-      {#if isScrolledDown}
-        <!-- Scrolled state: show text preview + scroll-to-top -->
-        <p class="text-preview">
-          {inputQuery}
-        </p>
-      {:else}
-        <!-- Default state: show style chips -->
-        <div class="styles-row">
-          {#each Object.keys(styleLevels) as style, i}
-            <button
-              class="style-chip"
-              style="animation-delay: {i * 0.05}s"
-              onclick={() => cycleLevel(style)}
-              onpointerdown={(e) => handleDrag(style, e)}
-            >
-              <span class="chip-fill" style="width: {styleLevels[style] * 50}%"
-              ></span>
-              <span class="chip-text">{style}</span>
-            </button>
-          {/each}
-          <button
-            class="style-chip add-chip"
-            style="animation-delay: {Object.keys(styleLevels).length * 0.05}s"
-            >+</button
-          >
+  <div class="scroll-wrapper">
+    <section
+      class="main-scroll glass"
+      class:is-scrolling={isScrolling}
+      bind:this={scrollContainerEl}
+      onscroll={onMainScroll}
+    >
+      <!-- Original Text Input -->
+      <div class="input-area">
+        <div class="textarea-container" class:has-overflow={showFade}>
+          <textarea
+            bind:this={textareaEl}
+            bind:value={inputQuery}
+            oninput={autoResize}
+            onscroll={checkScroll}
+            class:long-text={isLongText}
+            placeholder="テキストを入力または選択..."
+          ></textarea>
+          <div class="fade-overlay"></div>
         </div>
-      {/if}
+      </div>
 
-      <!-- Single action button that morphs -->
-      <button
-        class="action-btn"
-        class:translate-mode={!isScrolledDown}
-        class:scroll-mode={isScrolledDown}
-        title={isScrolledDown ? "上に戻る" : "翻訳"}
-        onclick={isScrolledDown ? scrollToTop : undefined}
-      >
+      <!-- Sticky Controls Bar (morphs based on scroll state) -->
+      <div class="controls-bar glass" class:scrolled={isScrolledDown}>
         {#if isScrolledDown}
-          <svg
-            class="btn-icon"
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="m18 15-6-6-6 6" />
-          </svg>
+          <!-- Scrolled state: show text preview + scroll-to-top -->
+          <p class="text-preview">
+            {inputQuery}
+          </p>
         {:else}
-          <svg
-            class="btn-icon"
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="m5 8 6 6" />
-            <path d="m4 14 6-6 2-3" />
-            <path d="M2 5h12" />
-            <path d="M7 2h1" />
-            <path d="m22 22-5-10-5 10" />
-            <path d="M14 18h6" />
-          </svg>
-        {/if}
-      </button>
-    </div>
-
-    <!-- Translation Results -->
-    <div class="output-area">
-      {#each translations as item (item.id)}
-        <div class="candidate-card">
-          <p class="translated-text">{item.text}</p>
-          <div class="card-footer">
-            <p class="reason">
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                style="flex-shrink: 0; margin-top: 2px;"
-              >
-                <circle cx="12" cy="12" r="10"></circle>
-                <line x1="12" y1="16" x2="12" y2="12"></line>
-                <line x1="12" y1="8" x2="12.01" y2="8"></line>
-              </svg>
-              <span>{item.reason}</span>
-            </p>
-            <div class="candidate-actions">
+          <!-- Default state: show style chips -->
+          <div class="styles-row">
+            {#each Object.keys(styleLevels) as style, i}
               <button
-                class="icon-btn copy-btn"
-                class:copied={copiedId === item.id}
-                class:animating={copyAnimating[item.id]}
-                title="コピー"
-                onclick={() => handleCopy(item.id)}
-                onmouseenter={() => triggerCopyAnim(item.id)}
+                class="style-chip"
+                data-level={styleLevels[style]}
+                style="animation-delay: {i * 0.05}s"
+                onclick={() => cycleLevel(style)}
+                onpointerdown={(e) => handleDrag(style, e)}
               >
-                {#if copiedId === item.id}
-                  <svg
-                    class="check-icon"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <polyline points="20 6 9 17 4 12"></polyline>
-                  </svg>
-                {:else}
-                  <svg
-                    class="copy-icon"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"
-                    ></rect>
-                    <path
-                      d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                    ></path>
-                  </svg>
-                {/if}
+                <span
+                  class="chip-fill"
+                  style="width: {styleLevels[style] * 50}%"
+                ></span>
+                <span class="chip-text">{style}</span>
               </button>
-              <button
-                class="icon-btn speak-btn"
-                class:animating={speakAnimating[item.id]}
-                title="読み上げ"
-                onmouseenter={() => triggerSpeakAnim(item.id)}
-              >
+            {/each}
+            <button
+              class="style-chip add-chip"
+              style="animation-delay: {Object.keys(styleLevels).length * 0.05}s"
+              >+</button
+            >
+          </div>
+        {/if}
+
+        <!-- Single action button that morphs -->
+        <button
+          class="action-btn"
+          class:translate-mode={!isScrolledDown}
+          class:scroll-mode={isScrolledDown}
+          title={isScrolledDown ? "上に戻る" : "翻訳"}
+          onclick={isScrolledDown ? scrollToTop : undefined}
+        >
+          {#if isScrolledDown}
+            <svg
+              class="btn-icon"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="m18 15-6-6-6 6" />
+            </svg>
+          {:else}
+            <svg
+              class="btn-icon"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="m5 8 6 6" />
+              <path d="m4 14 6-6 2-3" />
+              <path d="M2 5h12" />
+              <path d="M7 2h1" />
+              <path d="m22 22-5-10-5 10" />
+              <path d="M14 18h6" />
+            </svg>
+          {/if}
+        </button>
+      </div>
+
+      <!-- Translation Results -->
+      <div class="output-area">
+        {#each translations as item (item.id)}
+          <div class="candidate-card">
+            <p class="translated-text">{item.text}</p>
+            <div class="card-footer">
+              <p class="reason">
                 <svg
-                  class="speak-icon"
                   width="14"
                   height="14"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
                   stroke-width="2"
-                  style="overflow: visible;"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="flex-shrink: 0; margin-top: 2px;"
                 >
-                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                  <path
-                    class="sound-wave wave-1"
-                    d="M15.54 8.46a5 5 0 0 1 0 7.07"
-                  ></path>
-                  <path
-                    class="sound-wave wave-2"
-                    d="M19.07 4.93a10 10 0 0 1 0 14.14"
-                  ></path>
-                  <path
-                    class="sound-wave wave-3"
-                    d="M22.07 1.93a14 14 0 0 1 0 20.14"
-                  ></path>
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="12" y1="16" x2="12" y2="12"></line>
+                  <line x1="12" y1="8" x2="12.01" y2="8"></line>
                 </svg>
-              </button>
+                <span>{item.reason}</span>
+              </p>
+              <div class="candidate-actions">
+                <button
+                  class="icon-btn copy-btn"
+                  class:copied={copiedId === item.id}
+                  class:animating={copyAnimating[item.id]}
+                  title="コピー"
+                  onclick={() => handleCopy(item.id)}
+                  onmouseenter={() => triggerCopyAnim(item.id)}
+                >
+                  {#if copiedId === item.id}
+                    <svg
+                      class="check-icon"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                  {:else}
+                    <svg
+                      class="copy-icon"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"
+                      ></rect>
+                      <path
+                        d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                      ></path>
+                    </svg>
+                  {/if}
+                </button>
+                <button
+                  class="icon-btn speak-btn"
+                  class:animating={speakAnimating[item.id]}
+                  title="読み上げ"
+                  onmouseenter={() => triggerSpeakAnim(item.id)}
+                >
+                  <svg
+                    class="speak-icon"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    style="overflow: visible;"
+                  >
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
+                    ></polygon>
+                    <path
+                      class="sound-wave wave-1"
+                      d="M15.54 8.46a5 5 0 0 1 0 7.07"
+                    ></path>
+                    <path
+                      class="sound-wave wave-2"
+                      d="M19.07 4.93a10 10 0 0 1 0 14.14"
+                    ></path>
+                    <path
+                      class="sound-wave wave-3"
+                      d="M22.07 1.93a14 14 0 0 1 0 20.14"
+                    ></path>
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      {/each}
+        {/each}
 
-      <!-- Explanation -->
-      <div class="explanation-card">
-        <h3>
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            class="sparkle-icon"
-          >
-            <path
-              d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .962L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"
-            />
-            <path d="M20 3v4" />
-            <path d="M22 5h-4" />
-            <path d="M4 17v2" />
-            <path d="M5 18H3" />
-          </svg>
-          詳しい解説
-        </h3>
-        <ul class="explanation-list">
-          <li>
-            <strong>deadline was tight</strong>:
-            「納期が厳しい」「締め切りがタイト」「期限に余裕がない」
-          </li>
-          <li>
-            <strong>rewrite</strong>: 「書き直す」「リライトする」「改訂する」
-          </li>
-          <li>
-            <strong>without additional explanation</strong>:
-            「追加説明なしで」「補足説明なしに」
-          </li>
-        </ul>
+        <!-- Explanation -->
+        <div class="explanation-card">
+          <h3>
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              class="sparkle-icon"
+            >
+              <path
+                d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .962L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"
+              />
+              <path d="M20 3v4" />
+              <path d="M22 5h-4" />
+              <path d="M4 17v2" />
+              <path d="M5 18H3" />
+            </svg>
+            詳しい解説
+          </h3>
+          <ul class="explanation-list">
+            <li>
+              <strong>deadline was tight</strong>:
+              「納期が厳しい」「締め切りがタイト」「期限に余裕がない」
+            </li>
+            <li>
+              <strong>rewrite</strong>: 「書き直す」「リライトする」「改訂する」
+            </li>
+            <li>
+              <strong>without additional explanation</strong>:
+              「追加説明なしで」「補足説明なしに」
+            </li>
+          </ul>
+        </div>
       </div>
-    </div>
-  </section>
+    </section>
+    <!-- Custom scrollbar indicator with fade animation -->
+    <div
+      class="scroll-indicator"
+      class:visible={isScrolling}
+      style="top: {scrollThumbTop}px; height: {scrollThumbHeight}px;"
+    ></div>
+  </div>
 </main>
 
 <style>
@@ -884,7 +914,7 @@
     width: 32px;
     height: 32px;
     object-fit: contain;
-    border-radius: 8px;
+    border-radius: 4px;
   }
 
   .sparkle-icon {
@@ -931,19 +961,51 @@
     color: var(--text-main);
   }
 
+  /* Scroll Wrapper for custom scrollbar */
+  .scroll-wrapper {
+    flex: 1;
+    display: flex;
+    position: relative;
+    min-height: 0;
+  }
+
+  /* Custom Scrollbar Indicator (Fade Animation) */
+  .scroll-indicator {
+    position: absolute;
+    right: 0;
+    width: 4px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.8s ease-out;
+  }
+
+  .scroll-indicator.visible {
+    opacity: 1;
+    transition: opacity 0.15s ease-in;
+  }
+
   /* Main Scroll Container */
   .main-scroll {
     border-radius: 0;
     border-left: none;
     border-right: none;
     border-bottom: none;
-    padding: 14px 14px 14px 24px; /* Even more visual balance for scrollbar */
+    padding: 14px 16px 14px 16px;
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 12px;
+    position: relative;
+  }
+
+  /* Hide native scrollbar completely - use custom overlay */
+  .main-scroll::-webkit-scrollbar {
+    width: 0;
+    display: none;
   }
 
   .input-area {
@@ -1144,7 +1206,7 @@
   /* Style Chips with Progress Bar */
   .styles-row {
     display: flex;
-    gap: 6px;
+    gap: 4px;
     flex-wrap: wrap;
   }
 
@@ -1153,7 +1215,7 @@
     display: flex;
     align-items: center;
     padding: 5px 12px;
-    border-radius: 12px;
+    border-radius: 8px;
     font-size: 11px;
     border: 1px solid rgba(255, 255, 255, 0.1);
     background: rgba(255, 255, 255, 0.04);
@@ -1189,9 +1251,20 @@
     top: 0;
     height: 100%;
     background: var(--primary-color);
-    opacity: 0.6;
-    transition: width 0.15s var(--easing);
-    border-radius: 12px 0 0 12px;
+    opacity: 0.15;
+    transition:
+      width 0.2s cubic-bezier(0.2, 0, 0.2, 1),
+      background-color 0.2s;
+    border-radius: 8px 0 0 8px;
+  }
+
+  .style-chip[data-level="1"] .chip-fill {
+    background: #4ade80; /* Soft Green */
+    opacity: 0.25;
+  }
+  .style-chip[data-level="2"] .chip-fill {
+    background: #f87171; /* Soft Red */
+    opacity: 0.25;
   }
 
   .chip-text {
@@ -1282,7 +1355,7 @@
 
   /* Translation Cards */
   .candidate-card {
-    padding: 12px 14px;
+    padding: 12px 12px;
     border-radius: var(--radius-sm);
     /* Base background */
     background: rgba(255, 255, 255, 0.04);
@@ -1333,7 +1406,7 @@
     flex: 1;
     line-height: 1.4;
     display: flex;
-    gap: 6px;
+    gap: 5px;
     align-items: flex-start;
   }
 
@@ -1441,7 +1514,7 @@
 
   /* Explanation */
   .explanation-card {
-    padding: 12px 14px;
+    padding: 12px 12px;
     border-radius: var(--radius-sm);
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid rgba(255, 255, 255, 0.06);
@@ -1449,7 +1522,7 @@
   }
 
   h3 {
-    font-size: 11px;
+    font-size: 12px;
     margin-bottom: 8px;
     color: var(--text-muted);
     font-weight: 600;
@@ -1457,7 +1530,7 @@
     letter-spacing: 0.5px;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
   }
 
   .explanation-list {
