@@ -1,13 +1,253 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { tick, onMount, untrack } from "svelte";
   import { fade, scale, fly } from "svelte/transition";
-  let inputQuery = $state(
-    "Even though the deadline was tight, I decided to rewrite the entire document so that anyone could understand it without additional explanation. The previous version contained too many technical terms and assumed prior knowledge that most readers wouldn't have. After consulting with the team, we agreed that a complete rewrite would be more efficient than trying to patch the existing content. I spent the entire weekend restructuring the information flow and simplifying the language while ensuring that no critical details were lost in the process.",
+  import { translateTextStream, type AiModel } from "$lib/ai_service";
+  import {
+    t,
+    getLanguageName,
+    getStyleName,
+    getTargetLanguageName,
+    type AppLanguage,
+  } from "$lib/i18n";
+  import { getDefaultStyles } from "$lib/style_defaults";
+
+  // ====== Settings State ======
+  let showSettings = $state(false);
+  let settingsTab = $state<"general" | "api" | "styles">("general");
+  let selectedModel = $state<AiModel>("gpt-5-mini" as AiModel);
+  let apiKeys = $state({
+    gemini: "",
+    openai: "",
+    anthropic: "",
+  });
+  let defaultTargetLang = $state("日本語");
+  let theme = $state<"dark" | "light">("dark");
+  let appLanguage = $state<"ja" | "en" | "zh" | "ko">("ja");
+
+  // Custom Styles
+  type CustomStyle = {
+    id: string;
+    name: string;
+    prompt: string;
+    isDefault?: boolean;
+  };
+
+  let customStyles = $state<CustomStyle[]>(getDefaultStyles("ja"));
+  let editingStyleId = $state<string | null>(null);
+  let showResetConfirmation = $state(false);
+
+  let styleOverflowOpen = $state(false);
+
+  // Sort styles: Active first, then original order
+  let sortedStyles = $derived.by(() => {
+    return [...customStyles].sort((a, b) => {
+      const aLev = styleLevels[a.name] || 0;
+      const bLev = styleLevels[b.name] || 0;
+      if (aLev > 0 && bLev === 0) return -1;
+      if (aLev === 0 && bLev > 0) return 1;
+      return 0;
+    });
+  });
+
+  let visibleStyles = $derived(sortedStyles.slice(0, 4));
+  let hiddenStyles = $derived(sortedStyles.slice(4));
+
+  // Update default styles when language changes
+  $effect(() => {
+    const defaults = getDefaultStyles(appLanguage);
+    // Use untrack to prevent circular updates if we modify customStyles
+    // actually we want to react to appLanguage.
+    // We need to be careful not to create a loop if customStyles triggers something else.
+
+    // We only want to update *default* styles names/prompts to match the new language
+    // UNLESS the user has customized them?
+    // The requirement says "default existing styles should be in the language matching the language settings".
+    // This implies we simply swap the translation.
+
+    const updatedStyles = customStyles.map((s) => {
+      if (s.isDefault) {
+        const def = defaults.find((d) => d.id === s.id);
+        if (def) {
+          return { ...s, name: def.name, prompt: def.prompt };
+        }
+      }
+      return s;
+    });
+
+    // Only update if changed prevents loops
+    if (JSON.stringify(updatedStyles) !== JSON.stringify(customStyles)) {
+      customStyles = updatedStyles;
+    }
+  });
+
+  const availableModels: { label: string; value: string; provider: string }[] =
+    [
+      // OpenAI
+      { label: "GPT-5.2", value: "gpt-5.2", provider: "openai" },
+      { label: "GPT-5.2 Pro", value: "gpt-5.2-pro", provider: "openai" },
+      { label: "GPT-5.1", value: "gpt-5.1", provider: "openai" },
+      { label: "GPT-5-Mini", value: "gpt-5-mini", provider: "openai" },
+      { label: "GPT-5-Nano", value: "gpt-5-nano", provider: "openai" },
+      { label: "GPT-4.1", value: "gpt-4.1", provider: "openai" },
+      { label: "GPT-4.1-Mini", value: "gpt-4.1-mini", provider: "openai" },
+      { label: "GPT-4.1-Nano", value: "gpt-4.1-nano", provider: "openai" },
+      { label: "o3-pro", value: "o3-pro", provider: "openai" },
+      // Google Gemini
+      { label: "Gemini 2.5 Pro", value: "gemini-2.5-pro", provider: "gemini" },
+      {
+        label: "Gemini 2.5 Flash",
+        value: "gemini-2.5-flash",
+        provider: "gemini",
+      },
+      {
+        label: "Gemini 2.5 Flash-Lite",
+        value: "gemini-2.5-flash-lite",
+        provider: "gemini",
+      },
+      { label: "Gemini 3 Pro", value: "gemini-3-pro", provider: "gemini" },
+      { label: "Gemini 3 Flash", value: "gemini-3-flash", provider: "gemini" },
+      // Anthropic Claude
+      {
+        label: "Claude Opus 4.5",
+        value: "claude-opus-4.5",
+        provider: "anthropic",
+      },
+      {
+        label: "Claude Sonnet 4.5",
+        value: "claude-sonnet-4.5",
+        provider: "anthropic",
+      },
+      {
+        label: "Claude Haiku 4.5",
+        value: "claude-haiku-4.5",
+        provider: "anthropic",
+      },
+    ];
+
+  // Load settings on mount
+  onMount(() => {
+    const saved = localStorage.getItem("howlingual_settings");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed.model) selectedModel = parsed.model;
+        if (parsed.apiKeys) apiKeys = { ...apiKeys, ...parsed.apiKeys };
+        if (parsed.defaultTargetLang)
+          defaultTargetLang = parsed.defaultTargetLang;
+        if (parsed.theme) theme = parsed.theme;
+        if (parsed.appLanguage) appLanguage = parsed.appLanguage;
+        if (parsed.customStyles) customStyles = parsed.customStyles;
+
+        // Apply theme on load
+        document.documentElement.setAttribute("data-theme", theme);
+      } catch (e) {
+        console.warn("Failed to parse saved settings", e);
+      }
+    }
+  });
+
+  // Auto-save settings when changed
+  $effect(() => {
+    const settings = {
+      model: selectedModel,
+      apiKeys: apiKeys,
+      defaultTargetLang: defaultTargetLang,
+      theme: theme,
+      appLanguage: appLanguage,
+      customStyles: customStyles,
+    };
+    localStorage.setItem("howlingual_settings", JSON.stringify(settings));
+
+    // Apply theme immediately
+    document.documentElement.setAttribute("data-theme", theme);
+
+    // console.log("[Settings] Auto-saved");
+  });
+
+  // Style levels: 0 = オフ, 1 = 弱, 2 = 強
+  let styleLevels: Record<string, number> = $state({
+    丁寧: 0,
+    ビジネス: 0,
+    カジュアル: 0,
+    キャッチー: 0,
+    子ども向け: 0,
+    メール: 0,
+    簡潔: 0,
+  });
+
+  // Sync styleLevels with customStyles
+  $effect(() => {
+    const newStyles = customStyles.map((s) => s.name);
+    // Use untrack to prevent circular dependency on styleLevels
+    const currentLevels = untrack(() => styleLevels);
+    const nextLevels: Record<string, number> = {};
+
+    newStyles.forEach((name) => {
+      // Preserve existing level if style exists, otherwise 0
+      nextLevels[name] = currentLevels[name] || 0;
+    });
+
+    styleLevels = nextLevels;
+  });
+
+  function triggerResetStyles() {
+    showResetConfirmation = true;
+  }
+
+  function confirmResetStyles() {
+    customStyles = getDefaultStyles(appLanguage);
+    showResetConfirmation = false;
+  }
+
+  async function addStyle() {
+    const id = crypto.randomUUID();
+    customStyles = [
+      ...customStyles,
+      {
+        id,
+        name: "New Style",
+        prompt: "",
+        isDefault: false,
+      },
+    ];
+    await tick();
+    editingStyleId = id;
+
+    // Scroll to the new item
+    const container = document.querySelector(".styles-list-container");
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }
+
+  function deleteStyle(index: number) {
+    customStyles = customStyles.filter((_, i) => i !== index);
+  }
+
+  function openSettings() {
+    showSettings = true;
+  }
+
+  function openStyles() {
+    settingsTab = "styles";
+    showSettings = true;
+  }
+
+  function closeSettings() {
+    showSettings = false;
+  }
+
+  // Use selected model for translations (instead of env variable)
+  let currentModel = $derived(
+    selectedModel ||
+      ((import.meta.env.VITE_PREFERRED_MODEL || "gemini-1.5-flash") as AiModel),
   );
+
+  let inputQuery = $state("");
 
   // Language direction
   let isAutoDetect = $state(true);
-  let detectedLang = $state("英語"); // Mock: detected as English
+  let detectedLang = $state("");
   let sourceLang = $state("英語");
   let targetLang = $state("日本語");
   let showSourceLangMenu = $state(false);
@@ -28,7 +268,8 @@
   function selectSourceLang(lang: string | null) {
     if (lang === null) {
       isAutoDetect = true;
-      sourceLang = detectedLang;
+      sourceLang = "自動検出";
+      detectedLang = ""; // Clear previous detection
       // Trigger temporary sparkle animation
       isSparkling = true;
       setTimeout(() => {
@@ -37,11 +278,16 @@
     } else {
       isAutoDetect = false;
       sourceLang = lang;
+      detectedLang = ""; // Clear detection when manually selecting
     }
+    console.log(
+      `[UI] Source Language Selected: ${sourceLang} (Auto: ${isAutoDetect})`,
+    );
     showSourceLangMenu = false;
   }
 
   function selectTargetLang(lang: string) {
+    console.log(`[UI] Target Language Selected: ${lang}`);
     targetLang = lang;
     showTargetLangMenu = false;
   }
@@ -50,9 +296,13 @@
   $effect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
-      if (!target.closest(".lang-selector")) {
+      if (
+        !target.closest(".lang-selector") &&
+        !target.closest(".style-dropdown-wrapper")
+      ) {
         showSourceLangMenu = false;
         showTargetLangMenu = false;
+        styleOverflowOpen = false;
       }
     };
     window.addEventListener("mousedown", handleClickOutside);
@@ -60,17 +310,13 @@
   });
 
   // Style levels: 0 = オフ, 1 = 弱, 2 = 強
-  let styleLevels: Record<string, number> = $state({
-    フォーマル: 2,
-    カジュアル: 0,
-    技術: 1,
-    簡潔: 0,
-  });
 
   // Copy feedback state
   let copiedId: number | null = $state(null);
 
-  function handleCopy(id: number) {
+  function handleCopy(id: number, text: string) {
+    console.log(`[UI] Copy triggered for ID: ${id}`);
+    navigator.clipboard.writeText(text);
     copiedId = id;
     setTimeout(() => {
       copiedId = null;
@@ -82,6 +328,7 @@
   let settingsAnimating = $state(false);
   let speakAnimating: Record<number, boolean> = $state({});
   let copyAnimating: Record<number, boolean> = $state({});
+  let isSpeakingId: number | null = $state(null);
 
   function triggerHistoryAnim() {
     if (historyAnimating) return;
@@ -97,6 +344,62 @@
     setTimeout(() => {
       settingsAnimating = false;
     }, 1000);
+  }
+
+  function handleSpeak(id: number, text: string, lang: string) {
+    if (!window.speechSynthesis) return;
+
+    // If already speaking THIS card, stop it
+    if (isSpeakingId === id) {
+      window.speechSynthesis.cancel();
+      isSpeakingId = null;
+      return;
+    }
+
+    // Stop currently playing
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    isSpeakingId = id;
+
+    // Simple language mapping ...
+    let langCode = "en-US";
+    switch (lang) {
+      case "日本語":
+        langCode = "ja-JP";
+        break;
+      case "英語":
+        langCode = "en-US";
+        break;
+      case "中国語":
+        langCode = "zh-CN";
+        break;
+      case "韓国語":
+        langCode = "ko-KR";
+        break;
+      case "フランス語":
+        langCode = "fr-FR";
+        break;
+      case "ドイツ語":
+        langCode = "de-DE";
+        break;
+      case "スペイン語":
+        langCode = "es-ES";
+        break;
+    }
+
+    utterance.lang = langCode;
+    utterance.onend = () => {
+      if (isSpeakingId === id) isSpeakingId = null;
+    };
+    utterance.onerror = () => {
+      if (isSpeakingId === id) isSpeakingId = null;
+    };
+
+    console.log(
+      `[UI] TTS triggered for: "${text.substring(0, 20)}..." (Lang: ${langCode})`,
+    );
+    window.speechSynthesis.speak(utterance);
   }
 
   function triggerSpeakAnim(id: number) {
@@ -120,6 +423,7 @@
   function cycleLevel(style: string) {
     if (isDragging) return;
     styleLevels[style] = (styleLevels[style] + 1) % 3;
+    console.log(`[UI] Style cycled: ${style} -> ${styleLevels[style]}`);
   }
 
   function handleDrag(style: string, event: PointerEvent) {
@@ -270,26 +574,112 @@
   });
 
   // Mock Data
-  let translations = [
-    {
-      id: 1,
-      text: "納期が厳しい状況ではありましたが、誰もが追加説明なしで理解できるよう、文書全体を書き直すことにいたしました。以前のバージョンは専門用語が多く、読者が持っていないであろう前提知識を必要としておりました。チームと相談した結果、既存の内容を修正するよりも、全面的に書き直す方が効率的であるという結論に至りました。週末を通して情報の流れを再構成し、重要な詳細を失わないよう注意しながら、言語を簡潔化いたしました。",
-      reason:
-        "「いたしました」「おりました」で謙譲語を一貫して使用し、最もフォーマルな表現です。",
-    },
-    {
-      id: 2,
-      text: "締め切りがタイトでしたが、追加の説明がなくても誰でも理解できるように、ドキュメント全体をリライトすることを決定しました。前のバージョンはテクニカルタームが多すぎて、多くの読者が持っていない前提知識を想定していました。チームとディスカッションした後、既存コンテンツをパッチするより、フルリライトの方がエフィシェントだと合意しました。週末をまるまる使って、情報フローをリストラクチャリングし、クリティカルなディテールを失わないよう注意しながら言語をシンプルにしました。",
-      reason:
-        "「ドキュメント」「リライト」「テクニカルターム」など技術文書で馴染みのあるカタカナ語を多用しています。",
-    },
-    {
-      id: 3,
-      text: "期限に余裕がない中、補足説明なしに誰でも内容を把握できるよう、資料を全面的に改訂する判断をしました。以前の版は専門用語が過多で、大半の読者が有していない予備知識を前提としていました。チームとの協議の結果、既存内容の部分修正より全面改訂の方が効率的との結論に達しました。週末を費やし、情報構成を再編し、重要事項を漏らさぬよう配慮しつつ表現を平易化しました。",
-      reason:
-        "「資料」「改訂」「協議」など漢語を多用し、よりビジネス寄りの硬い表現です。",
-    },
-  ];
+  let translations: { id: number; text: string; reason: string }[] = $state([]);
+  let detailedExplanation: {
+    points: { term: string; explanation: string }[];
+  } | null = $state(null);
+  let isTranslating = $state(false);
+  let showExplanation = $state(true);
+  let isDetecting = $state(false);
+  let errorMessage = $state("");
+
+  async function startTranslation() {
+    if (isTranslating || !inputQuery.trim()) return;
+    isTranslating = true;
+    showExplanation = false; // Hide explanation during translation
+    showSourceLangMenu = false; // Close menu if open
+    showTargetLangMenu = false; // Close menu if open
+    showTargetLangMenu = false; // Close menu if open
+    translations = []; // Clear current results
+    detailedExplanation = null; // Clear explanation
+    errorMessage = "";
+
+    // Handle Auto-detect mock logic
+    if (isAutoDetect) {
+      isDetecting = true;
+      detectedLang = ""; // Clear previous detection result
+    }
+
+    try {
+      console.log(
+        `[Translation] Starting translation with model: ${currentModel}`,
+      );
+      console.log(`[Translation] Input: "${inputQuery.substring(0, 30)}..."`);
+
+      // Call AI API with Streaming
+      // Get explanation language based on app language setting
+      const explanationLangName = getLanguageName(appLanguage);
+
+      // Extract prompts for active styles
+      const activeStylePrompts: Record<string, string> = {};
+      Object.keys(styleLevels).forEach((name) => {
+        if (styleLevels[name] > 0) {
+          const styleDef = customStyles.find((s) => s.name === name);
+          if (styleDef && styleDef.prompt) {
+            activeStylePrompts[name] = styleDef.prompt;
+          }
+        }
+      });
+
+      await translateTextStream(
+        inputQuery,
+        sourceLang,
+        targetLang,
+        styleLevels,
+        currentModel,
+        (partialResult) => {
+          // Handle Detection Result updates
+          if (isAutoDetect && partialResult.detected_source_language) {
+            // Only update if we haven't finalized it yet or it changed
+            if (detectedLang !== partialResult.detected_source_language) {
+              detectedLang = partialResult.detected_source_language;
+              isDetecting = false;
+            }
+          }
+
+          // Update Translations
+          if (partialResult.candidates && partialResult.candidates.length > 0) {
+            // Ensure IDs exist for the UI loop
+            translations = partialResult.candidates.map((c, i) => {
+              if (i === 0 && c.reason) {
+                // Debug first reason periodically
+                // console.log(`[UI] Candidate 1 reason: ${c.reason.substring(0, 20)}...`);
+              }
+              return {
+                ...c,
+                id: c.id || i + 1,
+                reason: c.reason || "", // Ensure reason is at least empty string
+              };
+            });
+          }
+
+          // Update Detailed Explanation
+          if (partialResult.detailed_explanation) {
+            detailedExplanation = partialResult.detailed_explanation as any;
+            showExplanation = true;
+          }
+        },
+        explanationLangName,
+        activeStylePrompts,
+      );
+
+      // Final check for detecting state just in case
+      if (isAutoDetect) isDetecting = false;
+    } catch (error) {
+      console.error("Translation failed:", error);
+      errorMessage =
+        "AI翻訳エラーが発生しました。\nAPIキーの設定やネットワーク接続を確認してください。";
+      isDetecting = false;
+    } finally {
+      isTranslating = false;
+    }
+  }
+
+  // Initial load (optional: remove if we want it empty by default)
+  // Initial load: Start empty
+  $effect(() => {
+    // No initial data
+  });
 </script>
 
 <main class="container">
@@ -306,6 +696,7 @@
         <button
           class="lang-btn"
           class:open={showSourceLangMenu}
+          disabled={isTranslating}
           onclick={(e) => {
             e.stopPropagation();
             showSourceLangMenu = !showSourceLangMenu;
@@ -316,6 +707,7 @@
             <svg
               class="sparkle-icon"
               class:is-active={isSparkling}
+              class:is-detecting={isDetecting}
               width="16"
               height="16"
               viewBox="0 0 24 24"
@@ -335,7 +727,19 @@
               ></path>
             </svg>
           {/if}
-          {sourceLang}
+          {#if isAutoDetect && detectedLang && translations.length > 0}
+            {detectedLang}（{appLanguage === "ja"
+              ? "自動"
+              : appLanguage === "en"
+                ? "auto"
+                : appLanguage === "zh"
+                  ? "自动"
+                  : "自務"}）
+          {:else if isAutoDetect}
+            {t(appLanguage, "autoDetect")}
+          {:else}
+            {sourceLang}
+          {/if}
           <svg
             class="chevron-icon"
             width="10"
@@ -410,6 +814,7 @@
         <button
           class="lang-btn"
           class:open={showTargetLangMenu}
+          disabled={isTranslating}
           onclick={(e) => {
             e.stopPropagation();
             showTargetLangMenu = !showTargetLangMenu;
@@ -450,7 +855,7 @@
       <button
         class="icon-btn header-btn history-btn"
         class:animating={historyAnimating}
-        title="履歴"
+        title={t(appLanguage, "history")}
         onmouseenter={triggerHistoryAnim}
       >
         <svg
@@ -471,7 +876,8 @@
       <button
         class="icon-btn header-btn settings-btn"
         class:animating={settingsAnimating}
-        title="設定"
+        title={t(appLanguage, "settings")}
+        onclick={openSettings}
         onmouseenter={triggerSettingsAnim}
       >
         <svg
@@ -511,7 +917,7 @@
             oninput={autoResize}
             onscroll={checkScroll}
             class:long-text={isLongText}
-            placeholder="テキストを入力または選択..."
+            placeholder={t(appLanguage, "inputPlaceholder")}
           ></textarea>
           <div class="fade-overlay"></div>
         </div>
@@ -526,27 +932,91 @@
           </p>
         {:else}
           <!-- Default state: show style chips -->
-          <div class="styles-row">
-            {#each Object.keys(styleLevels) as style, i}
+          <div class="styles-row" class:fade-out={isTranslating}>
+            {#each visibleStyles as style (style.id)}
               <button
                 class="style-chip"
-                data-level={styleLevels[style]}
-                style="animation-delay: {i * 0.05}s"
-                onclick={() => cycleLevel(style)}
-                onpointerdown={(e) => handleDrag(style, e)}
+                data-level={styleLevels[style.name] || 0}
+                onclick={() => cycleLevel(style.name)}
+                onpointerdown={(e) => handleDrag(style.name, e)}
               >
                 <span
                   class="chip-fill"
-                  style="width: {styleLevels[style] * 50}%"
+                  style="width: {(styleLevels[style.name] || 0) * 50}%"
                 ></span>
-                <span class="chip-text">{style}</span>
+                <span class="chip-text">{style.name}</span>
               </button>
             {/each}
-            <button
-              class="style-chip add-chip"
-              style="animation-delay: {Object.keys(styleLevels).length * 0.05}s"
-              >+</button
-            >
+
+            <div class="style-dropdown-wrapper">
+              <button
+                class="style-chip add-chip"
+                onclick={() => (styleOverflowOpen = !styleOverflowOpen)}
+                class:active={styleOverflowOpen}
+              >
+                ...
+              </button>
+              {#if styleOverflowOpen}
+                <div
+                  class="style-dropdown glass"
+                  transition:fade={{ duration: 100 }}
+                >
+                  {#if hiddenStyles.length > 0}
+                    <div class="dropdown-section-label">
+                      {t(appLanguage, "tabStyles")}
+                    </div>
+                    {#each hiddenStyles as style (style.id)}
+                      <button
+                        class="dropdown-item"
+                        data-level={styleLevels[style.name] || 0}
+                        onclick={() => cycleLevel(style.name)}
+                      >
+                        <span
+                          class="dropdown-item-fill"
+                          style="width: {(styleLevels[style.name] || 0) * 50}%"
+                        ></span>
+                        <div class="dropdown-item-content">
+                          <span>{style.name}</span>
+                          {#if (styleLevels[style.name] || 0) > 0}
+                            <span class="level-indicator">ON</span>
+                          {/if}
+                        </div>
+                      </button>
+                    {/each}
+                    <div class="dropdown-divider"></div>
+                  {/if}
+                  <button
+                    class="dropdown-item settings-link"
+                    onclick={() => {
+                      styleOverflowOpen = false;
+                      openStyles();
+                    }}
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      class="icon-left"
+                    >
+                      <path d="M12 20h9"></path>
+                      <path
+                        d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"
+                      ></path>
+                    </svg>
+                    {t(appLanguage, "settingsTitle")}
+                  </button>
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/if}
+
+        {#if isTranslating}
+          <div class="translating-label" transition:fade>
+            <span>{t(appLanguage, "translating")}</span>
           </div>
         {/if}
 
@@ -555,8 +1025,12 @@
           class="action-btn"
           class:translate-mode={!isScrolledDown}
           class:scroll-mode={isScrolledDown}
-          title={isScrolledDown ? "上に戻る" : "翻訳"}
-          onclick={isScrolledDown ? scrollToTop : undefined}
+          class:loading={isTranslating}
+          title={isScrolledDown
+            ? t(appLanguage, "scrollToTop")
+            : t(appLanguage, "translate")}
+          onclick={isScrolledDown ? scrollToTop : startTranslation}
+          disabled={!isScrolledDown && (isTranslating || !inputQuery.trim())}
         >
           {#if isScrolledDown}
             <svg
@@ -572,6 +1046,13 @@
             >
               <path d="m18 15-6-6-6 6" />
             </svg>
+          {:else if isTranslating}
+            <!-- Bouncing dots animation -->
+            <div class="bouncing-dots">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
           {:else}
             <svg
               class="btn-icon"
@@ -595,10 +1076,34 @@
         </button>
       </div>
 
+      <!-- Error Display -->
+      {#if errorMessage}
+        <div class="error-display">
+          <div class="error-icon-wrapper">
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              class="error-icon"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+          </div>
+          <p class="error-message">{errorMessage}</p>
+        </div>
+      {/if}
+
       <!-- Translation Results -->
       <div class="output-area">
         {#each translations as item (item.id)}
-          <div class="candidate-card">
+          <div class="candidate-card" out:fade={{ duration: 200 }}>
             <p class="translated-text">{item.text}</p>
             <div class="card-footer">
               <p class="reason">
@@ -624,8 +1129,8 @@
                   class="icon-btn copy-btn"
                   class:copied={copiedId === item.id}
                   class:animating={copyAnimating[item.id]}
-                  title="コピー"
-                  onclick={() => handleCopy(item.id)}
+                  title={t(appLanguage, "copy")}
+                  onclick={() => handleCopy(item.id, item.text)}
                   onmouseenter={() => triggerCopyAnim(item.id)}
                 >
                   {#if copiedId === item.id}
@@ -662,35 +1167,51 @@
                 </button>
                 <button
                   class="icon-btn speak-btn"
+                  class:active={isSpeakingId === item.id}
                   class:animating={speakAnimating[item.id]}
-                  title="読み上げ"
+                  title={isSpeakingId === item.id
+                    ? t(appLanguage, "stop")
+                    : t(appLanguage, "speak")}
+                  onclick={() => handleSpeak(item.id, item.text, targetLang)}
                   onmouseenter={() => triggerSpeakAnim(item.id)}
                 >
-                  <svg
-                    class="speak-icon"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    style="overflow: visible;"
-                  >
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
-                    ></polygon>
-                    <path
-                      class="sound-wave wave-1"
-                      d="M15.54 8.46a5 5 0 0 1 0 7.07"
-                    ></path>
-                    <path
-                      class="sound-wave wave-2"
-                      d="M19.07 4.93a10 10 0 0 1 0 14.14"
-                    ></path>
-                    <path
-                      class="sound-wave wave-3"
-                      d="M22.07 1.93a14 14 0 0 1 0 20.14"
-                    ></path>
-                  </svg>
+                  {#if isSpeakingId === item.id}
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="currentColor"
+                      stroke="none"
+                    >
+                      <rect x="6" y="6" width="12" height="12" rx="1" />
+                    </svg>
+                  {:else}
+                    <svg
+                      class="speak-icon"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      style="overflow: visible;"
+                    >
+                      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
+                      ></polygon>
+                      <path
+                        class="sound-wave wave-1"
+                        d="M15.54 8.46a5 5 0 0 1 0 7.07"
+                      ></path>
+                      <path
+                        class="sound-wave wave-2"
+                        d="M19.07 4.93a10 10 0 0 1 0 14.14"
+                      ></path>
+                      <path
+                        class="sound-wave wave-3"
+                        d="M22.07 1.93a14 14 0 0 1 0 20.14"
+                      ></path>
+                    </svg>
+                  {/if}
                 </button>
               </div>
             </div>
@@ -698,43 +1219,39 @@
         {/each}
 
         <!-- Explanation -->
-        <div class="explanation-card">
-          <h3>
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              class="sparkle-icon"
-            >
-              <path
-                d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .962L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"
-              />
-              <path d="M20 3v4" />
-              <path d="M22 5h-4" />
-              <path d="M4 17v2" />
-              <path d="M5 18H3" />
-            </svg>
-            詳しい解説
-          </h3>
-          <ul class="explanation-list">
-            <li>
-              <strong>deadline was tight</strong>:
-              「納期が厳しい」「締め切りがタイト」「期限に余裕がない」
-            </li>
-            <li>
-              <strong>rewrite</strong>: 「書き直す」「リライトする」「改訂する」
-            </li>
-            <li>
-              <strong>without additional explanation</strong>:
-              「追加説明なしで」「補足説明なしに」
-            </li>
-          </ul>
-        </div>
+        {#if detailedExplanation && detailedExplanation.points && detailedExplanation.points.length > 0}
+          <div class="explanation-card" transition:fade={{ duration: 200 }}>
+            <h3>
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="sparkle-icon"
+              >
+                <path
+                  d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .962L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"
+                />
+                <path d="M20 3v4" />
+                <path d="M22 5h-4" />
+                <path d="M4 17v2" />
+                <path d="M5 18H3" />
+              </svg>
+              {t(appLanguage, "explanation")}
+            </h3>
+            <ul class="explanation-list">
+              {#each detailedExplanation.points as point}
+                <li>
+                  <strong>{point.term}</strong>: {point.explanation}
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
       </div>
     </section>
     <!-- Custom scrollbar indicator with fade animation -->
@@ -745,6 +1262,371 @@
     ></div>
   </div>
 </main>
+
+<!-- Settings Modal -->
+{#if showSettings}
+  <div
+    class="settings-overlay"
+    transition:fade={{ duration: 200 }}
+    onclick={closeSettings}
+    onkeydown={(e) => (e.key === "Enter" || e.key === " ") && closeSettings()}
+    role="button"
+    tabindex="0"
+    aria-label="Close settings"
+  >
+    <div
+      class="settings-panel glass"
+      transition:fly={{ x: 300, duration: 300 }}
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+      tabindex="-1"
+    >
+      <div class="settings-header">
+        <h2 id="settings-title">{t(appLanguage, "settingsTitle")}</h2>
+        <button
+          class="close-btn"
+          onclick={closeSettings}
+          aria-label={t(appLanguage, "close")}
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Tabs -->
+      <div class="settings-tabs">
+        <button
+          class="settings-tab"
+          class:active={settingsTab === "general"}
+          onclick={() => (settingsTab = "general")}
+        >
+          {t(appLanguage, "tabGeneral")}
+        </button>
+        <button
+          class="settings-tab"
+          class:active={settingsTab === "api"}
+          onclick={() => (settingsTab = "api")}
+        >
+          {t(appLanguage, "tabApiKeys")}
+        </button>
+        <button
+          class="settings-tab"
+          class:active={settingsTab === "styles"}
+          onclick={() => (settingsTab = "styles")}
+        >
+          {t(appLanguage, "tabStyles")}
+        </button>
+      </div>
+
+      <div class="settings-content">
+        {#if settingsTab === "general"}
+          <!-- Model Selection -->
+          <div class="settings-section">
+            <label class="settings-label" for="model-select"
+              >{t(appLanguage, "aiModel")}</label
+            >
+            <select
+              id="model-select"
+              class="settings-select"
+              bind:value={selectedModel}
+            >
+              {#each availableModels as model}
+                <option value={model.value}>{model.label}</option>
+              {/each}
+            </select>
+          </div>
+
+          <!-- Default Target Language -->
+          <div class="settings-section">
+            <label class="settings-label" for="target-lang-select"
+              >{t(appLanguage, "defaultTargetLang")}</label
+            >
+            <select
+              id="target-lang-select"
+              class="settings-select"
+              bind:value={defaultTargetLang}
+            >
+              <option value="日本語"
+                >{getTargetLanguageName(appLanguage, "日本語")}</option
+              >
+              <option value="英語"
+                >{getTargetLanguageName(appLanguage, "英語")}</option
+              >
+              <option value="中国語"
+                >{getTargetLanguageName(appLanguage, "中国語")}</option
+              >
+              <option value="韓国語"
+                >{getTargetLanguageName(appLanguage, "韓国語")}</option
+              >
+              <option value="フランス語"
+                >{getTargetLanguageName(appLanguage, "フランス語")}</option
+              >
+              <option value="ドイツ語"
+                >{getTargetLanguageName(appLanguage, "ドイツ語")}</option
+              >
+              <option value="スペイン語"
+                >{getTargetLanguageName(appLanguage, "スペイン語")}</option
+              >
+            </select>
+          </div>
+
+          <!-- Theme -->
+          <div class="settings-section">
+            <label class="settings-label">{t(appLanguage, "theme")}</label>
+            <div class="theme-toggle">
+              <button
+                class="theme-btn"
+                class:active={theme === "dark"}
+                onclick={() => (theme = "dark")}
+              >
+                {t(appLanguage, "themeDark")}
+              </button>
+              <button
+                class="theme-btn"
+                class:active={theme === "light"}
+                onclick={() => (theme = "light")}
+              >
+                {t(appLanguage, "themeLight")}
+              </button>
+            </div>
+          </div>
+
+          <!-- App Language -->
+          <div class="settings-section">
+            <label class="settings-label" for="app-lang-select"
+              >{t(appLanguage, "appLanguage")}</label
+            >
+            <select
+              id="app-lang-select"
+              class="settings-select"
+              bind:value={appLanguage}
+            >
+              <option value="ja">日本語</option>
+              <option value="en">English</option>
+              <option value="zh">中文</option>
+              <option value="ko">한국어</option>
+            </select>
+          </div>
+        {:else if settingsTab === "api"}
+          <!-- API Keys Tab -->
+          <div class="settings-section">
+            <label class="settings-label" for="openai-key"
+              >{t(appLanguage, "openaiApiKey")}</label
+            >
+            <input
+              id="openai-key"
+              type="password"
+              class="settings-input"
+              bind:value={apiKeys.openai}
+              placeholder="sk-..."
+            />
+          </div>
+
+          <div class="settings-section">
+            <label class="settings-label" for="gemini-key"
+              >{t(appLanguage, "geminiApiKey")}</label
+            >
+            <input
+              id="gemini-key"
+              type="password"
+              class="settings-input"
+              bind:value={apiKeys.gemini}
+              placeholder="AIza..."
+            />
+          </div>
+
+          <div class="settings-section">
+            <label class="settings-label" for="anthropic-key"
+              >{t(appLanguage, "anthropicApiKey")}</label
+            >
+            <input
+              id="anthropic-key"
+              type="password"
+              class="settings-input"
+              bind:value={apiKeys.anthropic}
+              placeholder="sk-ant-..."
+            />
+          </div>
+        {:else if settingsTab === "styles"}
+          <!-- Styles Tab -->
+          <div class="styles-actions-top">
+            <button class="rich-btn primary" onclick={addStyle}>
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                class="btn-icon-left"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              {t(appLanguage, "addStyle")}
+            </button>
+            <button class="rich-btn danger" onclick={triggerResetStyles}>
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                class="btn-icon-left"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+                ></path>
+                <path d="M3 3v5h5"></path>
+              </svg>
+              {t(appLanguage, "resetStyles")}
+            </button>
+          </div>
+
+          <div class="styles-list-container">
+            {#each customStyles as style, i (style.id)}
+              <div
+                class="style-item-card"
+                class:editing={editingStyleId === style.id}
+              >
+                <div class="style-header-row">
+                  {#if editingStyleId === style.id}
+                    <input
+                      type="text"
+                      class="style-name-input"
+                      bind:value={style.name}
+                      oninput={() => (style.isDefault = false)}
+                      placeholder={t(appLanguage, "styleName")}
+                      autofocus
+                    />
+                    <button
+                      class="icon-btn-small done-btn"
+                      onclick={() => (editingStyleId = null)}
+                      title="Done"
+                    >
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                      >
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                      </svg>
+                    </button>
+                  {:else}
+                    <span class="style-name-display">{style.name}</span>
+                    <div class="style-header-actions">
+                      <button
+                        class="icon-btn-small edit-btn"
+                        onclick={() => (editingStyleId = style.id)}
+                        title="Edit"
+                      >
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                        >
+                          <path d="M12 20h9"></path>
+                          <path
+                            d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"
+                          ></path>
+                        </svg>
+                      </button>
+                      <button
+                        class="icon-btn-small delete-btn"
+                        onclick={() => deleteStyle(i)}
+                        aria-label={t(appLanguage, "delete")}
+                      >
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                        >
+                          <polyline points="3 6 5 6 21 6"></polyline>
+                          <path
+                            d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                          ></path>
+                        </svg>
+                      </button>
+                    </div>
+                  {/if}
+                </div>
+
+                {#if editingStyleId === style.id}
+                  <textarea
+                    class="style-prompt-input"
+                    bind:value={style.prompt}
+                    oninput={() => (style.isDefault = false)}
+                    placeholder={t(appLanguage, "stylePrompt")}
+                  ></textarea>
+                {:else}
+                  <div class="style-prompt-display">
+                    {style.prompt}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <div class="settings-footer">
+        <button class="save-btn" onclick={closeSettings}>閉じる</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showResetConfirmation}
+  <div
+    class="modal-overlay"
+    transition:fade={{ duration: 200 }}
+    onclick={() => (showResetConfirmation = false)}
+    role="button"
+    tabindex="0"
+    onkeydown={(e) => e.key === "Escape" && (showResetConfirmation = false)}
+  >
+    <div
+      class="modal-card glass"
+      onclick={(e) => e.stopPropagation()}
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+    >
+      <h3>{t(appLanguage, "confirmReset")}</h3>
+      <div class="modal-actions">
+        <button
+          class="rich-btn secondary"
+          onclick={() => (showResetConfirmation = false)}
+          >{t(appLanguage, "close")}</button
+        >
+        <button class="rich-btn danger" onclick={confirmResetStyles}
+          >{t(appLanguage, "resetStyles")}</button
+        >
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .container {
@@ -761,10 +1643,10 @@
     justify-content: space-between;
     align-items: center;
     padding: 0 16px;
-    height: 48px;
+    height: 56px;
     flex-shrink: 0;
-    margin-top: 8px;
-    margin-bottom: 8px; /* Added margin below header */
+    margin-top: 4px;
+    margin-bottom: 4px;
   }
 
   .header-left {
@@ -772,15 +1654,15 @@
     align-items: center;
     gap: 8px;
     width: 140px; /* Fixed width for alignment */
+    transform: translateY(-2px); /* Shift up slightly */
   }
 
   .app-title {
     font-family: "Jost", sans-serif;
     font-weight: 700;
-    font-size: 25px;
+    font-size: 28px;
     color: var(--text-main);
     letter-spacing: 0.5px;
-    padding-top: 2px; /* Visual alignment with icon */
   }
 
   .header-right {
@@ -800,6 +1682,9 @@
   .header-btn:hover {
     color: var(--text-main);
     background: rgba(255, 255, 255, 0.1);
+  }
+  .header-btn:active {
+    transform: scale(0.94);
   }
 
   /* 履歴ボタン: 時計の針が反時計回りに回転 */
@@ -862,6 +1747,9 @@
   .lang-btn:hover {
     background: rgba(255, 255, 255, 0.1);
   }
+  .lang-btn:active {
+    transform: scale(0.96);
+  }
 
   .chevron-icon {
     transition: transform 0.3s var(--easing);
@@ -911,19 +1799,25 @@
   }
 
   .app-icon {
-    width: 32px;
-    height: 32px;
+    width: 40px;
+    height: 40px;
     object-fit: contain;
-    border-radius: 4px;
+    border-radius: 8px;
+    transform: translateY(-2px); /* Shift icon specifically upwards */
   }
 
+  /* Sparkle Icon Animation */
   .sparkle-icon {
-    color: #fbbf24;
+    color: var(--primary-color);
     transition: all 0.3s var(--easing);
   }
 
   .sparkle-icon.is-active {
-    filter: drop-shadow(0 0 4px rgba(251, 191, 36, 0.4));
+    filter: drop-shadow(0 0 4px var(--primary-color));
+  }
+
+  .sparkle-icon.is-detecting {
+    filter: drop-shadow(0 0 4px var(--primary-color));
   }
 
   .sparkle-icon.is-active .star-1 {
@@ -934,6 +1828,16 @@
   }
   .sparkle-icon.is-active .star-3 {
     animation: twinkle 1s var(--easing) 0.3s backwards;
+  }
+
+  .sparkle-icon.is-detecting .star-1 {
+    animation: twinkle 1s var(--easing) infinite;
+  }
+  .sparkle-icon.is-detecting .star-2 {
+    animation: twinkle 1s var(--easing) 0.15s infinite;
+  }
+  .sparkle-icon.is-detecting .star-3 {
+    animation: twinkle 1s var(--easing) 0.3s infinite;
   }
 
   @keyframes twinkle {
@@ -966,6 +1870,10 @@
     flex: 1;
     display: flex;
     position: relative;
+    margin: 0 16px 16px 16px; /* Left, Right, Bottom margin */
+    border-radius: 20px;
+    overflow: hidden; /* Ensure content respects border-radius */
+    border: 1px solid var(--border-color); /* Optional: distinct edge */
     min-height: 0;
   }
 
@@ -1143,13 +2051,6 @@
     }
   }
 
-  .controls {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-  }
-
   .textarea-container {
     position: relative;
     width: 100%;
@@ -1205,9 +2106,46 @@
 
   /* Style Chips with Progress Bar */
   .styles-row {
+    flex: 1;
     display: flex;
-    gap: 4px;
-    flex-wrap: wrap;
+    gap: 8px;
+    overflow: visible;
+    padding: 2px 4px;
+    scrollbar-width: none;
+    transition: opacity 0.3s ease;
+  }
+
+  .styles-row.fade-out {
+    opacity: 0.15;
+    pointer-events: none;
+    mask-image: linear-gradient(to right, black 70%, transparent 100%);
+  }
+
+  .translating-label {
+    margin-right: 8px; /* Push it next to button */
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--primary);
+    font-weight: 500;
+    pointer-events: none;
+    z-index: 10;
+    white-space: nowrap;
+  }
+
+  .translating-label span {
+    animation: pulseText 1.5s infinite;
+  }
+
+  @keyframes pulseText {
+    0%,
+    100% {
+      opacity: 0.6;
+    }
+    50% {
+      opacity: 1;
+    }
   }
 
   .style-chip {
@@ -1262,6 +2200,7 @@
     background: #4ade80; /* Soft Green */
     opacity: 0.25;
   }
+
   .style-chip[data-level="2"] .chip-fill {
     background: #f87171; /* Soft Red */
     opacity: 0.25;
@@ -1282,74 +2221,14 @@
     display: none;
   }
 
-  .translate-btn {
-    background: var(--primary-color);
-    color: #fff;
-    border: none;
-    width: 44px;
-    height: 44px;
-    border-radius: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition:
-      transform 0.2s var(--easing),
-      background 0.2s;
-    flex-shrink: 0;
-    animation: popIn 0.3s var(--easing);
-  }
-  .translate-btn:hover {
-    background: var(--primary-hover);
-    transform: scale(1.05);
-  }
-  .translate-btn:active {
-    transform: scale(0.94);
-  }
-
-  /* Overlay layout */
-  .overlay-content {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .scroll-top-btn {
-    background: var(--text-main);
-    color: var(--bg-color);
-    border: none;
-    width: 44px;
-    height: 44px;
-    border-radius: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    flex-shrink: 0;
-    animation: popIn 0.3s var(--easing);
-    transition:
-      transform 0.2s var(--easing),
-      background 0.2s;
-  }
-  .scroll-top-btn:hover {
-    background: #fff;
-    transform: scale(1.05);
-  }
-  .scroll-top-btn:active {
-    transform: scale(0.94);
-  }
-
   @keyframes popIn {
     0% {
-      transform: scale(0.5);
       opacity: 0;
-    }
-    70% {
-      transform: scale(1.1);
+      transform: translateY(20px);
     }
     100% {
-      transform: scale(1);
       opacity: 1;
+      transform: translateY(0);
     }
   }
 
@@ -1362,6 +2241,7 @@
     border: 1px solid rgba(255, 255, 255, 0.08);
     transition: background 0.2s;
     flex-shrink: 0;
+    animation: popIn 0.5s var(--easing) backwards;
   }
 
   /* Staggered backgrounds: Darken sequentially (More visible difference) */
@@ -1384,13 +2264,69 @@
   }
 
   .translated-text {
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 500;
-    margin-bottom: 8px;
-    color: #fff;
-    line-height: 1.5;
+    margin-bottom: 12px;
+    color: var(--text-main);
+    line-height: 1.6;
     user-select: text;
     cursor: text;
+    white-space: pre-wrap; /* Preserve newlines */
+  }
+
+  /* Error Display */
+  .error-display {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 32px 16px;
+    text-align: center;
+    color: #f87171; /* Soft Red */
+    background: rgba(248, 113, 113, 0.1);
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(248, 113, 113, 0.2);
+    margin-top: 10px;
+    animation: fadeIn 0.3s ease-out;
+  }
+
+  /* ... skipping error-icon-wrapper ... */
+
+  .error-icon {
+    color: #f87171;
+    animation: rotateIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) backwards; /* Overshoot effect */
+  }
+
+  @keyframes rotateIn {
+    0% {
+      opacity: 0;
+      transform: rotate(-90deg) scale(0.5);
+    }
+    60% {
+      transform: rotate(20deg) scale(1.1); /* Rotate past 0 */
+    }
+    100% {
+      opacity: 1;
+      transform: rotate(0) scale(1);
+    }
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(-5px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .error-message {
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-line; /* Allow newlines */
   }
 
   .card-footer {
@@ -1401,8 +2337,11 @@
   }
 
   .reason {
-    font-size: 12px;
-    color: var(--text-muted);
+    font-size: 13px; /* Increased from 12px */
+    color: var(
+      --text-main
+    ); /* Changed from muted to main for better visibility */
+    opacity: 0.9;
     flex: 1;
     line-height: 1.4;
     display: flex;
@@ -1434,6 +2373,9 @@
   .icon-btn:hover {
     background: rgba(255, 255, 255, 0.1);
     color: var(--primary-hover);
+  }
+  .icon-btn:active {
+    transform: scale(0.92);
   }
 
   /* コピーボタン: 紙が重なるように上に移動 */
@@ -1467,6 +2409,37 @@
 
   .speak-btn.animating .wave-3 {
     animation: wavePulse 1.2s ease-in-out 0.15s;
+  }
+
+  /* Bouncing Dots Animation */
+  .bouncing-dots {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .bouncing-dots span {
+    width: 4px;
+    height: 4px;
+    background-color: currentColor;
+    border-radius: 50%;
+    animation: bounce 0.6s infinite alternate; /* Speed up to 0.6s */
+  }
+
+  .bouncing-dots span:nth-child(2) {
+    animation-delay: 0.1s;
+  }
+
+  .bouncing-dots span:nth-child(3) {
+    animation-delay: 0.2s;
+  }
+
+  @keyframes bounce {
+    to {
+      transform: translateY(-6px);
+      opacity: 0.6;
+    }
   }
 
   @keyframes wavePulse {
@@ -1551,5 +2524,533 @@
   .explanation-list strong {
     color: var(--primary-hover);
     font-weight: 500;
+  }
+  .lang-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+
+  /* Settings Modal Styles */
+  .settings-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 1000;
+    display: flex;
+    justify-content: flex-end;
+    backdrop-filter: blur(4px);
+  }
+
+  .settings-panel {
+    width: 340px;
+    height: 100%;
+    background: var(--glass-color);
+    border-left: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .settings-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .settings-header h2 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-main);
+    margin: 0;
+  }
+
+  .close-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    transition: all 0.2s;
+  }
+  .close-btn:hover {
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .settings-content {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .settings-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+  }
+
+  .settings-select,
+  .settings-input {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 14px;
+    color: var(--text-main);
+    outline: none;
+    transition:
+      border-color 0.2s,
+      box-shadow 0.2s;
+  }
+
+  .settings-select:focus,
+  .settings-input:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(var(--primary-rgb, 100, 150, 255), 0.2);
+  }
+
+  .settings-select option {
+    background: #1a1a2e;
+    color: var(--text-main);
+  }
+
+  .settings-footer {
+    padding: 20px;
+    border-top: 1px solid var(--border-color);
+  }
+
+  .save-btn {
+    width: 100%;
+    padding: 12px;
+    background: var(--primary-color);
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .save-btn:hover {
+    opacity: 0.9;
+    transform: translateY(-1px);
+  }
+  .save-btn:active {
+    transform: translateY(0);
+  }
+
+  .settings-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 8px 0;
+  }
+
+  /* Styles Tab Improvements */
+  .styles-actions-top {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+
+  .rich-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-radius: 12px;
+    font-weight: 500;
+    font-size: 14px;
+    cursor: pointer;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: all 0.2s ease;
+    backdrop-filter: blur(4px);
+  }
+
+  .rich-btn.primary {
+    background: linear-gradient(
+      135deg,
+      rgba(59, 130, 246, 0.2),
+      rgba(59, 130, 246, 0.1)
+    );
+    color: #60a5fa;
+    border-color: rgba(59, 130, 246, 0.2);
+  }
+
+  .rich-btn.primary:hover {
+    background: linear-gradient(
+      135deg,
+      rgba(59, 130, 246, 0.3),
+      rgba(59, 130, 246, 0.2)
+    );
+  }
+
+  .rich-btn.danger {
+    background: linear-gradient(
+      135deg,
+      rgba(239, 68, 68, 0.15),
+      rgba(239, 68, 68, 0.05)
+    );
+    color: #f87171;
+    border-color: rgba(239, 68, 68, 0.2);
+  }
+
+  .rich-btn.danger:hover {
+    background: linear-gradient(
+      135deg,
+      rgba(239, 68, 68, 0.25),
+      rgba(239, 68, 68, 0.15)
+    );
+  }
+
+  .rich-btn.secondary {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-secondary);
+  }
+
+  .rich-btn.secondary:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .btn-icon-left {
+    margin-right: -4px;
+  }
+
+  .style-item-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+    transition: all 0.2s ease;
+  }
+
+  .style-item-card.editing {
+    background: rgba(255, 255, 255, 0.07);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .style-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    min-height: 32px;
+  }
+
+  .style-name-display {
+    font-weight: 600;
+    color: var(--text-main);
+    font-size: 15px;
+  }
+
+  .style-name-input {
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 4px 8px;
+    color: white;
+    font-size: 14px;
+    flex: 1;
+    margin-right: 8px;
+  }
+
+  .style-header-actions {
+    display: flex;
+    gap: 4px;
+  }
+
+  .icon-btn-small {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .icon-btn-small:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+  }
+
+  .icon-btn-small.delete-btn:hover {
+    background: rgba(239, 68, 68, 0.2);
+    color: #f87171;
+  }
+
+  .icon-btn-small.done-btn {
+    color: #4ade80;
+    background: rgba(74, 222, 128, 0.1);
+  }
+
+  .icon-btn-small.done-btn:hover {
+    background: rgba(74, 222, 128, 0.2);
+  }
+
+  .style-prompt-display {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.1); /* Slightly darker for contrast */
+    border-radius: 8px;
+    min-height: 40px;
+    white-space: pre-wrap;
+    border: 1px solid rgba(255, 255, 255, 0.03);
+  }
+
+  .style-prompt-input {
+    width: 100%;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 10px;
+    color: var(--text-main);
+    font-size: 13px;
+    line-height: 1.5;
+    resize: vertical;
+    min-height: 60px;
+  }
+
+  /* Modal */
+  .modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .modal-card {
+    width: 90%;
+    max-width: 400px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  }
+
+  .modal-card h3 {
+    margin-top: 0;
+    margin-bottom: 24px;
+    font-size: 18px;
+    color: var(--text-main);
+    text-align: center;
+  }
+
+  .modal-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+  }
+
+  .modal-btn {
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 500;
+    border: none;
+  }
+  .theme-toggle {
+    display: flex;
+    gap: 8px;
+  }
+
+  .theme-btn {
+    flex: 1;
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .theme-btn:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-main);
+  }
+  .theme-btn.active {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: #fff;
+  }
+
+  /* Settings Tabs */
+  .settings-tabs {
+    display: flex;
+    padding: 0 20px;
+    gap: 4px;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .settings-tab {
+    flex: 1;
+    padding: 12px 16px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .settings-tab:hover {
+    color: var(--text-main);
+  }
+  .settings-tab.active {
+    color: var(--primary-color);
+    border-bottom-color: var(--primary-color);
+  }
+
+  /* Overflow Dropdown */
+  .style-dropdown-wrapper {
+    position: relative;
+  }
+
+  .style-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 8px;
+    width: 200px;
+    background: rgba(30, 30, 35, 0.95);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 6px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    z-index: 100;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .dropdown-section-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    padding: 4px 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    opacity: 0.7;
+  }
+
+  .dropdown-item {
+    position: relative;
+    overflow: hidden;
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-main);
+    text-align: left;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+  }
+
+  .dropdown-item:hover {
+    background: rgba(255, 255, 255, 0.08); /* Hover effect on top of fill */
+  }
+
+  .dropdown-item-content {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    align-items: center;
+  }
+
+  .dropdown-item-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    background: var(--primary-color);
+    opacity: 0.15;
+    transition:
+      width 0.2s cubic-bezier(0.2, 0, 0.2, 1),
+      background-color 0.2s;
+    z-index: 1;
+    border-radius: 4px; /* Slightly smaller radius than container */
+  }
+
+  .dropdown-item[data-level="1"] .dropdown-item-fill {
+    background: #4ade80;
+    opacity: 0.25;
+  }
+  .dropdown-item[data-level="2"] .dropdown-item-fill {
+    background: #f87171;
+    opacity: 0.25;
+  }
+
+  .level-indicator {
+    font-size: 10px;
+    background: var(--accent-color);
+    color: white;
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-weight: bold;
+    /* Since we have fill, maybe indicator is redundant, but user asked to keep "ON" */
+  }
+
+  .dropdown-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.1);
+    margin: 4px 0;
+  }
+
+  .dropdown-item.settings-link {
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
+
+  .dropdown-item.settings-link:hover {
+    color: var(--text-main);
+  }
+
+  .icon-left {
+    margin-right: 8px;
+    opacity: 0.8;
+  }
+
+  /* Active state for overflow button */
+  .style-chip.add-chip.active {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.2);
   }
 </style>
