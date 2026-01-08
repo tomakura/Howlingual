@@ -1,0 +1,86 @@
+/* Global Vars & Reset */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@300;400;500;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=Jost:wght@400;500;600;700&display=swap');
+
+:root {
+	--bg-color: #0a0a0a;
+	--surface-color: rgba(30, 30, 35, 0.6);
+	--surface-hover: rgba(45, 45, 50, 0.8);
+	--border-color: rgba(255, 255, 255, 0.1);
+	--primary-color: #3b82f6;
+	/* Modern Blue */
+	--primary-hover: #60a5fa;
+	--text-main: #ffffff;
+	--text-muted: #a0a0a0;
+
+	--radius-sm: 6px;
+	--radius-md: 12px;
+	--radius-lg: 18px;
+
+	--font-sans: 'IBM Plex Sans', 'IBM Plex Sans JP', system-ui, -apple-system, sans-serif;
+
+	--easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+* {
+	box-sizing: border-box;
+	margin: 0;
+	padding: 0;
+}
+
+body {
+	font-family: var(--font-sans);
+	background-color: var(--bg-color);
+	color: var(--text-main);
+	overflow: hidden;
+	/* App-like feel */
+	user-select: none;
+	-webkit-font-smoothing: antialiased;
+}
+
+/* Utilities */
+.glass {
+	background: var(--surface-color);
+	backdrop-filter: blur(20px);
+	-webkit-backdrop-filter: blur(20px);
+	border: 1px solid var(--border-color);
+}
+
+.flex-center {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.anim-fade {
+	animation: fadeIn 0.3s var(--easing);
+}
+
+@keyframes fadeIn {
+	from {
+		opacity: 0;
+		transform: translateY(5px);
+	}
+
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+	width: 8px;
+}
+
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+	background: rgba(255, 255, 255, 0.2);
+	border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: rgba(255, 255, 255, 0.3);
+}
