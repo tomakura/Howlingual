@@ -1,47 +1,47 @@
-# Howlingual Development Progress
+# Howlingual 開発進捗状況
 
-## 📅 Status as of January 8, 2026
+## 📅 2026年1月8日 時点のステータス
 
-### ✅ Implemented Features
+### ✅ 実装済み機能
 
-#### 1. Unified Scroll UI Layout
-- **Sticky Controls Bar**: Controls smoothly stick to the top when scrolling down.
-- **Morphing Interface**:
-    - **Default State**: Input area + Style selection chips.
-    - **Scrolled State**: Text preview (with wipe animation) + Scroll-to-top button.
-- **Action Button Transformation**:
-    - 'Translate' button (Blue/Accent) transforms into 'Scroll to Top' button (White/Glass) with generic "Pop" icon animation.
-- **Dynamic Scroll Threshold**: Toggles interface state based on Input Area height (Input height + 40px) to prevent premature switching on long texts.
+#### 1. 統合スクロールUIレイアウト
+- **スティッキーコントロールバー**: スクロール時にコントロールバーが上部に吸着します。
+- **モーフィングインターフェース**:
+    - **初期状態**: 入力エリア ＋ 文体選択チップ。
+    - **スクロール状態**: テキストプレビュー（ワイプアニメーション付き） ＋ トップへ戻るボタン。
+- **アクションボタンの変化**:
+    - 「翻訳」ボタン（青色アクセント）が、汎用的な「ポップ」アニメーションを伴って「トップへ戻る」ボタン（白色グラス風）へ変化します。
+- **動的スクロール閾値**: 入力テキストが長い場合でも意図せず切り替わらないよう、入力エリアの高さ（+40px）に応じて切り替えタイミングを自動調整します。
 
-#### 2. Advanced Animations
-- **Text Preview Wipe**: Soft, left-to-right gradient reveal animation (2.5s duration) with no delay.
-- **Style Chips Staggered Pop**: When returning to top, style chips reappear with a staggered "Pop-in" animation (dynamically calculated delays).
-- **Glassmorphism**:
-    - Strong blur effect (`backdrop-filter: blur(20px)`) on sticky controls.
-    - Semi-transparent backgrounds for cards and overlays.
-- **Touch & Feel**:
-    - Removed hover background changes on translation cards (border only).
-    - Custom scrollbar balancing (Left padding adjusted to 24px).
+#### 2. 高度なアニメーション
+- **テキストプレビューのワイプ**: 遅延なしで、左から右へ柔らかく表示されるグラデーションワイプ（2.5秒）。
+- **文体チップのスタッガー表示**: トップに戻った際、文体チップが左から順に「ポン、ポン」とポップアップ表示されます（遅延時間は動的計算）。
+- **グラスモーフィズム**:
+    - スティッキーバーに強力なブラー効果 (`backdrop-filter: blur(20px)`) を適用。
+    - カードやオーバーレイに半透明の背景色を使用。
+- **操作感の向上**:
+    - 翻訳カードのホバー時の背景色変化を削除（ボーダーのみ変化）。
+    - スクロールバーの幅を考慮し、左右のパディングバランスを調整（左24px）。
 
-#### 3. Core Text Handling
-- **Auto-resizing Textarea**: Expands up to ~200px then enables scroll.
-- **Font Sizing**: Logic to toggle font size based on character count (90 chars for JP, 200 for EN).
-- **Fade Overlays**: "Read more" fade effect at bottom of textarea when overflow exists.
+#### 3. テキスト処理
+- **テキストエリアの自動リサイズ**: 行数に応じて約200pxまで拡張し、それ以上はスクロール可能に。
+- **フォントサイズ自動調整**: 文字数（日本語90文字 / 英語200文字）に基づいてフォントサイズを切り替え。
+- **フェードオーバーレイ**: テキストが溢れている場合、下部に「読み切れない」ことを示すフェード効果を表示。
 
-#### 4. Visual Assets
-- **Custom Icons**:
-    - Sparkles (✨) for "Detailed Explanation" and Auto-detect.
-    - Info Circle (ⓘ) for Translation Reasons.
-    - Arrow/Check icons for language selection.
+#### 4. ビジュアル素材
+- **カスタムアイコン**:
+    - 「詳しい解説」と「自動検出」にキラキライコン（✨）を使用。
+    - 翻訳理由（Reason）へのインフォメーションアイコン（ⓘ）追加。
+    - 言語選択の矢印やチェックマーク。
 
-### 🚧 Current Mock/Static Elements (To Be Refactored)
-- **Languages**: Hardcoded list in `+page.svelte`.
-- **Style Levels**: Hardcoded keys/values in script.
-- **Detailed Explanation**: Static HTML content in `explanation-card`.
-- **Configuration**: Hardcoded character thresholds and layout offsets.
+### 🚧 現在のモック・静的要素（要リファクタリング）
+- **言語設定**: `+page.svelte` 内に配列で直書き。
+- **文体定義**: スクリプト内にキーと初期値が固定。
+- **詳しい解説**: `explanation-card` の内容がHTMLタグで直書き。
+- **設定値**: 文字数閾値やレイアウトオフセットが数値でハードコード。
 
-### 📋 Next Steps
-1.  **Refactoring**: Move hardcoded configs to data files/stores.
-2.  **Tray Icon**: Implement persistent background mode (Tauri System Tray).
-3.  **Settings UI**: Create interface for customizing shortcuts, languages, and API keys.
-4.  **Backend Integration**: Connect to LLM/Translation API.
+### 📋 次のステップ
+1.  **リファクタリング**: ハードコードされた設定値をデータ構造や別ファイルへ分離。
+2.  **トレイアイコン**: バックグラウンド常駐モード（タスクトレイ）の実装。
+3.  **設定画面**: ショートカットキー、言語設定、APIキーなどを管理するUIの作成。
+4.  **バックエンド統合**: LLM/翻訳APIとの接続。
