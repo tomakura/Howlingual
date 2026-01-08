@@ -1,5 +1,61 @@
 /* Global Vars & Reset */
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@300;400;500;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=Jost:wght@400;500;600;700&display=swap');
+
+/* Local Font Definitions */
+@font-face {
+	font-family: 'IBM Plex Sans';
+	src: url('./Fonts/IBM_Plex_Sans/IBMPlexSans-VariableFont_wdth,wght.ttf') format('truetype');
+	font-weight: 100 700;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'IBM Plex Sans';
+	src: url('./Fonts/IBM_Plex_Sans/IBMPlexSans-Italic-VariableFont_wdth,wght.ttf') format('truetype');
+	font-weight: 100 700;
+	font-style: italic;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'IBM Plex Sans JP';
+	src: url('./Fonts/IBM_Plex_Sans_JP/IBMPlexSansJP-Regular.ttf') format('truetype');
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'IBM Plex Sans JP';
+	src: url('./Fonts/IBM_Plex_Sans_JP/IBMPlexSansJP-Medium.ttf') format('truetype');
+	font-weight: 500;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'IBM Plex Sans JP';
+	src: url('./Fonts/IBM_Plex_Sans_JP/IBMPlexSansJP-Bold.ttf') format('truetype');
+	font-weight: 700;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'Jost';
+	src: url('./Fonts/Jost/Jost-VariableFont_wght.ttf') format('truetype');
+	font-weight: 100 900;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'Jost';
+	src: url('./Fonts/Jost/Jost-Italic-VariableFont_wght.ttf') format('truetype');
+	font-weight: 100 900;
+	font-style: italic;
+	font-display: swap;
+}
 
 :root {
 	--bg-color: #0a0a0a;
@@ -67,7 +123,7 @@ body {
 	}
 }
 
-/* Scrollbar */
+/* Scrollbar - Hidden by default, shown during scroll or hover */
 ::-webkit-scrollbar {
 	width: 8px;
 }
@@ -77,10 +133,16 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-	background: rgba(255, 255, 255, 0.2);
+	background: transparent;
 	border-radius: 4px;
+	transition: background 0.3s;
 }
 
+.is-scrolling::-webkit-scrollbar-thumb,
 ::-webkit-scrollbar-thumb:hover {
+	background: rgba(255, 255, 255, 0.2);
+}
+
+::-webkit-scrollbar-thumb:active {
 	background: rgba(255, 255, 255, 0.3);
 }

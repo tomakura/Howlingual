@@ -23,10 +23,17 @@
     "スペイン語",
   ];
 
+  let isSparkling = $state(false);
+
   function selectSourceLang(lang: string | null) {
     if (lang === null) {
       isAutoDetect = true;
       sourceLang = detectedLang;
+      // Trigger temporary sparkle animation
+      isSparkling = true;
+      setTimeout(() => {
+        isSparkling = false;
+      }, 1000);
     } else {
       isAutoDetect = false;
       sourceLang = lang;
@@ -39,6 +46,19 @@
     showTargetLangMenu = false;
   }
 
+  // Close menus when clicking outside
+  $effect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest(".lang-selector")) {
+        showSourceLangMenu = false;
+        showTargetLangMenu = false;
+      }
+    };
+    window.addEventListener("mousedown", handleClickOutside);
+    return () => window.removeEventListener("mousedown", handleClickOutside);
+  });
+
   // Style levels: 0 = オフ, 1 = 弱, 2 = 強
   let styleLevels: Record<string, number> = $state({
     フォーマル: 2,
@@ -46,6 +66,54 @@
     技術: 1,
     簡潔: 0,
   });
+
+  // Copy feedback state
+  let copiedId: number | null = $state(null);
+
+  function handleCopy(id: number) {
+    copiedId = id;
+    setTimeout(() => {
+      copiedId = null;
+    }, 1500);
+  }
+
+  // Button animation states (to prevent animation interruption on hover end)
+  let historyAnimating = $state(false);
+  let settingsAnimating = $state(false);
+  let speakAnimating: Record<number, boolean> = $state({});
+  let copyAnimating: Record<number, boolean> = $state({});
+
+  function triggerHistoryAnim() {
+    if (historyAnimating) return;
+    historyAnimating = true;
+    setTimeout(() => {
+      historyAnimating = false;
+    }, 1000);
+  }
+
+  function triggerSettingsAnim() {
+    if (settingsAnimating) return;
+    settingsAnimating = true;
+    setTimeout(() => {
+      settingsAnimating = false;
+    }, 1000);
+  }
+
+  function triggerSpeakAnim(id: number) {
+    if (speakAnimating[id]) return;
+    speakAnimating[id] = true;
+    setTimeout(() => {
+      speakAnimating[id] = false;
+    }, 1200);
+  }
+
+  function triggerCopyAnim(id: number) {
+    if (copyAnimating[id]) return;
+    copyAnimating[id] = true;
+    setTimeout(() => {
+      copyAnimating[id] = false;
+    }, 600);
+  }
 
   let isDragging = false;
 
@@ -154,10 +222,19 @@
   let scrollContainerEl: HTMLElement;
   let isScrolledDown = $state(false);
 
+  let isScrolling = $state(false);
+  let scrollTimeout: any;
+
   function onMainScroll() {
     if (!scrollContainerEl || !textareaEl) return;
-    // Dynamic threshold based on input height
-    // Ensures toggle happens only when input area is mostly scrolled out
+
+    // Manage scrolling state for scrollbar visibility
+    isScrolling = true;
+    clearTimeout(scrollTimeout);
+    scrollTimeout = setTimeout(() => {
+      isScrolling = false;
+    }, 1000);
+
     const threshold = textareaEl.clientHeight + 40;
     isScrolledDown = scrollContainerEl.scrollTop > threshold;
   }
@@ -210,23 +287,39 @@
       <div class="lang-selector">
         <button
           class="lang-btn"
-          onclick={() => (showSourceLangMenu = !showSourceLangMenu)}
+          class:open={showSourceLangMenu}
+          onclick={(e) => {
+            e.stopPropagation();
+            showSourceLangMenu = !showSourceLangMenu;
+            showTargetLangMenu = false;
+          }}
         >
           {#if isAutoDetect}
             <svg
               class="sparkle-icon"
-              width="12"
-              height="12"
+              class:is-active={isSparkling}
+              width="16"
+              height="16"
               viewBox="0 0 24 24"
               fill="currentColor"
             >
               <path
-                d="M12 0L14.59 8.41L23 11L14.59 13.59L12 22L9.41 13.59L1 11L9.41 8.41L12 0Z"
+                class="star-1"
+                d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
+              ></path>
+              <path
+                class="star-2"
+                d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
+              ></path>
+              <path
+                class="star-3"
+                d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
               ></path>
             </svg>
           {/if}
           {sourceLang}
           <svg
+            class="chevron-icon"
             width="10"
             height="10"
             viewBox="0 0 24 24"
@@ -238,20 +331,34 @@
           </svg>
         </button>
         {#if showSourceLangMenu}
-          <div class="lang-menu">
+          <div
+            class="lang-menu"
+            in:fly={{ y: -5, duration: 200 }}
+            out:fade={{ duration: 150 }}
+          >
             <button
               class="lang-option auto-detect {isAutoDetect ? 'active' : ''}"
               onclick={() => selectSourceLang(null)}
             >
               <svg
                 class="sparkle-icon"
-                width="12"
-                height="12"
+                class:is-active={isSparkling}
+                width="16"
+                height="16"
                 viewBox="0 0 24 24"
                 fill="currentColor"
               >
                 <path
-                  d="M12 0L14.59 8.41L23 11L14.59 13.59L12 22L9.41 13.59L1 11L9.41 8.41L12 0Z"
+                  class="star-1"
+                  d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
+                ></path>
+                <path
+                  class="star-2"
+                  d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
+                ></path>
+                <path
+                  class="star-3"
+                  d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
                 ></path>
               </svg>
               自動検出
@@ -284,10 +391,16 @@
       <div class="lang-selector">
         <button
           class="lang-btn"
-          onclick={() => (showTargetLangMenu = !showTargetLangMenu)}
+          class:open={showTargetLangMenu}
+          onclick={(e) => {
+            e.stopPropagation();
+            showTargetLangMenu = !showTargetLangMenu;
+            showSourceLangMenu = false;
+          }}
         >
           {targetLang}
           <svg
+            class="chevron-icon"
             width="10"
             height="10"
             viewBox="0 0 24 24"
@@ -299,7 +412,11 @@
           </svg>
         </button>
         {#if showTargetLangMenu}
-          <div class="lang-menu">
+          <div
+            class="lang-menu"
+            in:fly={{ y: -5, duration: 200 }}
+            out:fade={{ duration: 150 }}
+          >
             {#each languages as lang}
               <button
                 class="lang-option {lang === targetLang ? 'active' : ''}"
@@ -312,8 +429,14 @@
     </div>
 
     <div class="header-right">
-      <button class="icon-btn header-btn" title="履歴">
+      <button
+        class="icon-btn header-btn history-btn"
+        class:animating={historyAnimating}
+        title="履歴"
+        onmouseenter={triggerHistoryAnim}
+      >
         <svg
+          class="history-icon"
           width="20"
           height="20"
           viewBox="0 0 24 24"
@@ -324,11 +447,17 @@
           stroke-linejoin="round"
         >
           <circle cx="12" cy="12" r="10"></circle>
-          <polyline points="12 6 12 12 16 14"></polyline>
+          <polyline class="clock-hands" points="12 6 12 12 16 14"></polyline>
         </svg>
       </button>
-      <button class="icon-btn header-btn" title="設定">
+      <button
+        class="icon-btn header-btn settings-btn"
+        class:animating={settingsAnimating}
+        title="設定"
+        onmouseenter={triggerSettingsAnim}
+      >
         <svg
+          class="settings-icon"
           width="20"
           height="20"
           viewBox="0 0 24 24"
@@ -350,6 +479,7 @@
   <!-- Unified Scroll Container -->
   <section
     class="main-scroll glass"
+    class:is-scrolling={isScrolling}
     bind:this={scrollContainerEl}
     onscroll={onMainScroll}
   >
@@ -468,32 +598,75 @@
               <span>{item.reason}</span>
             </p>
             <div class="candidate-actions">
-              <button class="icon-btn" title="コピー">
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                  <path
-                    d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                  ></path>
-                </svg>
+              <button
+                class="icon-btn copy-btn"
+                class:copied={copiedId === item.id}
+                class:animating={copyAnimating[item.id]}
+                title="コピー"
+                onclick={() => handleCopy(item.id)}
+                onmouseenter={() => triggerCopyAnim(item.id)}
+              >
+                {#if copiedId === item.id}
+                  <svg
+                    class="check-icon"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                  </svg>
+                {:else}
+                  <svg
+                    class="copy-icon"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"
+                    ></rect>
+                    <path
+                      d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                    ></path>
+                  </svg>
+                {/if}
               </button>
-              <button class="icon-btn" title="読み上げ">
+              <button
+                class="icon-btn speak-btn"
+                class:animating={speakAnimating[item.id]}
+                title="読み上げ"
+                onmouseenter={() => triggerSpeakAnim(item.id)}
+              >
                 <svg
+                  class="speak-icon"
                   width="14"
                   height="14"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
                   stroke-width="2"
+                  style="overflow: visible;"
                 >
                   <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                  <path
+                    class="sound-wave wave-1"
+                    d="M15.54 8.46a5 5 0 0 1 0 7.07"
+                  ></path>
+                  <path
+                    class="sound-wave wave-2"
+                    d="M19.07 4.93a10 10 0 0 1 0 14.14"
+                  ></path>
+                  <path
+                    class="sound-wave wave-3"
+                    d="M22.07 1.93a14 14 0 0 1 0 20.14"
+                  ></path>
                 </svg>
               </button>
             </div>
@@ -548,8 +721,7 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
-    padding: 12px;
-    gap: 10px;
+    padding: 0;
     overflow: hidden;
   }
 
@@ -558,9 +730,11 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0 4px;
+    padding: 0 16px;
     height: 48px;
     flex-shrink: 0;
+    margin-top: 8px;
+    margin-bottom: 8px; /* Added margin below header */
   }
 
   .header-left {
@@ -572,10 +746,10 @@
 
   .app-title {
     font-family: "Jost", sans-serif;
-    font-weight: 600;
-    font-size: 18px;
+    font-weight: 700;
+    font-size: 25px;
     color: var(--text-main);
-    letter-spacing: 0.2px;
+    letter-spacing: 0.5px;
     padding-top: 2px; /* Visual alignment with icon */
   }
 
@@ -596,6 +770,35 @@
   .header-btn:hover {
     color: var(--text-main);
     background: rgba(255, 255, 255, 0.1);
+  }
+
+  /* 履歴ボタン: 時計の針が反時計回りに回転 */
+  .history-btn.animating .clock-hands {
+    transform-origin: 12px 12px;
+    animation: rewindTime 1s var(--easing);
+  }
+
+  @keyframes rewindTime {
+    0% {
+      transform: rotate(0deg);
+    }
+    100% {
+      transform: rotate(-360deg);
+    }
+  }
+
+  /* 設定ボタン: 歯車がゆっくり回転 */
+  .settings-btn.animating .settings-icon {
+    animation: gearSpin 1s var(--easing);
+  }
+
+  @keyframes gearSpin {
+    0% {
+      transform: rotate(0deg);
+    }
+    100% {
+      transform: rotate(180deg);
+    }
   }
 
   /* Language Header (Centered) */
@@ -624,10 +827,18 @@
     cursor: pointer;
     padding: 4px 8px;
     border-radius: 4px;
-    transition: background 0.2s;
+    transition: all 0.2s var(--easing);
   }
   .lang-btn:hover {
     background: rgba(255, 255, 255, 0.1);
+  }
+
+  .chevron-icon {
+    transition: transform 0.3s var(--easing);
+  }
+
+  .lang-btn.open .chevron-icon {
+    transform: rotate(180deg);
   }
 
   .lang-menu {
@@ -659,6 +870,7 @@
     cursor: pointer;
     border-radius: 4px;
     transition: all 0.15s;
+    white-space: nowrap;
   }
   .lang-option:hover {
     background: rgba(255, 255, 255, 0.1);
@@ -677,6 +889,36 @@
 
   .sparkle-icon {
     color: #fbbf24;
+    transition: all 0.3s var(--easing);
+  }
+
+  .sparkle-icon.is-active {
+    filter: drop-shadow(0 0 4px rgba(251, 191, 36, 0.4));
+  }
+
+  .sparkle-icon.is-active .star-1 {
+    animation: twinkle 1s var(--easing);
+  }
+  .sparkle-icon.is-active .star-2 {
+    animation: twinkle 1s var(--easing) 0.15s backwards;
+  }
+  .sparkle-icon.is-active .star-3 {
+    animation: twinkle 1s var(--easing) 0.3s backwards;
+  }
+
+  @keyframes twinkle {
+    0% {
+      transform: scale(0.8);
+      opacity: 0.5;
+    }
+    50% {
+      transform: scale(1.2);
+      opacity: 1;
+    }
+    100% {
+      transform: scale(1);
+      opacity: 1;
+    }
   }
 
   .menu-divider {
@@ -691,7 +933,10 @@
 
   /* Main Scroll Container */
   .main-scroll {
-    border-radius: var(--radius-md);
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
     padding: 14px 14px 14px 24px; /* Even more visual balance for scrollbar */
     flex: 1;
     min-height: 0;
@@ -722,8 +967,8 @@
 
   .controls-bar.scrolled {
     padding: 10px 14px; /* Slightly reduced padding when scrolled */
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
-    background: rgba(30, 30, 35, 0.85); /* Semi-transparent dark */
+    box-shadow: 0 3px 15px rgba(0, 0, 0, 0.5);
+    background: rgba(10, 10, 10, 0.85); /* Semi-transparent dark */
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border-bottom: 1px solid rgba(255, 255, 255, 0.08); /* Optional detail */
@@ -760,7 +1005,7 @@
     mask-position: 0% 0;
     -webkit-mask-position: 0% 0;
 
-    animation: wipeInSoft 2.5s var(--easing);
+    animation: wipeInSoft 1.5s cubic-bezier(0.5, 1, 0.89, 1);
   }
 
   @keyframes wipeInSoft {
@@ -1071,6 +1316,8 @@
     margin-bottom: 8px;
     color: #fff;
     line-height: 1.5;
+    user-select: text;
+    cursor: text;
   }
 
   .card-footer {
@@ -1114,6 +1361,82 @@
   .icon-btn:hover {
     background: rgba(255, 255, 255, 0.1);
     color: var(--primary-hover);
+  }
+
+  /* コピーボタン: 紙が重なるように上に移動 */
+  .copy-btn.animating .copy-icon {
+    animation: copySlide 0.6s var(--easing);
+  }
+
+  @keyframes copySlide {
+    0%,
+    100% {
+      transform: translate(0, 0);
+    }
+    50% {
+      transform: translate(-2px, -2px);
+    }
+  }
+
+  /* 読み上げボタン: 音波が順番に現れて消える */
+  .wave-1 {
+    opacity: 1;
+  }
+
+  .wave-2,
+  .wave-3 {
+    opacity: 0;
+  }
+
+  .speak-btn.animating .wave-2 {
+    animation: wavePulse 1.2s ease-in-out;
+  }
+
+  .speak-btn.animating .wave-3 {
+    animation: wavePulse 1.2s ease-in-out 0.15s;
+  }
+
+  @keyframes wavePulse {
+    0% {
+      opacity: 0;
+      transform: translateX(-2px);
+    }
+    30% {
+      opacity: 1;
+      transform: translateX(0);
+    }
+    70% {
+      opacity: 1;
+      transform: translateX(0);
+    }
+    100% {
+      opacity: 0;
+      transform: translateX(-2px);
+    }
+  }
+
+  /* Copy button feedback */
+  .copy-btn.copied {
+    color: #22c55e;
+    background: rgba(34, 197, 94, 0.15);
+  }
+
+  .check-icon {
+    animation: checkPop 0.3s var(--easing);
+  }
+
+  @keyframes checkPop {
+    0% {
+      transform: scale(0);
+      opacity: 0;
+    }
+    50% {
+      transform: scale(1.3);
+    }
+    100% {
+      transform: scale(1);
+      opacity: 1;
+    }
   }
 
   /* Explanation */
