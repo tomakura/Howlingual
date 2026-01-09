@@ -18,12 +18,18 @@ export interface TranslationResult {
 	reason: string;
 }
 
+export interface UsageMetadata {
+	input_tokens: number;
+	output_tokens: number;
+}
+
 export interface AiResponse {
 	detected_source_language: string;
 	candidates: TranslationResult[];
 	detailed_explanation?: {
 		points: { term: string; explanation: string }[];
 	};
+	usage?: UsageMetadata;
 }
 
 // Build system prompt with configurable explanation language
@@ -238,7 +244,7 @@ export async function translateTextStream(
 	targetLang: string,
 	styles: Record<string, number>,
 	model: string,
-	onUpdate: (partial: Partial<AiResponse>) => void,
+	onUpdate: (partial: Partial<AiResponse>, usage?: UsageMetadata) => void,
 	explanationLang: string = "日本語",
 	stylePrompts: Record<string, string> = {}
 ): Promise<void> {
@@ -257,7 +263,7 @@ export async function translateTextStream(
 }
 
 // Gemini Streaming
-async function streamGemini(prompt: string, onUpdate: (data: Partial<AiResponse>) => void, systemPrompt: string) {
+async function streamGemini(prompt: string, onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void, systemPrompt: string) {
 	if (!genAI) throw new Error("Gemini API Key missing");
 	// Check schema definition from previous code... assuming it's available or re-defined here
 	// For brevity re-using the logic conceptually.
@@ -297,7 +303,7 @@ async function streamGemini(prompt: string, onUpdate: (data: Partial<AiResponse>
 
 	for await (const chunk of result.stream) {
 		const chunkText = chunk.text();
-		console.log("Gemini Stream Chunk:", chunkText);
+		// console.log("Gemini Stream Chunk:", chunkText);
 		accumulatedText += chunkText;
 
 		const partial = tryParsePartialJson(accumulatedText);
@@ -308,12 +314,21 @@ async function streamGemini(prompt: string, onUpdate: (data: Partial<AiResponse>
 	// Final safe parse to ensure everything is correct
 	try {
 		const final = JSON.parse(accumulatedText);
-		onUpdate(final);
-	} catch (e) { /* ignore */ }
+		const response = await result.response;
+		const usage = response.usageMetadata ? {
+			input_tokens: response.usageMetadata.promptTokenCount,
+			output_tokens: response.usageMetadata.candidatesTokenCount
+		} : undefined;
+		if (usage) console.log("[Gemini] Token Usage:", usage);
+
+		onUpdate(final, usage);
+	} catch (e) {
+		console.warn("Gemini final parse/usage error:", e);
+	}
 }
 
 // OpenAI Streaming
-async function streamOpenAI(modelName: string, prompt: string, onUpdate: (data: Partial<AiResponse>) => void, systemPrompt: string) {
+async function streamOpenAI(modelName: string, prompt: string, onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void, systemPrompt: string) {
 	if (!openai) throw new Error("OpenAI API Key missing");
 
 	const stream = await openai.chat.completions.create({
@@ -333,8 +348,17 @@ async function streamOpenAI(modelName: string, prompt: string, onUpdate: (data: 
 	let accumulatedText = "";
 	for await (const chunk of stream) {
 		const content = chunk.choices[0]?.delta?.content || "";
+
+		if (chunk.usage) {
+			onUpdate(tryParsePartialJson(accumulatedText) || {}, {
+				input_tokens: chunk.usage.prompt_tokens,
+				output_tokens: chunk.usage.completion_tokens
+			});
+			console.log("[OpenAI] Token Usage:", chunk.usage);
+		}
+
 		if (content) {
-			console.log("OpenAI Stream Chunk:", content);
+			// console.log("OpenAI Stream Chunk:", content);
 			accumulatedText += content;
 			const partial = tryParsePartialJson(accumulatedText);
 			if (partial) {
@@ -348,6 +372,7 @@ async function streamOpenAI(modelName: string, prompt: string, onUpdate: (data: 
 		if (accumulatedText.trim()) {
 			const final = JSON.parse(accumulatedText);
 			console.log("[OpenAI] Final Full JSON parsed successfully.");
+			// Usage is already handled via chunk.usage in the loop (final chunk usually has it)
 			onUpdate(final);
 		}
 	} catch (e) {
@@ -356,7 +381,7 @@ async function streamOpenAI(modelName: string, prompt: string, onUpdate: (data: 
 }
 
 // Anthropic Streaming
-async function streamAnthropic(modelName: string, prompt: string, onUpdate: (data: Partial<AiResponse>) => void, systemPrompt: string) {
+async function streamAnthropic(modelName: string, prompt: string, onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void, systemPrompt: string) {
 	if (!anthropic) throw new Error("Anthropic API Key missing");
 
 	const stream = await anthropic.messages.create({
@@ -368,19 +393,31 @@ async function streamAnthropic(modelName: string, prompt: string, onUpdate: (dat
 	});
 
 	let accumulatedText = "";
-	for await (const chunk of stream) {
-		if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
-			accumulatedText += chunk.delta.text;
-			console.log("Anthropic Stream Chunk:", chunk.delta.text);
+	let currentUsage: UsageMetadata = { input_tokens: 0, output_tokens: 0 };
 
-			// Note: Anthropic might have preamble text before JSON
-			// We just try to parse whatever looks like JSON
+	for await (const chunk of stream) {
+		if (chunk.type === 'message_start') {
+			currentUsage.input_tokens = chunk.message.usage.input_tokens;
+			currentUsage.output_tokens = chunk.message.usage.output_tokens;
+			onUpdate({}, currentUsage);
+		} else if (chunk.type === 'message_delta') {
+			// Anthropic provides cumulative usage in delta
+			// Anthropic provides cumulative usage in delta
+			if (chunk.usage) {
+				currentUsage.output_tokens = chunk.usage.output_tokens;
+				onUpdate({}, currentUsage);
+				console.log("[Anthropic] Updated Usage:", currentUsage);
+			}
+		} else if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
+			accumulatedText += chunk.delta.text;
+			// console.log("Anthropic Stream Chunk:", chunk.delta.text);
+
 			const jsonStart = accumulatedText.indexOf('{');
 			if (jsonStart !== -1) {
 				const jsonPart = accumulatedText.substring(jsonStart);
 				const partial = tryParsePartialJson(jsonPart);
 				if (partial) {
-					onUpdate(partial);
+					onUpdate(partial, currentUsage);
 				}
 			}
 		}

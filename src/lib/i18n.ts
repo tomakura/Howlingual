@@ -26,10 +26,11 @@ interface Translations {
 	// Settings
 	settingsTitle: string;
 	tabGeneral: string;
-	tabApiKeys: string;
+	tabAi: string;
 	tabStyles: string;
 	styleName: string;
 	stylePrompt: string;
+	stylePromptHint: string;
 	addStyle: string;
 	resetStyles: string;
 	confirmReset: string;
@@ -46,6 +47,16 @@ interface Translations {
 	appLanguage: string;
 	save: string;
 	close: string;
+	back: string;
+	editStyle: string;
+	cancel: string;
+	allowRewrite: string;
+	allowRewriteDescription: string;
+	confirmDiscard: string;
+	discard: string;
+	aiTabDescription: string;
+	showTechInfo: string;
+	showTechInfoDesc: string;
 
 	// Styles
 	polite: string;
@@ -55,6 +66,12 @@ interface Translations {
 	childFriendly: string;
 	email: string;
 	concise: string;
+	noHistory: string;
+	noFavorites: string;
+	clearHistory: string;
+	tabRecent: string;
+	tabFavorites: string;
+	saveToFavorites: string;
 }
 
 const translations: Record<AppLanguage, Translations> = {
@@ -73,10 +90,11 @@ const translations: Record<AppLanguage, Translations> = {
 		explanation: "解説",
 		settingsTitle: "設定",
 		tabGeneral: "一般",
-		tabApiKeys: "APIキー",
-		tabStyles: "文体",
+		tabAi: "AI",
+		tabStyles: "文体設定",
 		styleName: "文体名",
 		stylePrompt: "プロンプト",
+		stylePromptHint: "AIへの指示を入力してください。（例：〜な口調で翻訳して、〜という用語を使って、など）",
 		addStyle: "追加",
 		resetStyles: "初期状態に戻す",
 		confirmReset: "本当に文体を初期状態に戻しますか？",
@@ -93,6 +111,16 @@ const translations: Record<AppLanguage, Translations> = {
 		appLanguage: "アプリ言語",
 		save: "保存",
 		close: "閉じる",
+		back: "戻る",
+		editStyle: "文体を編集",
+		cancel: "キャンセル",
+		allowRewrite: "同一言語の翻訳(リライト)を許可",
+		allowRewriteDescription: "オフにすると、翻訳元と翻訳先が同じ言語の場合、自動的に翻訳先を切り替えます。",
+		confirmDiscard: "変更を破棄しますか？",
+		discard: "破棄して戻る",
+		aiTabDescription: "選択したAIプロバイダーのモデルが有効になります。",
+		showTechInfo: "技術情報を表示",
+		showTechInfoDesc: "翻訳時に処理時間やトークン数を表示します。",
 		polite: "丁寧",
 		business: "ビジネス",
 		casual: "カジュアル",
@@ -100,6 +128,12 @@ const translations: Record<AppLanguage, Translations> = {
 		childFriendly: "子ども向け",
 		email: "メール",
 		concise: "簡潔",
+		noHistory: "履歴はありません",
+		noFavorites: "保存した履歴はありません",
+		clearHistory: "履歴を削除",
+		tabRecent: "最近",
+		tabFavorites: "保存済み",
+		saveToFavorites: "保存",
 	},
 	en: {
 		settings: "Settings",
@@ -116,10 +150,11 @@ const translations: Record<AppLanguage, Translations> = {
 		explanation: "Explanation",
 		settingsTitle: "Settings",
 		tabGeneral: "General",
-		tabApiKeys: "API Keys",
+		tabAi: "AI",
 		tabStyles: "Styles",
 		styleName: "Style Name",
 		stylePrompt: "Prompt",
+		stylePromptHint: "Please enter instructions for the AI. (e.g., Translate in a ~, use the term ~, etc.)",
 		addStyle: "Add",
 		resetStyles: "Reset to Default",
 		confirmReset: "Are you sure you want to reset styles?",
@@ -136,6 +171,16 @@ const translations: Record<AppLanguage, Translations> = {
 		appLanguage: "App Language",
 		save: "Save",
 		close: "Close",
+		back: "Back",
+		editStyle: "Edit Style",
+		cancel: "Cancel",
+		allowRewrite: "Allow rewrite (same language)",
+		allowRewriteDescription: "If disabled, the target language will automatically switch if it matches the source language.",
+		confirmDiscard: "Discard changes?",
+		discard: "Discard",
+		aiTabDescription: "The model from the selected AI provider will be active.",
+		showTechInfo: "Show Technical Info",
+		showTechInfoDesc: "Display processing time and token count during translation.",
 		polite: "Polite",
 		business: "Business",
 		casual: "Casual",
@@ -143,6 +188,12 @@ const translations: Record<AppLanguage, Translations> = {
 		childFriendly: "Kid-friendly",
 		email: "Email",
 		concise: "Concise",
+		noHistory: "No history found",
+		noFavorites: "No saved items",
+		clearHistory: "Clear History",
+		tabRecent: "Recent",
+		tabFavorites: "Saved",
+		saveToFavorites: "Save",
 	},
 	zh: {
 		settings: "设置",
@@ -159,10 +210,11 @@ const translations: Record<AppLanguage, Translations> = {
 		explanation: "解说",
 		settingsTitle: "设置",
 		tabGeneral: "常规",
-		tabApiKeys: "API密钥",
+		tabAi: "AI",
 		tabStyles: "风格",
 		styleName: "风格名称",
 		stylePrompt: "提示词",
+		stylePromptHint: "请输入AI指令。（例如：用〜语气翻译，使用〜术语等）",
 		addStyle: "添加",
 		resetStyles: "恢复默认",
 		confirmReset: "确定要重置风格吗？",
@@ -179,6 +231,16 @@ const translations: Record<AppLanguage, Translations> = {
 		appLanguage: "应用语言",
 		save: "保存",
 		close: "关闭",
+		back: "返回",
+		editStyle: "编辑风格",
+		cancel: "取消",
+		allowRewrite: "允许重写（相同语言）",
+		allowRewriteDescription: "如果禁用，当源语言和目标语言相同时，目标语言将自动切换。",
+		confirmDiscard: "放弃更改？",
+		discard: "丢弃",
+		aiTabDescription: "所选AI提供商的模型将处于活动状态。",
+		showTechInfo: "显示技术信息",
+		showTechInfoDesc: "翻译时显示处理时间和令牌计数",
 		polite: "礼貌",
 		business: "商务",
 		casual: "休闲",
@@ -186,6 +248,12 @@ const translations: Record<AppLanguage, Translations> = {
 		childFriendly: "儿童友好",
 		email: "邮件",
 		concise: "简洁",
+		noHistory: "暂无历史记录",
+		noFavorites: "暂无已保存项目",
+		clearHistory: "清空历史",
+		tabRecent: "最近",
+		tabFavorites: "已保存",
+		saveToFavorites: "保存",
 	},
 	ko: {
 		settings: "설정",
@@ -202,10 +270,11 @@ const translations: Record<AppLanguage, Translations> = {
 		explanation: "설명",
 		settingsTitle: "설정",
 		tabGeneral: "일반",
-		tabApiKeys: "API 키",
+		tabAi: "AI",
 		tabStyles: "문체",
 		styleName: "문체 이름",
 		stylePrompt: "프롬프트",
+		stylePromptHint: "AI지침 입력 (예: ~ 말투로 번역, ~ 용어 사용 등)",
 		addStyle: "추가",
 		resetStyles: "초기화",
 		confirmReset: "문체 설정을 초기화하시겠습니까?",
@@ -222,6 +291,16 @@ const translations: Record<AppLanguage, Translations> = {
 		appLanguage: "앱 언어",
 		save: "저장",
 		close: "닫기",
+		back: "뒤로",
+		editStyle: "문체 편집",
+		cancel: "취소",
+		allowRewrite: "동일 언어 번역(리라이트) 허용",
+		allowRewriteDescription: "비활성화 시, 원본 언어와 대상 언어가 같으면 대상 언어가 자동으로 변경됩니다.",
+		confirmDiscard: "변경 사항을 취소하시겠습니까?",
+		discard: "취소하고 뒤로",
+		aiTabDescription: "선택한 AI 제공업체의 모델이 활성화됩니다.",
+		showTechInfo: "기술 정보 표시",
+		showTechInfoDesc: "번역 시 처리 시간 및 토큰 수 표시",
 		polite: "정중",
 		business: "비즈니스",
 		casual: "캐주얼",
@@ -229,6 +308,12 @@ const translations: Record<AppLanguage, Translations> = {
 		childFriendly: "어린이용",
 		email: "이메일",
 		concise: "간결",
+		noHistory: "기록이 없습니다",
+		noFavorites: "저장된 항목이 없습니다",
+		clearHistory: "기록 삭제",
+		tabRecent: "최근",
+		tabFavorites: "저장됨",
+		saveToFavorites: "저장",
 	},
 };
 

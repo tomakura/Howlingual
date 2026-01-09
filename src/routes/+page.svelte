@@ -1,6 +1,8 @@
 <script lang="ts">
   import { tick, onMount, untrack } from "svelte";
-  import { fade, scale, fly } from "svelte/transition";
+  import { fade, scale, fly, crossfade } from "svelte/transition";
+  import { flip } from "svelte/animate";
+  import { quintOut } from "svelte/easing";
   import { translateTextStream, type AiModel } from "$lib/ai_service";
   import {
     t,
@@ -10,6 +12,12 @@
     type AppLanguage,
   } from "$lib/i18n";
   import { getDefaultStyles } from "$lib/style_defaults";
+
+  // ====== Animations ======
+  const [send, receive] = crossfade({
+    duration: 300,
+    fallback: (node, params) => scale(node, { ...params, duration: 250 }),
+  });
 
   // ====== Settings State ======
   let showSettings = $state(false);
@@ -23,6 +31,19 @@
   let defaultTargetLang = $state("日本語");
   let theme = $state<"dark" | "light">("dark");
   let appLanguage = $state<"ja" | "en" | "zh" | "ko">("ja");
+  let allowRewrite = $state(false);
+  let selectedProvider = $state<"openai" | "gemini" | "anthropic">("openai");
+
+  let historyAnimating = $state(false);
+  function triggerHistoryAnim() {
+    historyAnimating = true;
+    setTimeout(() => (historyAnimating = false), 1000);
+  }
+
+  function detectLanguageSimple(text: string) {
+    const hasJapanese = /[\u3040-\u30ff\u4e00-\u9faf]/.test(text);
+    return hasJapanese ? "日本語" : "英語";
+  }
 
   // Custom Styles
   type CustomStyle = {
@@ -33,24 +54,49 @@
   };
 
   let customStyles = $state<CustomStyle[]>(getDefaultStyles("ja"));
-  let editingStyleId = $state<string | null>(null);
+  let editingStyle = $state<CustomStyle | null>(null);
   let showResetConfirmation = $state(false);
+  let showDiscardConfirmation = $state(false);
 
   let styleOverflowOpen = $state(false);
 
-  // Sort styles: Active first, then original order
-  let sortedStyles = $derived.by(() => {
-    return [...customStyles].sort((a, b) => {
-      const aLev = styleLevels[a.name] || 0;
-      const bLev = styleLevels[b.name] || 0;
-      if (aLev > 0 && bLev === 0) return -1;
-      if (aLev === 0 && bLev > 0) return 1;
-      return 0;
-    });
-  });
+  let styleContainerRef = $state<HTMLElement>();
+  let visibleStyleCount = $state(4);
 
-  let visibleStyles = $derived(sortedStyles.slice(0, 4));
-  let hiddenStyles = $derived(sortedStyles.slice(4));
+  // Sort styles: Active first, then original order -> DISABLED by user request
+  // Now we just use customStyles order (User can reorder manually)
+  let sortedStyles = $derived(customStyles);
+
+  let visibleStyles = $derived(sortedStyles.slice(0, visibleStyleCount));
+  let hiddenStyles = $derived(sortedStyles.slice(visibleStyleCount));
+  let hasActiveHiddenStyles = $derived(
+    hiddenStyles.some((s) => (styleLevels[s.name] || 0) > 0),
+  );
+
+  // Responsive style count
+  $effect(() => {
+    if (styleContainerRef) {
+      const resizeObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const totalWidth = entry.contentRect.width;
+          const itemWidth = 90;
+          const buttonWidth = 50;
+
+          const maxIfNoButton = Math.floor(totalWidth / itemWidth);
+
+          if (customStyles.length <= maxIfNoButton) {
+            visibleStyleCount = customStyles.length;
+          } else {
+            const available = totalWidth - buttonWidth;
+            const maxIfButton = Math.floor(available / itemWidth);
+            visibleStyleCount = Math.max(1, maxIfButton);
+          }
+        }
+      });
+      resizeObserver.observe(styleContainerRef);
+      return () => resizeObserver.disconnect();
+    }
+  });
 
   // Update default styles when language changes
   $effect(() => {
@@ -124,19 +170,31 @@
       },
     ];
 
+  let filteredModels = $derived(
+    availableModels.filter((m) => m.provider === selectedProvider),
+  );
+
   // Load settings on mount
   onMount(() => {
     const saved = localStorage.getItem("howlingual_settings");
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (parsed.model) selectedModel = parsed.model;
+        if (parsed.model) {
+          selectedModel = parsed.model;
+          const found = availableModels.find((m) => m.value === selectedModel);
+          if (found) {
+            selectedProvider = found.provider as any;
+          }
+        }
         if (parsed.apiKeys) apiKeys = { ...apiKeys, ...parsed.apiKeys };
         if (parsed.defaultTargetLang)
           defaultTargetLang = parsed.defaultTargetLang;
         if (parsed.theme) theme = parsed.theme;
         if (parsed.appLanguage) appLanguage = parsed.appLanguage;
         if (parsed.customStyles) customStyles = parsed.customStyles;
+        if (parsed.allowRewrite !== undefined)
+          allowRewrite = parsed.allowRewrite;
 
         // Apply theme on load
         document.documentElement.setAttribute("data-theme", theme);
@@ -155,6 +213,7 @@
       theme: theme,
       appLanguage: appLanguage,
       customStyles: customStyles,
+      allowRewrite: allowRewrite,
     };
     localStorage.setItem("howlingual_settings", JSON.stringify(settings));
 
@@ -199,29 +258,129 @@
     showResetConfirmation = false;
   }
 
-  async function addStyle() {
-    const id = crypto.randomUUID();
-    customStyles = [
-      ...customStyles,
-      {
-        id,
-        name: "New Style",
+  function selectProvider(provider: "openai" | "gemini" | "anthropic") {
+    selectedProvider = provider;
+
+    // Check if current model belongs to this provider
+    const currentModelObj = availableModels.find(
+      (m) => m.value === selectedModel,
+    );
+    if (currentModelObj?.provider !== provider) {
+      // Switch to first available model for this provider
+      // Ideally we could store "last used model per provider", but for now default to first
+      const defaultForProvider = availableModels.find(
+        (m) => m.provider === provider,
+      );
+      if (defaultForProvider) {
+        selectedModel = defaultForProvider.value as AiModel;
+      }
+    }
+  }
+
+  let slideDirection = $state(1);
+  const settingsTabOrder = ["general", "api", "styles"];
+
+  function moveStyle(index: number, direction: "up" | "down") {
+    const newStyles = [...customStyles];
+    if (direction === "up" && index > 0) {
+      [newStyles[index], newStyles[index - 1]] = [
+        newStyles[index - 1],
+        newStyles[index],
+      ];
+    } else if (direction === "down" && index < newStyles.length - 1) {
+      [newStyles[index], newStyles[index + 1]] = [
+        newStyles[index + 1],
+        newStyles[index],
+      ];
+    }
+    customStyles = newStyles;
+  }
+
+  function changeTab(newTab: "general" | "api" | "styles") {
+    const currentIndex = settingsTabOrder.indexOf(settingsTab);
+    const newIndex = settingsTabOrder.indexOf(newTab);
+    slideDirection = newIndex > currentIndex ? 1 : -1;
+    settingsTab = newTab;
+  }
+
+  function openSettingsModal() {
+    settingsTab = "general";
+    showSettings = true;
+  }
+
+  function handleWindowKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      // Blur active element to prevent focus rings after closing
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+
+      if (showResetConfirmation) {
+        showResetConfirmation = false;
+        return;
+      }
+      if (showDiscardConfirmation) {
+        showDiscardConfirmation = false;
+        return;
+      }
+      if (editingStyle) {
+        showDiscardConfirmation = true;
+        return;
+      }
+      if (showSettings) {
+        showSettings = false;
+        return;
+      }
+      if (showHistory) {
+        showHistory = false;
+        return;
+      }
+    }
+  }
+
+  function openStyleEditor(style?: CustomStyle) {
+    if (style) {
+      editingStyle = { ...style };
+    } else {
+      editingStyle = {
+        id: crypto.randomUUID(),
+        name: "",
         prompt: "",
         isDefault: false,
-      },
-    ];
-    await tick();
-    editingStyleId = id;
-
-    // Scroll to the new item
-    const container = document.querySelector(".styles-list-container");
-    if (container) {
-      container.scrollTop = container.scrollHeight;
+      };
     }
+  }
+
+  function saveStyle() {
+    if (!editingStyle) return;
+    if (!editingStyle.name.trim()) return;
+
+    const index = customStyles.findIndex((s) => s.id === editingStyle!.id);
+    if (index !== -1) {
+      customStyles = customStyles.map((s, i) =>
+        i === index ? editingStyle! : s,
+      );
+    } else {
+      customStyles = [...customStyles, editingStyle];
+    }
+    editingStyle = null;
+  }
+
+  function cancelEditStyle() {
+    showDiscardConfirmation = true;
+  }
+
+  function confirmDiscardStyle() {
+    editingStyle = null;
+    showDiscardConfirmation = false;
   }
 
   function deleteStyle(index: number) {
     customStyles = customStyles.filter((_, i) => i !== index);
+  }
+
+  async function addStyle() {
+    openStyleEditor();
   }
 
   function openSettings() {
@@ -292,17 +451,52 @@
     showTargetLangMenu = false;
   }
 
+  // Prevent same-language translation if allowRewrite is false
+  $effect(() => {
+    if (allowRewrite) return;
+
+    // Determine actual source language
+    const actualSource = isAutoDetect ? detectedLang || "日本語" : sourceLang;
+    if (!actualSource) return;
+
+    if (actualSource === targetLang) {
+      const fallback = "英語"; // Hardcoded backup
+
+      if (actualSource === defaultTargetLang) {
+        // Source IS default, so switch to fallback
+        if (targetLang !== fallback) {
+          targetLang = fallback;
+          console.log(
+            `[Auto-Switch] Source (${actualSource}) == Target, switched target to ${fallback}`,
+          );
+        }
+      } else {
+        // Source is foreign, switch to default
+        if (targetLang !== defaultTargetLang) {
+          targetLang = defaultTargetLang;
+          console.log(
+            `[Auto-Switch] Source (${actualSource}) == Target, switched target to ${defaultTargetLang}`,
+          );
+        }
+      }
+    }
+  });
+
   // Close menus when clicking outside
   $effect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
       if (
         !target.closest(".lang-selector") &&
-        !target.closest(".style-dropdown-wrapper")
+        !target.closest(".style-dropdown-wrapper") &&
+        !target.closest(".settings-panel") && // Added to close settings on outside click
+        !target.closest(".history-panel") // Added to close history on outside click
       ) {
         showSourceLangMenu = false;
         showTargetLangMenu = false;
         styleOverflowOpen = false;
+        showSettings = false; // Close settings
+        showHistory = false; // Close history
       }
     };
     window.addEventListener("mousedown", handleClickOutside);
@@ -324,19 +518,10 @@
   }
 
   // Button animation states (to prevent animation interruption on hover end)
-  let historyAnimating = $state(false);
   let settingsAnimating = $state(false);
   let speakAnimating: Record<number, boolean> = $state({});
   let copyAnimating: Record<number, boolean> = $state({});
   let isSpeakingId: number | null = $state(null);
-
-  function triggerHistoryAnim() {
-    if (historyAnimating) return;
-    historyAnimating = true;
-    setTimeout(() => {
-      historyAnimating = false;
-    }, 1000);
-  }
 
   function triggerSettingsAnim() {
     if (settingsAnimating) return;
@@ -531,6 +716,11 @@
   let scrollThumbTop = $state(0);
   let scrollThumbHeight = $state(0);
 
+  // Auto-scroll during streaming (like modern AI chat apps)
+  let autoScrollEnabled = $state(true);
+  let lastScrollTop = 0;
+  let isAtBottom = $state(true);
+
   function onMainScroll() {
     if (!scrollContainerEl || !textareaEl) return;
 
@@ -559,6 +749,39 @@
 
     const threshold = textareaEl.clientHeight + 40;
     isScrolledDown = scrollContainerEl.scrollTop > threshold;
+
+    // Auto-scroll logic: detect if user scrolled up
+    if (isTranslating) {
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 50;
+      const scrollDelta = scrollTop - lastScrollTop;
+
+      if (scrollDelta < -10 && !isNearBottom) {
+        // User scrolled up significantly, disable auto-scroll
+        autoScrollEnabled = false;
+      } else if (isNearBottom && scrollDelta > 5) {
+        // User explicitly scrolled down to bottom, re-enable
+        autoScrollEnabled = true;
+      }
+    }
+    lastScrollTop = scrollTop;
+
+    // Track if at bottom for fade effect
+    isAtBottom = scrollHeight - scrollTop - clientHeight < 20;
+  }
+
+  function autoScrollToBottom() {
+    if (scrollContainerEl && autoScrollEnabled) {
+      scrollContainerEl.scrollTo({
+        top: scrollContainerEl.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  }
+
+  function checkBottomPosition() {
+    if (!scrollContainerEl) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainerEl;
+    isAtBottom = scrollHeight - scrollTop - clientHeight < 20;
   }
 
   function scrollToTop() {
@@ -574,30 +797,237 @@
   });
 
   // Mock Data
-  let translations: { id: number; text: string; reason: string }[] = $state([]);
+  // Mock Data
+  let translations: { id: number; text: string; reason: string }[] = $state([
+    { id: 1, text: "", reason: "" },
+    { id: 2, text: "", reason: "" },
+    { id: 3, text: "", reason: "" },
+  ]);
   let detailedExplanation: {
     points: { term: string; explanation: string }[];
   } | null = $state(null);
   let isTranslating = $state(false);
   let showExplanation = $state(true);
   let isDetecting = $state(false);
+
   let errorMessage = $state("");
+
+  // Technical Info
+  type HistoryItem = {
+    id: string;
+    timestamp: number;
+    sourceText: string;
+    sourceLang: string;
+    targetLang: string;
+    translations: { text: string; reason: string }[];
+    detailedExplanation?: {
+      points: { term: string; explanation: string }[];
+    } | null;
+    styleLevels: Record<string, number>;
+  };
+
+  let history: HistoryItem[] = $state([]);
+  let favorites: HistoryItem[] = $state([]);
+  let showHistory = $state(false);
+  let historyTab = $state("recent"); // "recent" | "saved"
+  let historySlideDirection = $state(1);
+  const historyTabOrder = ["recent", "saved"];
+
+  function changeHistoryTab(newTab: string) {
+    const currentIndex = historyTabOrder.indexOf(historyTab);
+    const newIndex = historyTabOrder.indexOf(newTab);
+    historySlideDirection = newIndex > currentIndex ? 1 : -1;
+    historyTab = newTab;
+  }
+
+  let starAnimatingId = $state("");
+
+  function triggerStarAnim(id: string) {
+    starAnimatingId = id;
+    setTimeout(() => {
+      if (starAnimatingId === id) starAnimatingId = "";
+    }, 600);
+  }
+
+  function toggleFavorite(item: HistoryItem) {
+    // Check by id first for history list, fallback to sourceText for main screen
+    const existingIdx = favorites.findIndex(
+      (f) => f.id === item.id || f.sourceText === item.sourceText,
+    );
+    if (existingIdx >= 0) {
+      favorites = favorites.filter((_, i) => i !== existingIdx);
+      triggerStarAnim(item.id); // Animate unfavorite too
+    } else {
+      // Ensure the item has a valid id
+      const newItem = { ...item, id: item.id || crypto.randomUUID() };
+      favorites = [newItem, ...favorites];
+      triggerStarAnim(newItem.id);
+    }
+    localStorage.setItem("howlingual_favorites", JSON.stringify(favorites));
+  }
+
+  function isFavorited(sourceText: string): boolean {
+    return favorites.some((f) => f.sourceText === sourceText);
+  }
+
+  function isFavoritedById(id: string): boolean {
+    return favorites.some((f) => f.id === id);
+  }
+
+  function deleteHistoryItem(id: string) {
+    history = history.filter((h) => h.id !== id);
+    localStorage.setItem("howlingual_history", JSON.stringify(history));
+  }
+
+  function moveFavorite(index: number, direction: "up" | "down") {
+    const newIdx = direction === "up" ? index - 1 : index + 1;
+    if (newIdx < 0 || newIdx >= favorites.length) return;
+    const newFavs = [...favorites];
+    [newFavs[index], newFavs[newIdx]] = [newFavs[newIdx], newFavs[index]];
+    favorites = newFavs;
+    localStorage.setItem("howlingual_favorites", JSON.stringify(favorites));
+  }
+
+  function deleteFavorite(id: string) {
+    favorites = favorites.filter((f) => f.id !== id);
+    localStorage.setItem("howlingual_favorites", JSON.stringify(favorites));
+  }
+
+  onMount(() => {
+    // Scroll handling
+    const container = scrollContainerEl;
+    if (container) {
+      // ... (existing resize observer logic inside onMount if any? No, existing code uses actions)
+    }
+
+    const savedHistory = localStorage.getItem("howlingual_history");
+    if (savedHistory) {
+      try {
+        history = JSON.parse(savedHistory);
+      } catch (e) {
+        console.error("Failed to load history", e);
+      }
+    }
+
+    const savedFavs = localStorage.getItem("howlingual_favorites");
+    if (savedFavs) {
+      try {
+        favorites = JSON.parse(savedFavs);
+      } catch (e) {
+        console.error("Failed to load favorites", e);
+      }
+    }
+  });
+
+  function loadHistory(item: HistoryItem) {
+    inputQuery = item.sourceText;
+    // We try to match sourceLang/targetLang to available options if possible,
+    // or just set them if they are strings.
+    // For now assuming strings are compatible.
+    if (
+      item.sourceLang !== "自動検出" &&
+      !languages.includes(item.sourceLang)
+    ) {
+      // Logic for unsupported lang if needed
+    }
+    // sourceLang = item.sourceLang; // Might conflict with select binding if value not in list
+    // simplified:
+    inputQuery = item.sourceText;
+    translations = item.translations.map((t, i) => ({ ...t, id: i + 1 }));
+
+    // Restore explanation
+    if (item.detailedExplanation) {
+      detailedExplanation = item.detailedExplanation;
+      showExplanation = true;
+    } else {
+      detailedExplanation = null;
+      showExplanation = false;
+    }
+
+    // Restore source/target if they exist in current list
+    if (languages.includes(item.targetLang)) {
+      targetLang = item.targetLang;
+    }
+    if (item.sourceLang === "自動検出") {
+      selectSourceLang(null);
+    } else if (languages.includes(item.sourceLang)) {
+      selectSourceLang(item.sourceLang);
+    }
+
+    // Restore style levels
+    if (item.styleLevels) {
+      styleLevels = { ...styleLevels, ...item.styleLevels };
+    }
+
+    showHistory = false;
+  }
+
+  function clearHistory() {
+    history = [];
+    localStorage.removeItem("howlingual_history");
+  }
+
+  let showTechInfo = $state(false);
+
+  $effect(() => {
+    const stored = localStorage.getItem("howlingual_showTechInfo");
+    if (stored !== null) showTechInfo = stored === "true";
+  });
+  $effect(() => {
+    localStorage.setItem("howlingual_showTechInfo", String(showTechInfo));
+  });
+
+  let techMetrics = $state({
+    time: 0,
+    waitTime: 0, // Time until first token
+    genTime: 0, // Time for generation after first token
+    model: "",
+    inputTokens: 0,
+    outputTokens: 0,
+    tokensPerSec: 0,
+    isReal: false,
+    firstTokenReceived: false,
+  });
+  let timerInterval: any;
+  let initialTokens = 0;
+  let firstTokenTime = 0;
 
   async function startTranslation() {
     if (isTranslating || !inputQuery.trim()) return;
     isTranslating = true;
+    autoScrollEnabled = true; // Enable auto-scroll for new translation
     showExplanation = false; // Hide explanation during translation
     showSourceLangMenu = false; // Close menu if open
     showTargetLangMenu = false; // Close menu if open
-    showTargetLangMenu = false; // Close menu if open
-    translations = []; // Clear current results
+    // Clear content but keep slots
+    translations = translations.map((t) => ({ ...t, text: "", reason: "" }));
+    if (translations.length === 0) {
+      translations = [
+        { id: 1, text: "", reason: "" },
+        { id: 2, text: "", reason: "" },
+        { id: 3, text: "", reason: "" },
+      ];
+    }
     detailedExplanation = null; // Clear explanation
     errorMessage = "";
 
     // Handle Auto-detect mock logic
     if (isAutoDetect) {
       isDetecting = true;
-      detectedLang = ""; // Clear previous detection result
+      // Pre-emptive detection to save tokens on Auto-Switch
+      const preDetected = detectLanguageSimple(inputQuery);
+      // Update UI immediately (can be overwritten by LLM later)
+      detectedLang = preDetected;
+
+      if (!allowRewrite && preDetected === targetLang) {
+        console.log(
+          `[Auto-Switch] Pre-detected '${preDetected}' matches Target. Switching...`,
+        );
+        let newTarget = "英語";
+        if (preDetected === "英語") newTarget = "日本語";
+        else if (preDetected === defaultTargetLang) newTarget = "英語";
+        targetLang = newTarget;
+      }
     }
 
     try {
@@ -609,6 +1039,29 @@
       // Call AI API with Streaming
       // Get explanation language based on app language setting
       const explanationLangName = getLanguageName(appLanguage);
+
+      const startTime = Date.now();
+      let usingRealTokens = false;
+      initialTokens = Math.ceil(inputQuery.length / 1.5) + 40; // Approx input + system prompts
+
+      // Tech Info Reset
+      techMetrics = {
+        time: 0,
+        waitTime: 0,
+        genTime: 0,
+        model: currentModel,
+        inputTokens: initialTokens,
+        outputTokens: 0,
+        tokensPerSec: 0,
+        isReal: false,
+        firstTokenReceived: false,
+      };
+      firstTokenTime = 0;
+
+      clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        techMetrics.time = (Date.now() - startTime) / 1000;
+      }, 100);
 
       // Extract prompts for active styles
       const activeStylePrompts: Record<string, string> = {};
@@ -627,7 +1080,50 @@
         targetLang,
         styleLevels,
         currentModel,
-        (partialResult) => {
+        (partialResult, usage) => {
+          // Update Tech Info Tokens
+          if (usage) {
+            techMetrics.inputTokens = usage.input_tokens;
+            techMetrics.outputTokens = usage.output_tokens;
+            techMetrics.isReal = true;
+            usingRealTokens = true;
+          } else if (!usingRealTokens) {
+            let outputChars = 0;
+            if (partialResult.candidates) {
+              outputChars += partialResult.candidates.reduce(
+                (acc, c) =>
+                  acc + (c.text?.length || 0) + (c.reason?.length || 0),
+                0,
+              );
+            }
+            if (partialResult.detailed_explanation) {
+              outputChars += JSON.stringify(
+                partialResult.detailed_explanation,
+              ).length;
+            }
+            techMetrics.outputTokens = Math.ceil(outputChars / 1.5);
+          }
+
+          // Track first token time
+          if (
+            !techMetrics.firstTokenReceived &&
+            (partialResult.candidates?.length > 0 ||
+              partialResult.detected_source_language)
+          ) {
+            firstTokenTime = Date.now();
+            techMetrics.waitTime = (firstTokenTime - startTime) / 1000;
+            techMetrics.firstTokenReceived = true;
+          }
+
+          // Update generation time and speed
+          if (techMetrics.firstTokenReceived) {
+            techMetrics.genTime = (Date.now() - firstTokenTime) / 1000;
+            if (techMetrics.genTime > 0 && techMetrics.outputTokens > 0) {
+              techMetrics.tokensPerSec = Math.round(
+                techMetrics.outputTokens / techMetrics.genTime,
+              );
+            }
+          }
           // Handle Detection Result updates
           if (isAutoDetect && partialResult.detected_source_language) {
             // Only update if we haven't finalized it yet or it changed
@@ -639,18 +1135,18 @@
 
           // Update Translations
           if (partialResult.candidates && partialResult.candidates.length > 0) {
-            // Ensure IDs exist for the UI loop
-            translations = partialResult.candidates.map((c, i) => {
-              if (i === 0 && c.reason) {
-                // Debug first reason periodically
-                // console.log(`[UI] Candidate 1 reason: ${c.reason.substring(0, 20)}...`);
-              }
-              return {
+            const next = [...translations];
+            partialResult.candidates.forEach((c, i) => {
+              next[i] = {
                 ...c,
                 id: c.id || i + 1,
                 reason: c.reason || "", // Ensure reason is at least empty string
               };
             });
+            translations = next;
+
+            // Auto-scroll to show new content
+            autoScrollToBottom();
           }
 
           // Update Detailed Explanation
@@ -663,6 +1159,27 @@
         activeStylePrompts,
       );
 
+      // Save History
+      if (translations.length > 0) {
+        const newEntry: HistoryItem = {
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          sourceText: inputQuery,
+          sourceLang: detectedLang || sourceLang,
+          targetLang: targetLang,
+          translations: translations.map((t) => ({
+            text: t.text,
+            reason: t.reason,
+          })),
+          detailedExplanation: detailedExplanation
+            ? $state.snapshot(detailedExplanation)
+            : null,
+          styleLevels: $state.snapshot(styleLevels),
+        };
+        history = [newEntry, ...history].slice(0, 50);
+        localStorage.setItem("howlingual_history", JSON.stringify(history));
+      }
+
       // Final check for detecting state just in case
       if (isAutoDetect) isDetecting = false;
     } catch (error) {
@@ -672,6 +1189,7 @@
       isDetecting = false;
     } finally {
       isTranslating = false;
+      clearInterval(timerInterval);
     }
   }
 
@@ -682,89 +1200,40 @@
   });
 </script>
 
+<svelte:window onkeydown={handleWindowKeydown} onresize={checkBottomPosition} />
+
 <main class="container">
   <!-- App Header -->
   <header class="app-header">
     <div class="header-left">
-      <img src="/icon-dark.svg" alt="Howlingual" class="app-icon" />
+      <img
+        src={theme === "light" ? "/icon-light.svg" : "/icon-dark.svg"}
+        alt="Howlingual"
+        class="app-icon"
+      />
       <h1 class="app-title">Howlingual</h1>
-    </div>
 
-    <!-- Language Direction Header -->
-    <div class="lang-header">
-      <div class="lang-selector">
-        <button
-          class="lang-btn"
-          class:open={showSourceLangMenu}
-          disabled={isTranslating}
-          onclick={(e) => {
-            e.stopPropagation();
-            showSourceLangMenu = !showSourceLangMenu;
-            showTargetLangMenu = false;
-          }}
-        >
-          {#if isAutoDetect}
-            <svg
-              class="sparkle-icon"
-              class:is-active={isSparkling}
-              class:is-detecting={isDetecting}
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="currentColor"
-            >
-              <path
-                class="star-1"
-                d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
-              ></path>
-              <path
-                class="star-2"
-                d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
-              ></path>
-              <path
-                class="star-3"
-                d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
-              ></path>
-            </svg>
-          {/if}
-          {#if isAutoDetect && detectedLang && translations.length > 0}
-            {detectedLang}（{appLanguage === "ja"
-              ? "自動"
-              : appLanguage === "en"
-                ? "auto"
-                : appLanguage === "zh"
-                  ? "自动"
-                  : "自務"}）
-          {:else if isAutoDetect}
-            {t(appLanguage, "autoDetect")}
-          {:else}
-            {sourceLang}
-          {/if}
-          <svg
-            class="chevron-icon"
-            width="10"
-            height="10"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
+      <!-- Language Direction Header -->
+      <div
+        class="lang-selector-group"
+        style="display: flex; align-items: center; gap: 8px; margin-left: 24px;"
+      >
+        <div class="lang-selector">
+          <button
+            class="lang-btn"
+            class:open={showSourceLangMenu}
+            disabled={isTranslating}
+            onclick={(e) => {
+              e.stopPropagation();
+              showSourceLangMenu = !showSourceLangMenu;
+              showTargetLangMenu = false;
+            }}
           >
-            <path d="M6 9l6 6 6-6"></path>
-          </svg>
-        </button>
-        {#if showSourceLangMenu}
-          <div
-            class="lang-menu"
-            in:fly={{ y: -5, duration: 200 }}
-            out:fade={{ duration: 150 }}
-          >
-            <button
-              class="lang-option auto-detect {isAutoDetect ? 'active' : ''}"
-              onclick={() => selectSourceLang(null)}
-            >
+            {#if isAutoDetect}
               <svg
                 class="sparkle-icon"
                 class:is-active={isSparkling}
+                class:is-detecting={isDetecting}
                 width="16"
                 height="16"
                 viewBox="0 0 24 24"
@@ -783,71 +1252,129 @@
                   d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
                 ></path>
               </svg>
-              自動検出
-            </button>
-            <div class="menu-divider"></div>
-            {#each languages as lang}
+            {/if}
+            {#if isAutoDetect && detectedLang && translations.length > 0}
+              {detectedLang}（{appLanguage === "ja"
+                ? "自動"
+                : appLanguage === "en"
+                  ? "auto"
+                  : appLanguage === "zh"
+                    ? "自动"
+                    : "自務"}）
+            {:else if isAutoDetect}
+              {t(appLanguage, "autoDetect")}
+            {:else}
+              {sourceLang}
+            {/if}
+            <svg
+              class="chevron-icon"
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M6 9l6 6 6-6"></path>
+            </svg>
+          </button>
+          {#if showSourceLangMenu}
+            <div
+              class="lang-menu"
+              in:fly={{ y: -5, duration: 200 }}
+              out:fade={{ duration: 150 }}
+            >
               <button
-                class="lang-option {!isAutoDetect && lang === sourceLang
-                  ? 'active'
-                  : ''}"
-                onclick={() => selectSourceLang(lang)}>{lang}</button
+                class="lang-option auto-detect {isAutoDetect ? 'active' : ''}"
+                onclick={() => selectSourceLang(null)}
               >
-            {/each}
-          </div>
-        {/if}
-      </div>
+                <svg
+                  class="sparkle-icon"
+                  class:is-active={isSparkling}
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                >
+                  <path
+                    class="star-1"
+                    d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
+                  ></path>
+                  <path
+                    class="star-2"
+                    d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
+                  ></path>
+                  <path
+                    class="star-3"
+                    d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
+                  ></path>
+                </svg>
+                自動検出
+              </button>
+              <div class="menu-divider"></div>
+              {#each languages as lang}
+                <button
+                  class="lang-option {!isAutoDetect && lang === sourceLang
+                    ? 'active'
+                    : ''}"
+                  onclick={() => selectSourceLang(lang)}>{lang}</button
+                >
+              {/each}
+            </div>
+          {/if}
+        </div>
 
-      <svg
-        class="arrow-icon"
-        width="14"
-        height="14"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-      >
-        <path d="M5 12h14M12 5l7 7-7 7"></path>
-      </svg>
-
-      <div class="lang-selector">
-        <button
-          class="lang-btn"
-          class:open={showTargetLangMenu}
-          disabled={isTranslating}
-          onclick={(e) => {
-            e.stopPropagation();
-            showTargetLangMenu = !showTargetLangMenu;
-            showSourceLangMenu = false;
-          }}
+        <svg
+          class="arrow-icon"
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
         >
-          {targetLang}
-          <svg
-            class="chevron-icon"
-            width="10"
-            height="10"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
+          <path d="M5 12h14M12 5l7 7-7 7"></path>
+        </svg>
+
+        <div class="lang-selector">
+          <button
+            class="lang-btn"
+            class:open={showTargetLangMenu}
+            disabled={isTranslating}
+            onclick={(e) => {
+              e.stopPropagation();
+              showTargetLangMenu = !showTargetLangMenu;
+              showSourceLangMenu = false;
+            }}
           >
-            <path d="M6 9l6 6 6-6"></path>
-          </svg>
-        </button>
-        {#if showTargetLangMenu}
-          <div
-            class="lang-menu"
-            in:fly={{ y: -5, duration: 200 }}
-            out:fade={{ duration: 150 }}
-          >
-            {#each languages as lang}
-              <button
-                class="lang-option {lang === targetLang ? 'active' : ''}"
-                onclick={() => selectTargetLang(lang)}>{lang}</button
-              >
-            {/each}
-          </div>
-        {/if}
+            {targetLang}
+            <svg
+              class="chevron-icon"
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M6 9l6 6 6-6"></path>
+            </svg>
+          </button>
+          {#if showTargetLangMenu}
+            <div
+              class="lang-menu"
+              in:fly={{ y: -5, duration: 200 }}
+              out:fade={{ duration: 150 }}
+            >
+              {#each languages as lang}
+                <button
+                  class="lang-option {lang === targetLang ? 'active' : ''}"
+                  onclick={() => selectTargetLang(lang)}>{lang}</button
+                >
+              {/each}
+            </div>
+          {/if}
+        </div>
       </div>
     </div>
 
@@ -856,6 +1383,7 @@
         class="icon-btn header-btn history-btn"
         class:animating={historyAnimating}
         title={t(appLanguage, "history")}
+        onclick={() => (showHistory = true)}
         onmouseenter={triggerHistoryAnim}
       >
         <svg
@@ -901,7 +1429,7 @@
   </header>
 
   <!-- Unified Scroll Container -->
-  <div class="scroll-wrapper">
+  <div class="scroll-wrapper" class:at-bottom={isAtBottom}>
     <section
       class="main-scroll glass"
       class:is-scrolling={isScrolling}
@@ -925,20 +1453,30 @@
 
       <!-- Sticky Controls Bar (morphs based on scroll state) -->
       <div class="controls-bar glass" class:scrolled={isScrolledDown}>
-        {#if isScrolledDown}
-          <!-- Scrolled state: show text preview + scroll-to-top -->
-          <p class="text-preview">
-            {inputQuery}
-          </p>
-        {:else}
-          <!-- Default state: show style chips -->
-          <div class="styles-row" class:fade-out={isTranslating}>
+        <!-- Scrolled state: show text preview -->
+        <p class="text-preview" class:visible={isScrolledDown}>
+          {inputQuery}
+        </p>
+        <!-- Default state: show style chips -->
+        <div
+          class="styles-row"
+          class:fade-out={isTranslating}
+          class:hidden={isScrolledDown}
+          bind:this={styleContainerRef}
+        >
+          <!-- Clipper Container for smooth "infinite" feel -->
+          <div
+            style="flex: 1; display: flex; align-items: center; gap: 8px; overflow: hidden; height: 100%; mask-image: linear-gradient(to right, black 90%, transparent 100%);"
+          >
             {#each visibleStyles as style (style.id)}
               <button
                 class="style-chip"
                 data-level={styleLevels[style.name] || 0}
                 onclick={() => cycleLevel(style.name)}
                 onpointerdown={(e) => handleDrag(style.name, e)}
+                animate:flip={{ duration: 300, easing: quintOut }}
+                in:receive={{ key: style.id }}
+                out:send={{ key: style.id }}
               >
                 <span
                   class="chip-fill"
@@ -947,78 +1485,74 @@
                 <span class="chip-text">{style.name}</span>
               </button>
             {/each}
+          </div>
 
-            <div class="style-dropdown-wrapper">
-              <button
-                class="style-chip add-chip"
-                onclick={() => (styleOverflowOpen = !styleOverflowOpen)}
-                class:active={styleOverflowOpen}
+          <div class="style-dropdown-wrapper">
+            <button
+              class="style-chip add-chip"
+              onclick={() => (styleOverflowOpen = !styleOverflowOpen)}
+              class:active={styleOverflowOpen}
+              class:has-active={hasActiveHiddenStyles}
+            >
+              ･･･
+            </button>
+            {#if styleOverflowOpen}
+              <div
+                class="style-dropdown glass"
+                transition:fade={{ duration: 100 }}
               >
-                ...
-              </button>
-              {#if styleOverflowOpen}
-                <div
-                  class="style-dropdown glass"
-                  transition:fade={{ duration: 100 }}
-                >
-                  {#if hiddenStyles.length > 0}
-                    <div class="dropdown-section-label">
-                      {t(appLanguage, "tabStyles")}
-                    </div>
-                    {#each hiddenStyles as style (style.id)}
-                      <button
-                        class="dropdown-item"
-                        data-level={styleLevels[style.name] || 0}
-                        onclick={() => cycleLevel(style.name)}
-                      >
-                        <span
-                          class="dropdown-item-fill"
-                          style="width: {(styleLevels[style.name] || 0) * 50}%"
-                        ></span>
-                        <div class="dropdown-item-content">
-                          <span>{style.name}</span>
-                          {#if (styleLevels[style.name] || 0) > 0}
-                            <span class="level-indicator">ON</span>
-                          {/if}
-                        </div>
-                      </button>
-                    {/each}
-                    <div class="dropdown-divider"></div>
-                  {/if}
-                  <button
-                    class="dropdown-item settings-link"
-                    onclick={() => {
-                      styleOverflowOpen = false;
-                      openStyles();
-                    }}
-                  >
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      class="icon-left"
+                {#if hiddenStyles.length > 0}
+                  <div class="dropdown-section-label">
+                    {t(appLanguage, "tabStyles")}
+                  </div>
+                  {#each hiddenStyles as style (style.id)}
+                    <button
+                      class="dropdown-item"
+                      data-level={styleLevels[style.name] || 0}
+                      onclick={() => cycleLevel(style.name)}
+                      onpointerdown={(e) => handleDrag(style.name, e)}
+                      animate:flip={{ duration: 300, easing: quintOut }}
+                      in:receive={{ key: style.id }}
+                      out:send={{ key: style.id }}
                     >
-                      <path d="M12 20h9"></path>
-                      <path
-                        d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"
-                      ></path>
-                    </svg>
-                    {t(appLanguage, "settingsTitle")}
-                  </button>
-                </div>
-              {/if}
-            </div>
+                      <span
+                        class="dropdown-item-fill"
+                        style="width: {(styleLevels[style.name] || 0) * 50}%"
+                      ></span>
+                      <div class="dropdown-item-content">
+                        <span>{style.name}</span>
+                      </div>
+                    </button>
+                  {/each}
+                  <div class="dropdown-divider"></div>
+                {/if}
+                <button
+                  class="dropdown-item settings-link"
+                  onclick={() => {
+                    styleOverflowOpen = false;
+                    openStyles();
+                  }}
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    class="icon-left"
+                  >
+                    <path d="M12 20h9"></path>
+                    <path
+                      d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"
+                    ></path>
+                  </svg>
+                  {t(appLanguage, "settingsTitle")}
+                </button>
+              </div>
+            {/if}
           </div>
-        {/if}
-
-        {#if isTranslating}
-          <div class="translating-label" transition:fade>
-            <span>{t(appLanguage, "translating")}</span>
-          </div>
-        {/if}
+        </div>
 
         <!-- Single action button that morphs -->
         <button
@@ -1047,12 +1581,7 @@
               <path d="m18 15-6-6-6 6" />
             </svg>
           {:else if isTranslating}
-            <!-- Bouncing dots animation -->
-            <div class="bouncing-dots">
-              <span></span>
-              <span></span>
-              <span></span>
-            </div>
+            <span class="loading-spinner"></span>
           {:else}
             <svg
               class="btn-icon"
@@ -1075,6 +1604,62 @@
           {/if}
         </button>
       </div>
+
+      {#if showTechInfo && (isTranslating || techMetrics.time > 0)}
+        <div class="tech-info-display" transition:fade>
+          <span class="tech-item">
+            <span class="tech-label">Wait:</span>
+            {#if isTranslating && !techMetrics.firstTokenReceived}
+              {techMetrics.time.toFixed(1)}s
+            {:else}
+              {techMetrics.waitTime.toFixed(2)}s
+            {/if}
+          </span>
+          <span class="tech-divider">→</span>
+          <span class="tech-item">
+            <span class="tech-label">Gen:</span>
+            {#if isTranslating}
+              {techMetrics.genTime.toFixed(1)}s
+            {:else}
+              {techMetrics.genTime.toFixed(2)}s
+            {/if}
+          </span>
+          <span class="tech-divider">=</span>
+          <span class="tech-item">
+            <span class="tech-label">Total:</span>
+            {techMetrics.time.toFixed(1)}s
+          </span>
+          <span class="tech-divider">|</span>
+          <span class="tech-item">
+            <span class="tech-label">Model:</span>
+            {techMetrics.model}
+          </span>
+          <span class="tech-divider">|</span>
+          <span class="tech-item tech-tokens">
+            <span class="token-row">
+              <span class="tech-label">In:</span>
+              {#if isTranslating && !techMetrics.isReal}
+                <span class="loading-dots-inline">...</span>
+              {:else}
+                {techMetrics.inputTokens}
+              {/if}
+            </span>
+            <span class="token-row">
+              <span class="tech-label">Out:</span>
+              {#if isTranslating && !techMetrics.isReal}
+                <span class="loading-dots-inline">...</span>
+              {:else}
+                {techMetrics.outputTokens}
+              {/if}
+              {#if techMetrics.tokensPerSec > 0}
+                <span style="opacity: 0.6; margin-left: 4px;"
+                  >({techMetrics.tokensPerSec}/s)</span
+                >
+              {/if}
+            </span>
+          </span>
+        </div>
+      {/if}
 
       <!-- Error Display -->
       {#if errorMessage}
@@ -1104,115 +1689,122 @@
       <div class="output-area">
         {#each translations as item (item.id)}
           <div class="candidate-card" out:fade={{ duration: 200 }}>
-            <p class="translated-text">{item.text}</p>
-            <div class="card-footer">
-              <p class="reason">
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  style="flex-shrink: 0; margin-top: 2px;"
-                >
-                  <circle cx="12" cy="12" r="10"></circle>
-                  <line x1="12" y1="16" x2="12" y2="12"></line>
-                  <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                </svg>
-                <span>{item.reason}</span>
-              </p>
-              <div class="candidate-actions">
-                <button
-                  class="icon-btn copy-btn"
-                  class:copied={copiedId === item.id}
-                  class:animating={copyAnimating[item.id]}
-                  title={t(appLanguage, "copy")}
-                  onclick={() => handleCopy(item.id, item.text)}
-                  onmouseenter={() => triggerCopyAnim(item.id)}
-                >
-                  {#if copiedId === item.id}
+            <div
+              class="card-inner-content"
+              class:content-fade={isTranslating && !item.text}
+            >
+              <p class="translated-text">{item.text}</p>
+              <div class="card-footer">
+                {#if item.reason}
+                  <p class="reason">
                     <svg
-                      class="check-icon"
                       width="14"
                       height="14"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
-                      stroke-width="2.5"
+                      stroke-width="2"
                       stroke-linecap="round"
                       stroke-linejoin="round"
+                      style="flex-shrink: 0; margin-top: 2px;"
                     >
-                      <polyline points="20 6 9 17 4 12"></polyline>
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <line x1="12" y1="16" x2="12" y2="12"></line>
+                      <line x1="12" y1="8" x2="12.01" y2="8"></line>
                     </svg>
-                  {:else}
-                    <svg
-                      class="copy-icon"
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                    >
-                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"
-                      ></rect>
-                      <path
-                        d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                      ></path>
-                    </svg>
-                  {/if}
-                </button>
-                <button
-                  class="icon-btn speak-btn"
-                  class:active={isSpeakingId === item.id}
-                  class:animating={speakAnimating[item.id]}
-                  title={isSpeakingId === item.id
-                    ? t(appLanguage, "stop")
-                    : t(appLanguage, "speak")}
-                  onclick={() => handleSpeak(item.id, item.text, targetLang)}
-                  onmouseenter={() => triggerSpeakAnim(item.id)}
-                >
-                  {#if isSpeakingId === item.id}
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="currentColor"
-                      stroke="none"
-                    >
-                      <rect x="6" y="6" width="12" height="12" rx="1" />
-                    </svg>
-                  {:else}
-                    <svg
-                      class="speak-icon"
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      style="overflow: visible;"
-                    >
-                      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
-                      ></polygon>
-                      <path
-                        class="sound-wave wave-1"
-                        d="M15.54 8.46a5 5 0 0 1 0 7.07"
-                      ></path>
-                      <path
-                        class="sound-wave wave-2"
-                        d="M19.07 4.93a10 10 0 0 1 0 14.14"
-                      ></path>
-                      <path
-                        class="sound-wave wave-3"
-                        d="M22.07 1.93a14 14 0 0 1 0 20.14"
-                      ></path>
-                    </svg>
-                  {/if}
-                </button>
+                    <span>{item.reason}</span>
+                  </p>
+                {/if}
+                <div class="candidate-actions" class:hide={!item.text}>
+                  <button
+                    class="icon-btn copy-btn"
+                    class:copied={copiedId === item.id}
+                    class:animating={copyAnimating[item.id]}
+                    title={t(appLanguage, "copy")}
+                    onclick={() => handleCopy(item.id, item.text)}
+                    onmouseenter={() => triggerCopyAnim(item.id)}
+                  >
+                    {#if copiedId === item.id}
+                      <svg
+                        class="check-icon"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.5"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                      </svg>
+                    {:else}
+                      <svg
+                        class="copy-icon"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                      >
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"
+                        ></rect>
+                        <path
+                          d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                        ></path>
+                      </svg>
+                    {/if}
+                  </button>
+                  <button
+                    class="icon-btn speak-btn"
+                    class:active={isSpeakingId === item.id}
+                    class:animating={speakAnimating[item.id]}
+                    title={isSpeakingId === item.id
+                      ? t(appLanguage, "stop")
+                      : t(appLanguage, "speak")}
+                    onclick={() => handleSpeak(item.id, item.text, targetLang)}
+                    onmouseenter={() => triggerSpeakAnim(item.id)}
+                  >
+                    {#if isSpeakingId === item.id}
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                        stroke="none"
+                      >
+                        <rect x="6" y="6" width="12" height="12" rx="1" />
+                      </svg>
+                    {:else}
+                      <svg
+                        class="speak-icon"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        style="overflow: visible;"
+                      >
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
+                        ></polygon>
+                        <path
+                          class="sound-wave wave-1"
+                          d="M15.54 8.46a5 5 0 0 1 0 7.07"
+                        ></path>
+                        <path
+                          class="sound-wave wave-2"
+                          d="M19.07 4.93a10 10 0 0 1 0 14.14"
+                        ></path>
+                        <path
+                          class="sound-wave wave-3"
+                          d="M22.07 1.93a14 14 0 0 1 0 20.14"
+                        ></path>
+                      </svg>
+                    {/if}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1252,6 +1844,55 @@
             </ul>
           </div>
         {/if}
+
+        <!-- Bottom Favorite Button (Small) -->
+        {#if translations.some((t) => t.text) && !isTranslating}
+          <div
+            style="display: flex; justify-content: center; align-items: center; gap: 6px; margin-top: 16px; padding-bottom: 16px;"
+          >
+            <button
+              class="save-favorite-btn"
+              class:active={isFavorited(inputQuery)}
+              class:animating={starAnimatingId === "current"}
+              onclick={() => {
+                const itemToSave = {
+                  id: crypto.randomUUID(),
+                  timestamp: Date.now(),
+                  sourceText: inputQuery,
+                  sourceLang: detectedLang || sourceLang,
+                  targetLang: targetLang,
+                  translations: translations.map((t) => ({
+                    text: t.text,
+                    reason: t.reason,
+                  })),
+                  detailedExplanation: detailedExplanation
+                    ? $state.snapshot(detailedExplanation)
+                    : undefined,
+                  styleLevels: $state.snapshot(styleLevels),
+                };
+                toggleFavorite(itemToSave);
+                if (starAnimatingId === "") triggerStarAnim("current");
+              }}
+              aria-label="Favorite current translation"
+            >
+              <svg
+                class="save-star-icon"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill={isFavorited(inputQuery) ? "currentColor" : "none"}
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <polygon
+                  points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"
+                ></polygon>
+              </svg>
+              <span class="save-label">{t(appLanguage, "saveToFavorites")}</span
+              >
+            </button>
+          </div>
+        {/if}
       </div>
     </section>
     <!-- Custom scrollbar indicator with fade animation -->
@@ -1276,7 +1917,8 @@
   >
     <div
       class="settings-panel glass"
-      transition:fly={{ x: 300, duration: 300 }}
+      class:style-editor-mode={!!editingStyle}
+      transition:fly={{ y: 20, duration: 300 }}
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => e.stopPropagation()}
       role="dialog"
@@ -1284,11 +1926,550 @@
       aria-labelledby="settings-title"
       tabindex="-1"
     >
+      {#if editingStyle}
+        <!-- Dedicated Style Editor View -->
+        <div class="settings-header">
+          <button
+            class="back-btn"
+            onclick={cancelEditStyle}
+            aria-label={t(appLanguage, "back")}
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <line x1="19" y1="12" x2="5" y2="12"></line>
+              <polyline points="12 19 5 12 12 5"></polyline>
+            </svg>
+          </button>
+          <h2 id="settings-title">
+            {editingStyle.id !== "" &&
+            customStyles.some((s) => s.id === editingStyle?.id)
+              ? t(appLanguage, "editStyle") || "文体を編集"
+              : t(appLanguage, "addStyle")}
+          </h2>
+          <div style="width: 20px;"></div>
+        </div>
+
+        <div class="settings-content style-editor-content">
+          <div class="settings-section">
+            <label class="settings-label" for="edit-style-name">
+              {t(appLanguage, "styleName")}
+            </label>
+            <input
+              id="edit-style-name"
+              type="text"
+              class="settings-input"
+              bind:value={editingStyle.name}
+              placeholder={t(appLanguage, "styleName")}
+              oninput={() => {
+                if (editingStyle) editingStyle.isDefault = false;
+              }}
+            />
+          </div>
+
+          <div class="settings-section full-height">
+            <label class="settings-label" for="edit-style-prompt">
+              {t(appLanguage, "stylePrompt")}
+            </label>
+            <textarea
+              id="edit-style-prompt"
+              class="settings-textarea"
+              bind:value={editingStyle.prompt}
+              placeholder={t(appLanguage, "stylePrompt")}
+              oninput={() => {
+                if (editingStyle) editingStyle.isDefault = false;
+              }}
+            ></textarea>
+            <p class="input-hint">
+              {t(appLanguage, "stylePromptHint")}
+            </p>
+          </div>
+        </div>
+
+        <div class="settings-footer" style="justify-content: flex-end;">
+          <button
+            class="save-btn primary"
+            style="width: auto; min-width: 120px;"
+            onclick={saveStyle}
+          >
+            {t(appLanguage, "save") || "保存"}
+          </button>
+        </div>
+      {:else}
+        <div class="settings-header">
+          <h2 id="settings-title">{t(appLanguage, "settingsTitle")}</h2>
+          <button
+            class="close-btn"
+            onclick={closeSettings}
+            aria-label={t(appLanguage, "close")}
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+
+        <div class="settings-body-container">
+          <!-- Sidebar Tabs -->
+          <div class="settings-sidebar">
+            <button
+              class="settings-tab vertical"
+              class:active={settingsTab === "general"}
+              onclick={() => changeTab("general")}
+            >
+              {t(appLanguage, "tabGeneral")}
+            </button>
+            <button
+              class="settings-tab vertical"
+              class:active={settingsTab === "api"}
+              onclick={() => changeTab("api")}
+            >
+              {t(appLanguage, "tabAi")}
+            </button>
+            <button
+              class="settings-tab vertical"
+              class:active={settingsTab === "styles"}
+              onclick={() => changeTab("styles")}
+            >
+              {t(appLanguage, "tabStyles")}
+            </button>
+          </div>
+
+          <!-- Content with Transitions -->
+          <div class="settings-main-content">
+            {#key settingsTab}
+              <div
+                class="tab-content-wrapper"
+                in:fly={{
+                  y: slideDirection * 20,
+                  duration: 250,
+                  delay: 250,
+                  opacity: 0,
+                }}
+                out:fly={{ y: -slideDirection * 20, duration: 250, opacity: 0 }}
+              >
+                {#if settingsTab === "general"}
+                  <!-- Allow Rewrite -->
+                  <div class="settings-section">
+                    <div class="settings-label">
+                      {t(appLanguage, "allowRewrite")}
+                    </div>
+                    <div class="settings-card-row">
+                      <span
+                        id="allow-rewrite-label"
+                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                      >
+                        {t(appLanguage, "allowRewriteDescription")}
+                      </span>
+                      <button
+                        onclick={() => (allowRewrite = !allowRewrite)}
+                        style="
+                        width: 44px; 
+                        height: 24px; 
+                        background: {allowRewrite
+                          ? '#3b82f6'
+                          : 'rgba(255,255,255,0.1)'}; 
+                        border-radius: 99px; 
+                        position: relative; 
+                        border: none; 
+                        cursor: pointer;
+                        transition: background 0.2s;"
+                        aria-labelledby="allow-rewrite-label"
+                      >
+                        <div
+                          style="
+                          width: 18px; 
+                          height: 18px; 
+                          background: white; 
+                          border-radius: 50%; 
+                          position: absolute; 
+                          top: 3px; 
+                          left: {allowRewrite ? '23px' : '3px'}; 
+                          transition: left 0.2s;"
+                        ></div>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Technical Info -->
+                  <div class="settings-section">
+                    <div class="settings-label">
+                      {t(appLanguage, "showTechInfo") || "技術情報を表示"}
+                    </div>
+                    <div class="settings-card-row">
+                      <span
+                        id="tech-info-label"
+                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                      >
+                        {t(appLanguage, "showTechInfoDesc") ||
+                          "翻訳時に処理時間やトークン数を表示します"}
+                      </span>
+                      <button
+                        onclick={() => (showTechInfo = !showTechInfo)}
+                        style="
+                        width: 44px; 
+                        height: 24px; 
+                        background: {showTechInfo
+                          ? '#3b82f6'
+                          : 'rgba(255,255,255,0.1)'}; 
+                        border-radius: 99px; 
+                        position: relative; 
+                        border: none; 
+                        cursor: pointer;
+                        transition: background 0.2s;"
+                        aria-labelledby="tech-info-label"
+                      >
+                        <div
+                          style="
+                          width: 18px; 
+                          height: 18px; 
+                          background: white; 
+                          border-radius: 50%; 
+                          position: absolute; 
+                          top: 3px; 
+                          left: {showTechInfo ? '23px' : '3px'}; 
+                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
+                        ></div>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- App Language -->
+                  <div class="settings-section">
+                    <label class="settings-label" for="app-lang-select"
+                      >{t(appLanguage, "appLanguage")}</label
+                    >
+                    <select
+                      id="app-lang-select"
+                      class="settings-select"
+                      bind:value={appLanguage}
+                    >
+                      <option value="ja">日本語</option>
+                      <option value="en">English</option>
+                      <option value="zh">中文</option>
+                      <option value="ko">한국어</option>
+                    </select>
+                  </div>
+
+                  <!-- Theme -->
+                  <div class="settings-section">
+                    <div class="settings-label">{t(appLanguage, "theme")}</div>
+                    <div class="theme-toggle">
+                      <button
+                        class="theme-btn"
+                        class:active={theme === "dark"}
+                        onclick={() => (theme = "dark")}
+                      >
+                        {t(appLanguage, "themeDark")}
+                      </button>
+                      <button
+                        class="theme-btn"
+                        class:active={theme === "light"}
+                        onclick={() => (theme = "light")}
+                      >
+                        {t(appLanguage, "themeLight")}
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Default Target Language -->
+                  <div class="settings-section">
+                    <label class="settings-label" for="target-lang-select"
+                      >{t(appLanguage, "defaultTargetLang")}</label
+                    >
+                    <select
+                      id="target-lang-select"
+                      class="settings-select"
+                      bind:value={defaultTargetLang}
+                    >
+                      <option value="日本語"
+                        >{getTargetLanguageName(appLanguage, "日本語")}</option
+                      >
+                      <option value="英語"
+                        >{getTargetLanguageName(appLanguage, "英語")}</option
+                      >
+                      <option value="中国語"
+                        >{getTargetLanguageName(appLanguage, "中国語")}</option
+                      >
+                      <option value="韓国語"
+                        >{getTargetLanguageName(appLanguage, "韓国語")}</option
+                      >
+                      <option value="フランス語"
+                        >{getTargetLanguageName(
+                          appLanguage,
+                          "フランス語",
+                        )}</option
+                      >
+                      <option value="ドイツ語"
+                        >{getTargetLanguageName(
+                          appLanguage,
+                          "ドイツ語",
+                        )}</option
+                      >
+                      <option value="スペイン語"
+                        >{getTargetLanguageName(
+                          appLanguage,
+                          "スペイン語",
+                        )}</option
+                      >
+                    </select>
+                  </div>
+                {:else if settingsTab === "api"}
+                  <!-- AI Settings Tab -->
+                  <p
+                    class="settings-description"
+                    style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;"
+                  >
+                    {t(appLanguage, "aiTabDescription") ||
+                      "選択したAIプロバイダーのモデルが有効になります。"}
+                  </p>
+
+                  <!-- Provider Switcher -->
+                  <div class="provider-switcher">
+                    <button
+                      class="provider-btn"
+                      class:active={selectedProvider === "openai"}
+                      onclick={() => selectProvider("openai")}
+                    >
+                      OpenAI
+                    </button>
+                    <button
+                      class="provider-btn"
+                      class:active={selectedProvider === "gemini"}
+                      onclick={() => selectProvider("gemini")}
+                    >
+                      Gemini
+                    </button>
+                    <button
+                      class="provider-btn"
+                      class:active={selectedProvider === "anthropic"}
+                      onclick={() => selectProvider("anthropic")}
+                    >
+                      Anthropic
+                    </button>
+                  </div>
+
+                  <!-- API Key for Selected Provider -->
+                  <div class="settings-section">
+                    <label class="settings-label" for="api-key-input">
+                      {selectedProvider === "openai"
+                        ? t(appLanguage, "openaiApiKey")
+                        : selectedProvider === "gemini"
+                          ? t(appLanguage, "geminiApiKey")
+                          : t(appLanguage, "anthropicApiKey")}
+                    </label>
+                    <input
+                      id="api-key-input"
+                      type="password"
+                      class="settings-input"
+                      bind:value={apiKeys[selectedProvider]}
+                      placeholder={selectedProvider === "gemini"
+                        ? "AIza..."
+                        : selectedProvider === "anthropic"
+                          ? "sk-ant-..."
+                          : "sk-..."}
+                    />
+                  </div>
+
+                  <!-- Model Selection (Filtered) -->
+                  <div class="settings-section">
+                    <label class="settings-label" for="model-select"
+                      >{t(appLanguage, "aiModel")}</label
+                    >
+                    <select
+                      id="model-select"
+                      class="settings-select"
+                      bind:value={selectedModel}
+                    >
+                      {#each filteredModels as model}
+                        <option value={model.value}>{model.label}</option>
+                      {/each}
+                    </select>
+                  </div>
+                {:else if settingsTab === "styles"}
+                  <!-- Styles Tab -->
+                  <div class="styles-actions-top">
+                    <button
+                      class="rich-btn primary"
+                      onclick={() => openStyleEditor()}
+                    >
+                      <svg
+                        width="18"
+                        height="18"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        class="btn-icon-left"
+                        stroke="currentColor"
+                        stroke-width="2"
+                      >
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                      </svg>
+                      {t(appLanguage, "addStyle")}
+                    </button>
+                    <button
+                      class="rich-btn danger"
+                      onclick={triggerResetStyles}
+                    >
+                      <svg
+                        width="18"
+                        height="18"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        class="btn-icon-left"
+                        stroke="currentColor"
+                        stroke-width="2"
+                      >
+                        <path
+                          d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+                        ></path>
+                        <path d="M3 3v5h5"></path>
+                      </svg>
+                      {t(appLanguage, "resetStyles")}
+                    </button>
+                  </div>
+
+                  <div class="styles-list-container">
+                    {#each customStyles as style, i (style.id)}
+                      <div class="style-item-card">
+                        <div class="style-header-row">
+                          <span class="style-name-display">{style.name}</span>
+                          <div class="style-header-actions">
+                            <div
+                              class="move-actions"
+                              style="display: flex; gap: 2px; margin-right: 8px; border-right: 1px solid rgba(255,255,255,0.1); padding-right: 8px;"
+                            >
+                              <button
+                                class="icon-btn-small"
+                                onclick={() => moveStyle(i, "up")}
+                                disabled={i === 0}
+                                title="Move Up"
+                              >
+                                <svg
+                                  width="16"
+                                  height="16"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                >
+                                  <polyline points="18 15 12 9 6 15"></polyline>
+                                </svg>
+                              </button>
+                              <button
+                                class="icon-btn-small"
+                                onclick={() => moveStyle(i, "down")}
+                                disabled={i === customStyles.length - 1}
+                                title="Move Down"
+                              >
+                                <svg
+                                  width="16"
+                                  height="16"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                >
+                                  <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                              </button>
+                            </div>
+                            <button
+                              class="icon-btn-small edit-btn"
+                              onclick={() => openStyleEditor(style)}
+                              title="Edit"
+                            >
+                              <svg
+                                width="16"
+                                height="16"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                              >
+                                <path d="M12 20h9"></path>
+                                <path
+                                  d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"
+                                ></path>
+                              </svg>
+                            </button>
+                            <button
+                              class="icon-btn-small delete-btn"
+                              onclick={() => deleteStyle(i)}
+                              aria-label={t(appLanguage, "delete")}
+                            >
+                              <svg
+                                width="16"
+                                height="16"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                              >
+                                <polyline points="3 6 5 6 21 6"></polyline>
+                                <path
+                                  d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                                ></path>
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                        <p class="style-prompt-text">{style.prompt}</p>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/key}
+          </div>
+        </div>
+
+        <div class="settings-footer">
+          <button class="save-btn" onclick={closeSettings}
+            >{t(appLanguage, "close")}</button
+          >
+        </div>
+      {/if}
+    </div>
+  </div>
+{/if}
+
+{#if showHistory}
+  <div
+    class="settings-overlay"
+    transition:fade={{ duration: 200 }}
+    onclick={() => (showHistory = false)}
+    role="button"
+    tabindex="-1"
+    onkeydown={() => {}}
+  >
+    <div
+      class="settings-panel glass"
+      transition:fly={{ y: 20, duration: 300 }}
+      onclick={(e) => e.stopPropagation()}
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+    >
       <div class="settings-header">
-        <h2 id="settings-title">{t(appLanguage, "settingsTitle")}</h2>
+        <h2>{t(appLanguage, "history")}</h2>
         <button
           class="close-btn"
-          onclick={closeSettings}
+          onclick={() => (showHistory = false)}
           aria-label={t(appLanguage, "close")}
         >
           <svg
@@ -1305,293 +2486,207 @@
         </button>
       </div>
 
-      <!-- Tabs -->
-      <div class="settings-tabs">
-        <button
-          class="settings-tab"
-          class:active={settingsTab === "general"}
-          onclick={() => (settingsTab = "general")}
-        >
-          {t(appLanguage, "tabGeneral")}
-        </button>
-        <button
-          class="settings-tab"
-          class:active={settingsTab === "api"}
-          onclick={() => (settingsTab = "api")}
-        >
-          {t(appLanguage, "tabApiKeys")}
-        </button>
-        <button
-          class="settings-tab"
-          class:active={settingsTab === "styles"}
-          onclick={() => (settingsTab = "styles")}
-        >
-          {t(appLanguage, "tabStyles")}
-        </button>
-      </div>
+      <div class="settings-body-container">
+        <!-- Sidebar Tabs -->
+        <div class="settings-sidebar">
+          <button
+            class="settings-tab vertical"
+            class:active={historyTab === "recent"}
+            onclick={() => changeHistoryTab("recent")}
+          >
+            {t(appLanguage, "tabRecent")}
+          </button>
+          <button
+            class="settings-tab vertical"
+            class:active={historyTab === "saved"}
+            onclick={() => changeHistoryTab("saved")}
+          >
+            {t(appLanguage, "tabFavorites")}
+          </button>
+        </div>
 
-      <div class="settings-content">
-        {#if settingsTab === "general"}
-          <!-- Model Selection -->
-          <div class="settings-section">
-            <label class="settings-label" for="model-select"
-              >{t(appLanguage, "aiModel")}</label
+        <!-- Main Content -->
+        <div class="settings-main-content">
+          {#key historyTab}
+            <div
+              class="tab-content-wrapper"
+              in:fly={{
+                y: historySlideDirection * 20,
+                duration: 300,
+                delay: 200,
+              }}
+              out:fly={{ y: -historySlideDirection * 20, duration: 200 }}
+              style="padding: 24px;"
             >
-            <select
-              id="model-select"
-              class="settings-select"
-              bind:value={selectedModel}
-            >
-              {#each availableModels as model}
-                <option value={model.value}>{model.label}</option>
-              {/each}
-            </select>
-          </div>
-
-          <!-- Default Target Language -->
-          <div class="settings-section">
-            <label class="settings-label" for="target-lang-select"
-              >{t(appLanguage, "defaultTargetLang")}</label
-            >
-            <select
-              id="target-lang-select"
-              class="settings-select"
-              bind:value={defaultTargetLang}
-            >
-              <option value="日本語"
-                >{getTargetLanguageName(appLanguage, "日本語")}</option
-              >
-              <option value="英語"
-                >{getTargetLanguageName(appLanguage, "英語")}</option
-              >
-              <option value="中国語"
-                >{getTargetLanguageName(appLanguage, "中国語")}</option
-              >
-              <option value="韓国語"
-                >{getTargetLanguageName(appLanguage, "韓国語")}</option
-              >
-              <option value="フランス語"
-                >{getTargetLanguageName(appLanguage, "フランス語")}</option
-              >
-              <option value="ドイツ語"
-                >{getTargetLanguageName(appLanguage, "ドイツ語")}</option
-              >
-              <option value="スペイン語"
-                >{getTargetLanguageName(appLanguage, "スペイン語")}</option
-              >
-            </select>
-          </div>
-
-          <!-- Theme -->
-          <div class="settings-section">
-            <label class="settings-label">{t(appLanguage, "theme")}</label>
-            <div class="theme-toggle">
-              <button
-                class="theme-btn"
-                class:active={theme === "dark"}
-                onclick={() => (theme = "dark")}
-              >
-                {t(appLanguage, "themeDark")}
-              </button>
-              <button
-                class="theme-btn"
-                class:active={theme === "light"}
-                onclick={() => (theme = "light")}
-              >
-                {t(appLanguage, "themeLight")}
-              </button>
-            </div>
-          </div>
-
-          <!-- App Language -->
-          <div class="settings-section">
-            <label class="settings-label" for="app-lang-select"
-              >{t(appLanguage, "appLanguage")}</label
-            >
-            <select
-              id="app-lang-select"
-              class="settings-select"
-              bind:value={appLanguage}
-            >
-              <option value="ja">日本語</option>
-              <option value="en">English</option>
-              <option value="zh">中文</option>
-              <option value="ko">한국어</option>
-            </select>
-          </div>
-        {:else if settingsTab === "api"}
-          <!-- API Keys Tab -->
-          <div class="settings-section">
-            <label class="settings-label" for="openai-key"
-              >{t(appLanguage, "openaiApiKey")}</label
-            >
-            <input
-              id="openai-key"
-              type="password"
-              class="settings-input"
-              bind:value={apiKeys.openai}
-              placeholder="sk-..."
-            />
-          </div>
-
-          <div class="settings-section">
-            <label class="settings-label" for="gemini-key"
-              >{t(appLanguage, "geminiApiKey")}</label
-            >
-            <input
-              id="gemini-key"
-              type="password"
-              class="settings-input"
-              bind:value={apiKeys.gemini}
-              placeholder="AIza..."
-            />
-          </div>
-
-          <div class="settings-section">
-            <label class="settings-label" for="anthropic-key"
-              >{t(appLanguage, "anthropicApiKey")}</label
-            >
-            <input
-              id="anthropic-key"
-              type="password"
-              class="settings-input"
-              bind:value={apiKeys.anthropic}
-              placeholder="sk-ant-..."
-            />
-          </div>
-        {:else if settingsTab === "styles"}
-          <!-- Styles Tab -->
-          <div class="styles-actions-top">
-            <button class="rich-btn primary" onclick={addStyle}>
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                class="btn-icon-left"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <line x1="12" y1="5" x2="12" y2="19"></line>
-                <line x1="5" y1="12" x2="19" y2="12"></line>
-              </svg>
-              {t(appLanguage, "addStyle")}
-            </button>
-            <button class="rich-btn danger" onclick={triggerResetStyles}>
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                class="btn-icon-left"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
-                ></path>
-                <path d="M3 3v5h5"></path>
-              </svg>
-              {t(appLanguage, "resetStyles")}
-            </button>
-          </div>
-
-          <div class="styles-list-container">
-            {#each customStyles as style, i (style.id)}
-              <div
-                class="style-item-card"
-                class:editing={editingStyleId === style.id}
-              >
-                <div class="style-header-row">
-                  {#if editingStyleId === style.id}
-                    <input
-                      type="text"
-                      class="style-name-input"
-                      bind:value={style.name}
-                      oninput={() => (style.isDefault = false)}
-                      placeholder={t(appLanguage, "styleName")}
-                      autofocus
-                    />
-                    <button
-                      class="icon-btn-small done-btn"
-                      onclick={() => (editingStyleId = null)}
-                      title="Done"
-                    >
-                      <svg
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                      >
-                        <polyline points="20 6 9 17 4 12"></polyline>
-                      </svg>
-                    </button>
-                  {:else}
-                    <span class="style-name-display">{style.name}</span>
-                    <div class="style-header-actions">
-                      <button
-                        class="icon-btn-small edit-btn"
-                        onclick={() => (editingStyleId = style.id)}
-                        title="Edit"
-                      >
-                        <svg
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                        >
-                          <path d="M12 20h9"></path>
-                          <path
-                            d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"
-                          ></path>
-                        </svg>
-                      </button>
-                      <button
-                        class="icon-btn-small delete-btn"
-                        onclick={() => deleteStyle(i)}
-                        aria-label={t(appLanguage, "delete")}
-                      >
-                        <svg
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                        >
-                          <polyline points="3 6 5 6 21 6"></polyline>
-                          <path
-                            d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
-                          ></path>
-                        </svg>
-                      </button>
-                    </div>
-                  {/if}
-                </div>
-
-                {#if editingStyleId === style.id}
-                  <textarea
-                    class="style-prompt-input"
-                    bind:value={style.prompt}
-                    oninput={() => (style.isDefault = false)}
-                    placeholder={t(appLanguage, "stylePrompt")}
-                  ></textarea>
+              {#if historyTab === "recent"}
+                {#if history.length === 0}
+                  <div class="empty-state">
+                    <p>{t(appLanguage, "noHistory")}</p>
+                  </div>
                 {:else}
-                  <div class="style-prompt-display">
-                    {style.prompt}
+                  <div class="history-actions-top">
+                    <button class="rich-btn danger" onclick={clearHistory}>
+                      {t(appLanguage, "clearHistory")}
+                    </button>
+                  </div>
+                  <div class="history-list">
+                    {#each history as item (item.id)}
+                      <div
+                        class="style-item-card history-item"
+                        in:fly={{ x: 20, duration: 250, delay: 50 }}
+                        out:fly={{ x: -20, duration: 200 }}
+                      >
+                        <button
+                          class="history-item-main"
+                          onclick={() => loadHistory(item)}
+                        >
+                          <div class="history-meta">
+                            <span
+                              >{new Date(item.timestamp).toLocaleString()}</span
+                            >
+                            <span>{item.sourceLang} → {item.targetLang}</span>
+                          </div>
+                          <div class="history-source">{item.sourceText}</div>
+                          <div class="history-preview">
+                            {item.translations[0]?.text}
+                          </div>
+                        </button>
+                        <div class="history-item-actions">
+                          <button
+                            class="star-btn small"
+                            class:active={isFavoritedById(item.id)}
+                            class:animating={starAnimatingId === item.id}
+                            onclick={() => toggleFavorite(item)}
+                            aria-label="Toggle favorite"
+                          >
+                            <svg
+                              width="16"
+                              height="16"
+                              viewBox="0 0 24 24"
+                              fill={isFavoritedById(item.id)
+                                ? "currentColor"
+                                : "none"}
+                              stroke="currentColor"
+                              stroke-width="2"
+                            >
+                              <polygon
+                                points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"
+                              ></polygon>
+                            </svg>
+                          </button>
+                          <button
+                            class="icon-btn-small delete-btn"
+                            onclick={() => deleteHistoryItem(item.id)}
+                            aria-label="Delete"
+                          >
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="2"
+                              ><polyline points="3 6 5 6 21 6"></polyline><path
+                                d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                              ></path></svg
+                            >
+                          </button>
+                        </div>
+                      </div>
+                    {/each}
                   </div>
                 {/if}
-              </div>
-            {/each}
-          </div>
-        {/if}
-      </div>
-
-      <div class="settings-footer">
-        <button class="save-btn" onclick={closeSettings}>閉じる</button>
+              {:else if historyTab === "saved"}
+                {#if favorites.length === 0}
+                  <div class="empty-state">
+                    <p>{t(appLanguage, "noFavorites")}</p>
+                  </div>
+                {:else}
+                  <div class="history-list">
+                    {#each favorites as item, i (item.id)}
+                      <div
+                        class="style-item-card history-item"
+                        in:fly={{ x: 20, duration: 250, delay: 50 }}
+                        out:fly={{ x: -20, duration: 200 }}
+                      >
+                        <button
+                          class="history-item-main"
+                          onclick={() => loadHistory(item)}
+                        >
+                          <div class="history-meta">
+                            <span
+                              >{new Date(item.timestamp).toLocaleString()}</span
+                            >
+                            <span>{item.sourceLang} → {item.targetLang}</span>
+                          </div>
+                          <div class="history-source">{item.sourceText}</div>
+                          <div class="history-preview">
+                            {item.translations[0]?.text}
+                          </div>
+                        </button>
+                        <div class="history-item-actions vertical">
+                          <div class="move-actions">
+                            <button
+                              class="icon-btn-small"
+                              onclick={() => moveFavorite(i, "up")}
+                              disabled={i === 0}
+                              aria-label="Move up"
+                            >
+                              <svg
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                ><polyline points="18 15 12 9 6 15"
+                                ></polyline></svg
+                              >
+                            </button>
+                            <button
+                              class="icon-btn-small"
+                              onclick={() => moveFavorite(i, "down")}
+                              disabled={i === favorites.length - 1}
+                              aria-label="Move down"
+                            >
+                              <svg
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                ><polyline points="6 9 12 15 18 9"
+                                ></polyline></svg
+                              >
+                            </button>
+                          </div>
+                          <button
+                            class="icon-btn-small delete-btn"
+                            onclick={() => deleteFavorite(item.id)}
+                            aria-label="Delete favorite"
+                          >
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="2"
+                              ><polyline points="3 6 5 6 21 6"></polyline><path
+                                d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                              ></path></svg
+                            >
+                          </button>
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              {/if}
+            </div>
+          {/key}
+        </div>
       </div>
     </div>
   </div>
@@ -1603,8 +2698,8 @@
     transition:fade={{ duration: 200 }}
     onclick={() => (showResetConfirmation = false)}
     role="button"
-    tabindex="0"
-    onkeydown={(e) => e.key === "Escape" && (showResetConfirmation = false)}
+    tabindex="-1"
+    onkeydown={() => {}}
   >
     <div
       class="modal-card glass"
@@ -1628,6 +2723,38 @@
   </div>
 {/if}
 
+{#if showDiscardConfirmation}
+  <div
+    class="modal-overlay"
+    transition:fade={{ duration: 200 }}
+    onclick={() => (showDiscardConfirmation = false)}
+    role="button"
+    tabindex="-1"
+    onkeydown={() => {}}
+  >
+    <div
+      class="modal-card glass"
+      onclick={(e) => e.stopPropagation()}
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+    >
+      <h3>{t(appLanguage, "confirmDiscard")}</h3>
+      <div class="modal-actions">
+        <button
+          class="rich-btn secondary"
+          onclick={() => (showDiscardConfirmation = false)}
+        >
+          {t(appLanguage, "cancel")}
+        </button>
+        <button class="rich-btn danger" onclick={confirmDiscardStyle}>
+          {t(appLanguage, "discard")}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .container {
     display: flex;
@@ -1642,18 +2769,20 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0 16px;
+    padding: 0 20px;
     height: 56px;
     flex-shrink: 0;
     margin-top: 4px;
     margin-bottom: 4px;
+    position: relative;
+    z-index: 200; /* Ensure dropdowns stay above main content */
   }
 
   .header-left {
     display: flex;
     align-items: center;
     gap: 8px;
-    width: 140px; /* Fixed width for alignment */
+    width: fit-content;
     transform: translateY(-2px); /* Shift up slightly */
   }
 
@@ -1670,7 +2799,7 @@
     align-items: center;
     gap: 4px;
     justify-content: flex-end;
-    width: 140px; /* Fixed width for alignment */
+    width: fit-content;
   }
 
   .header-btn {
@@ -1712,18 +2841,28 @@
       transform: rotate(0deg);
     }
     100% {
-      transform: rotate(180deg);
+      transform: rotate(360deg);
     }
   }
 
-  /* Language Header (Centered) */
-  .lang-header {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    flex: 1;
-    color: var(--text-muted);
+  .loading-dots-inline {
+    display: inline-block;
+    animation: inlineTwinkle 1.5s infinite;
+    letter-spacing: 2px;
+    font-weight: bold;
+    color: var(--primary-color);
+    width: 24px;
+    text-align: left;
+  }
+
+  @keyframes inlineTwinkle {
+    0%,
+    100% {
+      opacity: 0.3;
+    }
+    50% {
+      opacity: 1;
+    }
   }
 
   .lang-selector {
@@ -1770,7 +2909,7 @@
     border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 4px;
-    z-index: 100;
+    z-index: 1000; /* Extra high to be sure */
     min-width: 100px;
   }
 
@@ -1870,11 +3009,32 @@
     flex: 1;
     display: flex;
     position: relative;
-    margin: 0 16px 16px 16px; /* Left, Right, Bottom margin */
+    /* Responsive margins: Top(0) Right Bottom Left */
+    margin: 0px 15px 15px 15px;
     border-radius: 20px;
     overflow: hidden; /* Ensure content respects border-radius */
     border: 1px solid var(--border-color); /* Optional: distinct edge */
     min-height: 0;
+  }
+
+  /* Bottom fade effect */
+  .scroll-wrapper::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 40px;
+    background: linear-gradient(to top, var(--bg-color), transparent);
+    pointer-events: none;
+    z-index: 5;
+    border-radius: 0 0 20px 20px;
+    opacity: 1;
+    transition: opacity 0.3s ease;
+  }
+
+  .scroll-wrapper.at-bottom::after {
+    opacity: 0;
   }
 
   /* Custom Scrollbar Indicator (Fade Animation) */
@@ -1944,16 +3104,28 @@
     border-bottom: 1px solid rgba(255, 255, 255, 0.08); /* Optional detail */
   }
 
+  :global([data-theme="light"]) .controls-bar.scrolled {
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 3px 15px rgba(0, 0, 0, 0.1);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  }
+
   .text-preview {
-    flex: 1;
+    position: absolute;
+    left: 14px;
+    right: 60px;
     font-size: 13px;
     color: var(--text-muted);
     white-space: nowrap;
     overflow: hidden;
     margin: 0;
-    position: relative;
+    opacity: 0;
+    transform: translateY(-8px);
+    pointer-events: none;
+    transition:
+      opacity 0.3s ease,
+      transform 0.3s ease;
     /* Soft wipe reveal + Right side blur fade */
-    /* 200% width: 0-50% is the visible gradient, 50-100% is transparent */
     mask-image: linear-gradient(
       to right,
       black 0%,
@@ -1972,10 +3144,15 @@
     -webkit-mask-size: 200% 100%;
     mask-repeat: no-repeat;
     -webkit-mask-repeat: no-repeat;
-    mask-position: 0% 0;
-    -webkit-mask-position: 0% 0;
+    mask-position: 100% 0;
+    -webkit-mask-position: 100% 0;
+  }
 
-    animation: wipeInSoft 1.5s cubic-bezier(0.5, 1, 0.89, 1);
+  .text-preview.visible {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+    animation: wipeInSoft 1s cubic-bezier(0.5, 1, 0.89, 1) forwards;
   }
 
   @keyframes wipeInSoft {
@@ -2031,6 +3208,15 @@
 
   .action-btn.scroll-mode:hover {
     background: #fff;
+  }
+
+  :global([data-theme="light"]) .action-btn.scroll-mode {
+    background: #1a1a1a;
+    color: #fff;
+  }
+
+  :global([data-theme="light"]) .action-btn.scroll-mode:hover {
+    background: #333;
   }
 
   .btn-icon {
@@ -2112,40 +3298,22 @@
     overflow: visible;
     padding: 2px 4px;
     scrollbar-width: none;
-    transition: opacity 0.3s ease;
+    transition:
+      opacity 0.3s ease,
+      transform 0.3s ease;
+  }
+
+  .styles-row.hidden {
+    opacity: 0;
+    transform: translateY(8px);
+    pointer-events: none;
+    visibility: hidden;
   }
 
   .styles-row.fade-out {
     opacity: 0.15;
     pointer-events: none;
     mask-image: linear-gradient(to right, black 70%, transparent 100%);
-  }
-
-  .translating-label {
-    margin-right: 8px; /* Push it next to button */
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: var(--primary);
-    font-weight: 500;
-    pointer-events: none;
-    z-index: 10;
-    white-space: nowrap;
-  }
-
-  .translating-label span {
-    animation: pulseText 1.5s infinite;
-  }
-
-  @keyframes pulseText {
-    0%,
-    100% {
-      opacity: 0.6;
-    }
-    50% {
-      opacity: 1;
-    }
   }
 
   .style-chip {
@@ -2162,8 +3330,7 @@
     transition: border-color 0.2s;
     user-select: none;
     touch-action: none;
-    /* Pop in animation when reappearing */
-    animation: chipPop 0.4s var(--easing) backwards;
+    white-space: nowrap;
   }
 
   /* Staggered animation handled via inline styles in loop */
@@ -2197,13 +3364,20 @@
   }
 
   .style-chip[data-level="1"] .chip-fill {
-    background: #4ade80; /* Soft Green */
-    opacity: 0.25;
+    background: var(--primary-color);
+    opacity: 0.2;
   }
 
   .style-chip[data-level="2"] .chip-fill {
-    background: #f87171; /* Soft Red */
-    opacity: 0.25;
+    background: var(--primary-color);
+    opacity: 0.4;
+  }
+
+  .add-chip.has-active {
+    border-color: var(--primary-color);
+    border-style: solid;
+    color: var(--primary-color);
+    box-shadow: 0 0 8px rgba(var(--primary-rgb, 59, 130, 246), 0.2);
   }
 
   .chip-text {
@@ -2216,9 +3390,6 @@
     background: transparent;
     border: 1px dashed var(--border-color);
     color: var(--text-muted);
-  }
-  .add-chip .chip-fill {
-    display: none;
   }
 
   @keyframes popIn {
@@ -2239,9 +3410,28 @@
     /* Base background */
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    transition: background 0.2s;
+    transition:
+      background 0.2s,
+      border-color 0.2s;
     flex-shrink: 0;
+    min-height: 80px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
     animation: popIn 0.5s var(--easing) backwards;
+  }
+
+  .card-inner-content {
+    width: 100%;
+    transition: opacity 0.5s ease;
+  }
+
+  .card-inner-content.content-fade {
+    opacity: 0;
+  }
+
+  .candidate-actions.hide {
+    display: none;
   }
 
   /* Staggered backgrounds: Darken sequentially (More visible difference) */
@@ -2256,6 +3446,26 @@
   }
   .candidate-card:nth-child(n + 4) {
     background: rgba(255, 255, 255, 0.02); /* Darkest */
+  }
+
+  /* Light mode - use darker backgrounds */
+  :global([data-theme="light"]) .candidate-card:nth-child(1) {
+    background: rgba(0, 0, 0, 0.03);
+  }
+  :global([data-theme="light"]) .candidate-card:nth-child(2) {
+    background: rgba(0, 0, 0, 0.05);
+  }
+  :global([data-theme="light"]) .candidate-card:nth-child(3) {
+    background: rgba(0, 0, 0, 0.07);
+  }
+  :global([data-theme="light"]) .candidate-card:nth-child(n + 4) {
+    background: rgba(0, 0, 0, 0.09);
+  }
+  :global([data-theme="light"]) .candidate-card {
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+  :global([data-theme="light"]) .candidate-card:hover {
+    border-color: rgba(0, 0, 0, 0.15);
   }
 
   .candidate-card:hover {
@@ -2361,6 +3571,27 @@
     opacity: 1;
   }
 
+  .icon-btn-small {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 3px;
+    border-radius: 4px;
+    color: var(--text-muted);
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .icon-btn-small:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--primary-color);
+  }
+  .icon-btn-small:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
   .icon-btn {
     background: transparent;
     border: none;
@@ -2393,6 +3624,22 @@
     }
   }
 
+  /* Spinning loader */
+  .loading-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
   /* 読み上げボタン: 音波が順番に現れて消える */
   .wave-1 {
     opacity: 1;
@@ -2409,37 +3656,6 @@
 
   .speak-btn.animating .wave-3 {
     animation: wavePulse 1.2s ease-in-out 0.15s;
-  }
-
-  /* Bouncing Dots Animation */
-  .bouncing-dots {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .bouncing-dots span {
-    width: 4px;
-    height: 4px;
-    background-color: currentColor;
-    border-radius: 50%;
-    animation: bounce 0.6s infinite alternate; /* Speed up to 0.6s */
-  }
-
-  .bouncing-dots span:nth-child(2) {
-    animation-delay: 0.1s;
-  }
-
-  .bouncing-dots span:nth-child(3) {
-    animation-delay: 0.2s;
-  }
-
-  @keyframes bounce {
-    to {
-      transform: translateY(-6px);
-      opacity: 0.6;
-    }
   }
 
   @keyframes wavePulse {
@@ -2532,37 +3748,119 @@
   }
 
   /* Settings Modal Styles */
-  .settings-overlay {
+  .settings-overlay,
+  .modal-overlay {
+    all: unset;
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.6);
-    z-index: 1000;
+    z-index: 2000;
     display: flex;
-    justify-content: flex-end;
+    justify-content: center;
+    align-items: center;
     backdrop-filter: blur(4px);
+    cursor: default;
   }
 
   .settings-panel {
-    width: 340px;
-    height: 100%;
+    width: 95%;
+    max-width: 800px;
+    height: 95%;
+    max-height: 800px;
     background: var(--glass-color);
-    border-left: 1px solid var(--border-color);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    transition:
+      max-width 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+      height 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .settings-panel.style-editor-mode {
+    max-width: 1000px;
+    height: 80vh;
+  }
+
+  /* History Panel Styles */
+
+  .history-actions-top {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 12px;
+  }
+
+  .history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .history-item {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 12px;
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.2s;
+    width: 100%;
+  }
+
+  .history-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+    transform: translateY(-1px);
+  }
+
+  .history-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+
+  .history-source {
+    font-size: 13px;
+    color: var(--text-main);
+    font-weight: 500;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .history-preview {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 40px;
+    color: var(--text-muted);
   }
 
   .settings-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 20px;
+
     border-bottom: 1px solid var(--border-color);
   }
 
   .settings-header h2 {
     font-size: 18px;
     font-weight: 600;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 15px;
+    padding-right: 15px;
     color: var(--text-main);
     margin: 0;
   }
@@ -2572,7 +3870,8 @@
     border: none;
     color: var(--text-muted);
     cursor: pointer;
-    padding: 4px;
+    padding: 5px;
+    margin-right: 15px;
     border-radius: 4px;
     transition: all 0.2s;
   }
@@ -2581,10 +3880,57 @@
     background: rgba(255, 255, 255, 0.1);
   }
 
-  .settings-content {
+  .settings-body-container {
+    display: flex;
     flex: 1;
-    padding: 20px;
+    overflow: hidden;
+  }
+
+  .settings-sidebar {
+    width: 140px;
+    border-right: 1px solid var(--border-color);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: rgba(0, 0, 0, 0.1);
+  }
+
+  .settings-tab {
+    padding: 10px 12px;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: left;
+    width: 100%;
+  }
+  .settings-tab:hover {
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .settings-tab.active {
+    color: var(--primary-color);
+    background: rgba(59, 130, 246, 0.1); /* Primary subtle bg */
+  }
+
+  .settings-main-content {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.1); /* Slightly darker content area */
+  }
+
+  /* The scrolling container for the tab content */
+  .tab-content-wrapper {
+    position: absolute;
+    inset: 0;
     overflow-y: auto;
+    padding: 24px;
     display: flex;
     flex-direction: column;
     gap: 20px;
@@ -2596,15 +3942,125 @@
     gap: 8px;
   }
 
-  .settings-label {
-    font-size: 13px;
-    font-weight: 500;
+  /* Star Button Animation */
+  .star-btn {
+    background: transparent;
+    border: none;
     color: var(--text-muted);
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 50%;
+    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .star-btn:hover {
+    background: rgba(255, 235, 59, 0.1);
+    color: #fdd835;
+    transform: scale(1.1);
+  }
+
+  .star-btn.active {
+    color: #fdd835;
+  }
+
+  .star-btn.animating svg {
+    animation: starPop 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  }
+
+  @keyframes starPop {
+    0% {
+      transform: scale(1);
+    }
+    40% {
+      transform: scale(1.6) rotate(15deg);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+
+  .star-btn.small {
+    padding: 6px;
+  }
+
+  /* Main screen save favorite button */
+  .save-favorite-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 20px;
+    color: var(--text-muted);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  }
+
+  .save-favorite-btn:hover {
+    background: rgba(255, 235, 59, 0.1);
+    border-color: rgba(255, 235, 59, 0.2);
+    color: #fdd835;
+    transform: scale(1.02);
+  }
+
+  .save-favorite-btn.active {
+    color: #fdd835;
+    border-color: rgba(255, 235, 59, 0.3);
+  }
+
+  .save-favorite-btn.animating .save-star-icon {
+    animation: starPop 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  }
+
+  .save-label {
+    font-weight: 500;
+  }
+
+  .history-item {
+    display: flex;
+    gap: 12px;
+    padding: 12px;
+    align-items: center;
+    cursor: default;
+  }
+
+  .history-item-main {
+    flex: 1;
+    cursor: pointer;
+    overflow: hidden;
+    background: none;
+    border: none;
+    text-align: left;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+  }
+
+  .history-item-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+
+  .history-item-actions.vertical {
+    flex-direction: column;
+  }
+
+  .move-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
 
   .settings-select,
-  .settings-input {
-    background: rgba(0, 0, 0, 0.3);
+  .settings-input,
+  .settings-card-row {
+    background: rgba(0, 0, 0, 0.2);
     border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 10px 12px;
@@ -2627,9 +4083,70 @@
     color: var(--text-main);
   }
 
+  .settings-textarea {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 14px;
+    color: var(--text-main);
+    outline: none;
+    transition:
+      border-color 0.2s,
+      box-shadow 0.2s;
+    resize: vertical;
+    min-height: 100px;
+    font-family: inherit;
+    line-height: 1.5;
+  }
+
+  .settings-textarea:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(var(--primary-rgb, 100, 150, 255), 0.2);
+  }
+
+  .back-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    transition: all 0.2s;
+    margin-right: 8px;
+  }
+  .back-btn:hover {
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .input-hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 6px;
+  }
+
+  .settings-content.style-editor-content {
+    padding: 30px;
+  }
+
+  .settings-content.style-editor-content .settings-section.full-height {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .settings-content.style-editor-content
+    .settings-section.full-height
+    textarea {
+    flex: 1;
+  }
+
   .settings-footer {
     padding: 20px;
     border-top: 1px solid var(--border-color);
+    display: flex;
+    gap: 10px;
   }
 
   .save-btn {
@@ -2650,12 +4167,6 @@
   }
   .save-btn:active {
     transform: translateY(0);
-  }
-
-  .settings-divider {
-    height: 1px;
-    background: var(--border-color);
-    margin: 8px 0;
   }
 
   /* Styles Tab Improvements */
@@ -2739,11 +4250,6 @@
     transition: all 0.2s ease;
   }
 
-  .style-item-card.editing {
-    background: rgba(255, 255, 255, 0.07);
-    border-color: rgba(255, 255, 255, 0.15);
-  }
-
   .style-header-row {
     display: flex;
     justify-content: space-between;
@@ -2756,17 +4262,6 @@
     font-weight: 600;
     color: var(--text-main);
     font-size: 15px;
-  }
-
-  .style-name-input {
-    background: rgba(0, 0, 0, 0.2);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 6px;
-    padding: 4px 8px;
-    color: white;
-    font-size: 14px;
-    flex: 1;
-    margin-right: 8px;
   }
 
   .style-header-actions {
@@ -2798,54 +4293,7 @@
     color: #f87171;
   }
 
-  .icon-btn-small.done-btn {
-    color: #4ade80;
-    background: rgba(74, 222, 128, 0.1);
-  }
-
-  .icon-btn-small.done-btn:hover {
-    background: rgba(74, 222, 128, 0.2);
-  }
-
-  .style-prompt-display {
-    font-size: 13px;
-    color: var(--text-secondary);
-    line-height: 1.5;
-    padding: 10px;
-    background: rgba(0, 0, 0, 0.1); /* Slightly darker for contrast */
-    border-radius: 8px;
-    min-height: 40px;
-    white-space: pre-wrap;
-    border: 1px solid rgba(255, 255, 255, 0.03);
-  }
-
-  .style-prompt-input {
-    width: 100%;
-    background: rgba(0, 0, 0, 0.2);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    padding: 10px;
-    color: var(--text-main);
-    font-size: 13px;
-    line-height: 1.5;
-    resize: vertical;
-    min-height: 60px;
-  }
-
   /* Modal */
-  .modal-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(4px);
-    z-index: 2000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
 
   .modal-card {
     width: 90%;
@@ -2871,13 +4319,6 @@
     justify-content: center;
   }
 
-  .modal-btn {
-    padding: 8px 16px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-weight: 500;
-    border: none;
-  }
   .theme-toggle {
     display: flex;
     gap: 8px;
@@ -2904,32 +4345,38 @@
     color: #fff;
   }
 
-  /* Settings Tabs */
-  .settings-tabs {
+  /* Provider Switcher */
+  .provider-switcher {
     display: flex;
-    padding: 0 20px;
-    gap: 4px;
-    border-bottom: 1px solid var(--border-color);
+    background: rgba(0, 0, 0, 0.2);
+    padding: 4px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    margin-bottom: 20px;
   }
 
-  .settings-tab {
+  .provider-btn {
     flex: 1;
-    padding: 12px 16px;
+    padding: 8px;
     background: transparent;
     border: none;
-    border-bottom: 2px solid transparent;
+    border-radius: 6px;
+    color: var(--text-muted);
     font-size: 13px;
     font-weight: 500;
-    color: var(--text-muted);
     cursor: pointer;
     transition: all 0.2s;
   }
-  .settings-tab:hover {
+
+  .provider-btn:hover {
     color: var(--text-main);
+    background: rgba(255, 255, 255, 0.05);
   }
-  .settings-tab.active {
-    color: var(--primary-color);
-    border-bottom-color: var(--primary-color);
+
+  .provider-btn.active {
+    background: rgba(59, 130, 246, 0.2);
+    color: #60a5fa;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   }
 
   /* Overflow Dropdown */
@@ -3010,22 +4457,12 @@
   }
 
   .dropdown-item[data-level="1"] .dropdown-item-fill {
-    background: #4ade80;
-    opacity: 0.25;
+    background: var(--primary-color);
+    opacity: 0.2;
   }
   .dropdown-item[data-level="2"] .dropdown-item-fill {
-    background: #f87171;
-    opacity: 0.25;
-  }
-
-  .level-indicator {
-    font-size: 10px;
-    background: var(--accent-color);
-    color: white;
-    padding: 2px 6px;
-    border-radius: 10px;
-    font-weight: bold;
-    /* Since we have fill, maybe indicator is redundant, but user asked to keep "ON" */
+    background: var(--primary-color);
+    opacity: 0.4;
   }
 
   .dropdown-divider {
@@ -3052,5 +4489,262 @@
   .style-chip.add-chip.active {
     background: rgba(255, 255, 255, 0.15);
     border-color: rgba(255, 255, 255, 0.2);
+  }
+  .style-prompt-text {
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    line-height: 1.6;
+  }
+
+  .tech-info-display {
+    margin-top: 10px;
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: 0.8;
+    align-items: center;
+  }
+  .tech-item {
+    display: flex;
+    gap: 4px;
+  }
+  .tech-label {
+    font-weight: 500;
+    opacity: 0.7;
+  }
+  .tech-divider {
+    opacity: 0.3;
+  }
+  .tech-tokens {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    line-height: 1.3;
+  }
+  .token-row {
+    display: flex;
+    gap: 4px;
+  }
+
+  /* ==================== LIGHT MODE OVERRIDES ==================== */
+
+  /* Style chips */
+  :global([data-theme="light"]) .style-chip {
+    border-color: rgba(0, 0, 0, 0.1);
+    background: rgba(0, 0, 0, 0.03);
+  }
+  :global([data-theme="light"]) .style-chip:hover {
+    border-color: rgba(0, 0, 0, 0.2);
+  }
+  :global([data-theme="light"]) .style-chip.add-chip.active {
+    background: rgba(0, 0, 0, 0.08);
+    border-color: rgba(0, 0, 0, 0.15);
+  }
+
+  /* Language menu */
+  :global([data-theme="light"]) .lang-menu {
+    background: rgba(255, 255, 255, 0.95);
+  }
+  :global([data-theme="light"]) .lang-option:hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+
+  /* Icon buttons */
+  :global([data-theme="light"]) .icon-btn:hover {
+    background: rgba(0, 0, 0, 0.08);
+  }
+  :global([data-theme="light"]) .icon-btn-small:hover:not(:disabled) {
+    background: rgba(0, 0, 0, 0.08);
+  }
+
+  /* Explanation card */
+  :global([data-theme="light"]) .explanation-card {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+  :global([data-theme="light"]) .explanation-list li {
+    color: #555;
+  }
+
+  /* History items */
+  :global([data-theme="light"]) .history-item {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+  :global([data-theme="light"]) .history-item:hover {
+    background: rgba(0, 0, 0, 0.06);
+  }
+
+  /* Settings inputs */
+  :global([data-theme="light"]) .settings-select,
+  :global([data-theme="light"]) .settings-input,
+  :global([data-theme="light"]) .settings-textarea {
+    background: rgba(0, 0, 0, 0.04);
+  }
+  :global([data-theme="light"]) .settings-select option {
+    background: #fff;
+    color: #1a1a1a;
+  }
+
+  /* Settings sidebar */
+  :global([data-theme="light"]) .settings-sidebar {
+    background: rgba(0, 0, 0, 0.03);
+  }
+  :global([data-theme="light"]) .settings-tab:hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+  :global([data-theme="light"]) .settings-tab.active {
+    background: rgba(59, 130, 246, 0.1);
+  }
+
+  /* Settings content area */
+  :global([data-theme="light"]) .settings-main-content {
+    background: #fff;
+  }
+
+  :global([data-theme="light"]) .settings-card-row,
+  :global([data-theme="light"]) .settings-select,
+  :global([data-theme="light"]) .settings-input {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.1);
+  }
+
+  /* Dropdown */
+  :global([data-theme="light"]) .style-dropdown {
+    background: rgba(255, 255, 255, 0.98);
+    border-color: rgba(0, 0, 0, 0.1);
+  }
+  :global([data-theme="light"]) .dropdown-item:hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+  :global([data-theme="light"]) .dropdown-divider {
+    background: rgba(0, 0, 0, 0.08);
+  }
+
+  /* Provider switcher */
+  :global([data-theme="light"]) .provider-switcher {
+    background: rgba(0, 0, 0, 0.05);
+  }
+  :global([data-theme="light"]) .provider-btn:hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+
+  /* Theme buttons */
+  :global([data-theme="light"]) .theme-btn:hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+
+  /* Toggle switch */
+  :global([data-theme="light"]) .toggle-switch {
+    background: rgba(0, 0, 0, 0.15);
+  }
+
+  /* Styles list in settings */
+  :global([data-theme="light"]) .style-item-card {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+  :global([data-theme="light"]) .style-item-card:hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+
+  /* Confirmation dialog */
+  :global([data-theme="light"]) .confirm-dialog {
+    background: rgba(255, 255, 255, 0.98);
+  }
+
+  /* Rich buttons */
+  :global([data-theme="light"]) .rich-btn.secondary {
+    background: rgba(0, 0, 0, 0.05);
+  }
+  :global([data-theme="light"]) .rich-btn.secondary:hover {
+    background: rgba(0, 0, 0, 0.1);
+  }
+
+  /* Settings panel background */
+  :global([data-theme="light"]) .settings-panel {
+    background: rgba(255, 255, 255, 0.98);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+  }
+
+  /* Close button */
+  :global([data-theme="light"]) .close-btn:hover {
+    background: rgba(0, 0, 0, 0.08);
+  }
+
+  /* Settings row borders */
+  :global([data-theme="light"]) .settings-row {
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+
+  /* Section titles */
+  :global([data-theme="light"]) .settings-section h3 {
+    color: #333;
+  }
+
+  /* Description text */
+  :global([data-theme="light"]) .settings-description {
+    color: #444;
+  }
+
+  /* Input hints */
+  :global([data-theme="light"]) .input-hint {
+    color: #555;
+  }
+
+  /* Back button */
+  :global([data-theme="light"]) .back-btn:hover {
+    background: rgba(0, 0, 0, 0.08);
+  }
+
+  /* Settings textarea in light mode */
+  :global([data-theme="light"]) .settings-textarea {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.12);
+  }
+
+  /* Modal overlay */
+  :global([data-theme="light"]) .settings-overlay,
+  :global([data-theme="light"]) .modal-overlay {
+    background: rgba(0, 0, 0, 0.4);
+  }
+
+  /* Delete button in light mode */
+  :global([data-theme="light"]) .delete-btn:hover {
+    background: rgba(239, 68, 68, 0.1);
+    color: #dc2626;
+  }
+
+  /* Star button */
+  :global([data-theme="light"]) .star-btn:hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+  :global([data-theme="light"]) .star-btn.active {
+    color: #f59e0b;
+  }
+
+  /* Style editor */
+  :global([data-theme="light"]) .style-editor-panel {
+    background: rgba(0, 0, 0, 0.02);
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+
+  /* API Key indicator */
+  :global([data-theme="light"]) .api-indicator.set {
+    background: rgba(34, 197, 94, 0.1);
+    color: #16a34a;
+  }
+  :global([data-theme="light"]) .api-indicator.not-set {
+    background: rgba(239, 68, 68, 0.1);
+    color: #dc2626;
+  }
+
+  /* Tab content */
+  :global([data-theme="light"]) .tab-content-wrapper {
+    color: #1a1a1a;
   }
 </style>
