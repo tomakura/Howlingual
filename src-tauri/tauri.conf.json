@@ -19,6 +19,30 @@
         "height": 600,
         "minWidth": 600,
         "minHeight": 400
+      },
+      {
+        "label": "tray",
+        "title": "Howlingual Tray",
+        "url": "/tray",
+        "width": 180,
+        "height": 110,
+        "decorations": false,
+        "transparent": true,
+        "resizable": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "center": false
+      },
+      {
+        "label": "service",
+        "title": "Howlingual Service",
+        "url": "/service",
+        "width": 100,
+        "height": 100,
+        "visible": false,
+        "skipTaskbar": true,
+        "resizable": false
       }
     ],
     "security": {

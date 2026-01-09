@@ -79,6 +79,8 @@ interface Translations {
 	tabRecent: string;
 	tabFavorites: string;
 	saveToFavorites: string;
+	autoRunQuick: string;
+	autoRunQuickDesc: string;
 }
 
 const translations: Record<AppLanguage, Translations> = {
@@ -148,6 +150,8 @@ const translations: Record<AppLanguage, Translations> = {
 		tabRecent: "最近",
 		tabFavorites: "保存済み",
 		saveToFavorites: "保存",
+		autoRunQuick: "クイック翻訳の自動実行",
+		autoRunQuickDesc: "ショートカット呼出時に自動で翻訳を開始します",
 	},
 	en: {
 		settings: "Settings",
@@ -215,6 +219,8 @@ const translations: Record<AppLanguage, Translations> = {
 		tabRecent: "Recent",
 		tabFavorites: "Saved",
 		saveToFavorites: "Save",
+		autoRunQuick: "Auto-run Quick Translate",
+		autoRunQuickDesc: "Automatically start translation when shortcut is pressed",
 	},
 	zh: {
 		settings: "设置",
@@ -282,6 +288,8 @@ const translations: Record<AppLanguage, Translations> = {
 		tabRecent: "最近",
 		tabFavorites: "已保存",
 		saveToFavorites: "保存",
+		autoRunQuick: "快速翻译自动执行",
+		autoRunQuickDesc: "按快捷键时自动开始翻译",
 	},
 	ko: {
 		settings: "설정",
@@ -349,6 +357,8 @@ const translations: Record<AppLanguage, Translations> = {
 		tabRecent: "최근",
 		tabFavorites: "저장됨",
 		saveToFavorites: "저장",
+		autoRunQuick: "빠른 번역 자동 실행",
+		autoRunQuickDesc: "단축키 호출 시 자동으로 번역을 시작합니다",
 	},
 };
 

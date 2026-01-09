@@ -6,9 +6,29 @@ import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 const ENV = import.meta.env;
 
 // Initialize clients
+// Clients will be initialized dynamically or via env fallback
 const genAI = ENV.VITE_GOOGLE_GENERATIVE_AI_API_KEY ? new GoogleGenerativeAI(ENV.VITE_GOOGLE_GENERATIVE_AI_API_KEY) : null;
 const openai = ENV.VITE_OPENAI_API_KEY ? new OpenAI({ apiKey: ENV.VITE_OPENAI_API_KEY, dangerouslyAllowBrowser: true }) : null;
 const anthropic = ENV.VITE_ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ENV.VITE_ANTHROPIC_API_KEY, dangerouslyAllowBrowser: true }) : null;
+
+// Dynamic Client Getters
+function getGeminiClient(apiKey?: string) {
+	const key = apiKey || ENV.VITE_GOOGLE_GENERATIVE_AI_API_KEY;
+	if (!key) throw new Error("Gemini API Key missing");
+	return new GoogleGenerativeAI(key);
+}
+
+function getOpenAIClient(apiKey?: string) {
+	const key = apiKey || ENV.VITE_OPENAI_API_KEY;
+	if (!key) throw new Error("OpenAI API Key missing");
+	return new OpenAI({ apiKey: key, dangerouslyAllowBrowser: true });
+}
+
+function getAnthropicClient(apiKey?: string) {
+	const key = apiKey || ENV.VITE_ANTHROPIC_API_KEY;
+	if (!key) throw new Error("Anthropic API Key missing");
+	return new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true });
+}
 
 export type AiModel = "gemini-1.5-flash" | "gpt-4o" | "gpt-4o-mini" | "claude-3-5-sonnet-20240620";
 
@@ -246,25 +266,26 @@ export async function translateTextStream(
 	model: string,
 	onUpdate: (partial: Partial<AiResponse>, usage?: UsageMetadata) => void,
 	explanationLang: string = "日本語",
-	stylePrompts: Record<string, string> = {}
+	stylePrompts: Record<string, string> = {},
+	apiKeys: Record<string, string> = {}
 ): Promise<void> {
 	const userPrompt = buildUserPrompt(text, sourceLang, targetLang, styles, stylePrompts);
 	const systemPrompt = buildSystemPrompt(explanationLang);
 
 	if (model.startsWith("gemini")) {
-		await streamGemini(userPrompt, onUpdate, systemPrompt);
+		await streamGemini(userPrompt, onUpdate, systemPrompt, apiKeys.google?.trim() || apiKeys.gemini?.trim()); // handle both key names if needed
 	} else if (model.startsWith("gpt") || model.startsWith("o3")) {
-		await streamOpenAI(model, userPrompt, onUpdate, systemPrompt);
+		await streamOpenAI(model, userPrompt, onUpdate, systemPrompt, apiKeys.openai?.trim());
 	} else if (model.startsWith("claude")) {
-		await streamAnthropic(model, userPrompt, onUpdate, systemPrompt);
+		await streamAnthropic(model, userPrompt, onUpdate, systemPrompt, apiKeys.anthropic?.trim());
 	} else {
 		throw new Error(`Unsupported model: ${model}`);
 	}
 }
 
 // Gemini Streaming
-async function streamGemini(prompt: string, onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void, systemPrompt: string) {
-	if (!genAI) throw new Error("Gemini API Key missing");
+async function streamGemini(prompt: string, onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void, systemPrompt: string, apiKey?: string) {
+	const genAI = getGeminiClient(apiKey);
 	// Check schema definition from previous code... assuming it's available or re-defined here
 	// For brevity re-using the logic conceptually.
 
@@ -328,8 +349,8 @@ async function streamGemini(prompt: string, onUpdate: (data: Partial<AiResponse>
 }
 
 // OpenAI Streaming
-async function streamOpenAI(modelName: string, prompt: string, onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void, systemPrompt: string) {
-	if (!openai) throw new Error("OpenAI API Key missing");
+async function streamOpenAI(modelName: string, prompt: string, onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void, systemPrompt: string, apiKey?: string) {
+	const openai = getOpenAIClient(apiKey);
 
 	const stream = await openai.chat.completions.create({
 		model: modelName,
@@ -381,8 +402,8 @@ async function streamOpenAI(modelName: string, prompt: string, onUpdate: (data: 
 }
 
 // Anthropic Streaming
-async function streamAnthropic(modelName: string, prompt: string, onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void, systemPrompt: string) {
-	if (!anthropic) throw new Error("Anthropic API Key missing");
+async function streamAnthropic(modelName: string, prompt: string, onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void, systemPrompt: string, apiKey?: string) {
+	const anthropic = getAnthropicClient(apiKey);
 
 	const stream = await anthropic.messages.create({
 		model: modelName,

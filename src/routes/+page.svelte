@@ -4,7 +4,8 @@
   import { flip } from "svelte/animate";
   import { quintOut } from "svelte/easing";
   import { invoke } from "@tauri-apps/api/core";
-  import { translateTextStream, type AiModel } from "$lib/ai_service";
+  import { listen, emit } from "@tauri-apps/api/event";
+  import { type AiModel } from "$lib/ai_service";
   import {
     t,
     getLanguageName,
@@ -40,6 +41,7 @@
   let shortcutDraft = $state(DEFAULT_SHORTCUT);
   let shortcutError = $state("");
   let shortcutSaving = $state(false);
+  let autoRunQuick = $state(true); // Auto-run setting - default ON for backward compatibility
 
   let historyAnimating = $state(false);
   function triggerHistoryAnim() {
@@ -208,6 +210,8 @@
     }
   }
 
+  let isOpeningMain = $state(false);
+
   // Load settings on mount
   onMount(() => {
     void detectWindowMode();
@@ -231,6 +235,8 @@
         if (parsed.allowRewrite !== undefined)
           allowRewrite = parsed.allowRewrite;
         if (parsed.quickShortcut) quickShortcut = parsed.quickShortcut;
+        if (parsed.autoRunQuick !== undefined)
+          autoRunQuick = parsed.autoRunQuick;
 
         // Apply theme on load
         document.documentElement.setAttribute("data-theme", theme);
@@ -239,6 +245,13 @@
       }
     }
 
+    // Ensure shortcut is OS-specific for display
+    const isMac = navigator.userAgent.includes("Mac");
+    quickShortcut = quickShortcut.replace(
+      "CommandOrControl",
+      isMac ? "Command" : "Ctrl",
+    );
+
     shortcutDraft = quickShortcut;
     const viewParam = new URLSearchParams(window.location.search).get("view");
     if (viewParam !== "compact") {
@@ -246,23 +259,308 @@
     }
   });
 
+  // Service Integration
   onMount(() => {
-    let unlisten: (() => void) | null = null;
-    void (async () => {
-      try {
-        const { listen } = await import("@tauri-apps/api/event");
-        unlisten = await listen<string>("quick-text", async (event) => {
-          if (typeof event.payload !== "string") return;
-          await applyQuickText(event.payload);
-        });
-      } catch (error) {
-        console.warn("Quick text listener failed:", error);
-      }
+    let unlisten: () => void;
+    (async () => {
+      // Sync state on load
+      console.log("[UI] Requesting Sync State...");
+      await emit("request_sync_state");
+
+      unlisten = await listen<any>("translation_update", (event) => {
+        const p = event.payload;
+
+        // Detect completion for History Saving
+        if (isTranslating && !p.isTranslating) {
+          // Translation just finished
+          if (
+            p.translations &&
+            p.translations.length > 0 &&
+            p.translations.some((t: any) => t.text)
+          ) {
+            const newEntry: HistoryItem = {
+              id: crypto.randomUUID(),
+              timestamp: Date.now(),
+              sourceText: p.inputQuery || inputQuery,
+              sourceLang: p.detectedLang || p.sourceLang || sourceLang,
+              targetLang: p.targetLang || targetLang,
+              translations: p.translations.map((t: any) => ({
+                text: t.text,
+                reason: t.reason,
+              })),
+              detailedExplanation: p.detailedExplanation
+                ? $state.snapshot(p.detailedExplanation)
+                : null,
+              styleLevels: p.styleLevels ? $state.snapshot(p.styleLevels) : {},
+            };
+            history = [newEntry, ...history].slice(0, 50);
+            localStorage.setItem("howlingual_history", JSON.stringify(history));
+
+            persistLastResult(); // Helper function
+          }
+        }
+
+        isTranslating = p.isTranslating;
+        translations = p.translations; // Direct sync
+
+        if (p.detailedExplanation) {
+          detailedExplanation = p.detailedExplanation;
+        }
+        if (p.inputQuery && p.inputQuery !== inputQuery && !isTranslating) {
+          inputQuery = p.inputQuery;
+        }
+
+        // Sync Language Settings
+        if (p.sourceLang) {
+          if (p.sourceLang !== "自動検出") {
+            selectSourceLang(p.sourceLang);
+          }
+        }
+        if (p.detectedLang) {
+          detectedLang = p.detectedLang;
+        }
+        if (p.targetLang) {
+          targetLang = p.targetLang;
+        }
+
+        // Sync Metrics
+        techMetrics = p.techMetrics;
+
+        // Auto-resize if needed
+        void tick().then(autoResize);
+      });
     })();
 
     return () => {
       if (unlisten) unlisten();
     };
+  });
+
+  // Poll for pending text when window gets focus (for compact mode)
+  onMount(() => {
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+    let hasReceivedText = false;
+    let checkCount = 0;
+
+    async function checkPendingText() {
+      // Don't consume pending text if we are navigating to main window
+      if (isOpeningMain) return;
+
+      try {
+        let text: string | null = null;
+        if (isCompactMode) {
+          text = await invoke<string | null>("get_pending_text");
+        } else {
+          // Main Window checks dedicated handover text
+          text = await invoke<string | null>("get_handover_text");
+        }
+        if (text && text.trim()) {
+          console.log("[pending-text] Received:", text.length, "chars");
+          hasReceivedText = true;
+
+          // Use applyQuickText which respects autoRunQuick setting
+          await applyQuickText(text);
+
+          // Stop polling once we got text
+          if (intervalId) {
+            clearInterval(intervalId);
+            intervalId = null;
+          }
+        } else {
+          // If no text after first check, clear the UI for fresh start
+          checkCount++;
+          if (checkCount === 1 && !hasReceivedText && isCompactMode) {
+            // First check returned null - this is a fresh open without selection
+            // Clear previous results but keep input if user typed something
+            translations = [];
+            detailedExplanation = null;
+            errorMessage = "";
+          }
+        }
+      } catch (error) {
+        // Ignore errors (command may not exist in web mode)
+      }
+    }
+
+    // Check immediately (Run once for BOTH modes to catch handover/initial data)
+    void checkPendingText();
+
+    // Check immediately if we are in compact mode
+    if (isCompactMode) {
+      // Also check periodically (in case window was already visible)
+      intervalId = setInterval(() => {
+        void checkPendingText();
+      }, 100);
+    }
+
+    // Stop polling after 3 seconds if nothing received
+    setTimeout(() => {
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    }, 3000);
+
+    // Note: We don't need a focus handler for compact mode
+    // The text_captured event already handles window opening/text updates
+
+    // Listen for text_captured event from backend
+    console.log("[Listener] Registering text_captured listener");
+    const unlistenPromise = listen<string>("text_captured", async (event) => {
+      console.log(
+        "[event] text_captured handler called, payload length:",
+        event.payload.length,
+      );
+
+      // Check if THIS window is the compact window (check at event time, not registration time)
+      let isThisCompactWindow = false;
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const currentWindow = getCurrentWindow();
+        isThisCompactWindow = currentWindow.label === "compact";
+      } catch {
+        // Fallback to URL check
+        isThisCompactWindow = window.location.search.includes("view=compact");
+      }
+
+      if (!isThisCompactWindow) {
+        console.log("[event] Ignoring - not compact window");
+        return;
+      }
+
+      console.log(
+        "[event] text_captured processing:",
+        event.payload.length,
+        "chars",
+      );
+      hasReceivedText = true;
+      isOpeningMain = false; // Reset flag so we can capture again
+
+      // Force UI update with new text
+      void applyQuickText(event.payload);
+    });
+
+    // Listen for handover_data event (Main Window only)
+    const unlistenHandoverPromise = listen<string>("handover_data", (event) => {
+      if (isCompactMode) return; // Should not happen but safety check
+
+      console.log(
+        "[event] handover_data received:",
+        event.payload.length,
+        "chars",
+      );
+
+      // Parse JSON payload with full translation state
+      try {
+        const payload = JSON.parse(event.payload);
+        console.log("[handover] Parsed payload:", payload);
+
+        // Restore source text
+        inputQuery = payload.sourceText || "";
+
+        // Restore translations
+        if (payload.translations && Array.isArray(payload.translations)) {
+          translations = payload.translations.map((t: any, i: number) => ({
+            id: i + 1,
+            text: t.text || "",
+            reason: t.reason || "",
+          }));
+        }
+
+        // Restore explanation
+        if (payload.detailedExplanation) {
+          detailedExplanation = payload.detailedExplanation;
+          showExplanation = true;
+        }
+
+        // Restore language settings
+        if (payload.sourceLang) {
+          if (payload.sourceLang !== "自動検出") {
+            selectSourceLang(payload.sourceLang);
+          }
+          detectedLang = payload.sourceLang;
+        }
+        if (payload.targetLang) {
+          targetLang = payload.targetLang;
+        }
+
+        // Restore style levels
+        if (payload.styleLevels) {
+          styleLevels = { ...styleLevels, ...payload.styleLevels };
+        }
+
+        // Restore techMetrics
+        if (payload.techMetrics) {
+          techMetrics = { ...techMetrics, ...payload.techMetrics };
+        }
+
+        // Restore showTechInfo
+        if (typeof payload.showTechInfo === "boolean") {
+          showTechInfo = payload.showTechInfo;
+        }
+
+        console.log("[handover] Restored state:", {
+          translations: translations.length,
+          techMetrics: techMetrics.time,
+          showTechInfo: showTechInfo, // Debug log
+          isTranslating: payload.isTranslating,
+        });
+
+        void tick().then(async () => {
+          autoResize();
+          // If translation was active in quick window, continue (restart) it here
+          if (payload.isTranslating) {
+            console.log("[handover] Continuing translation...");
+            await startTranslation();
+          }
+        });
+      } catch (e) {
+        // Fallback: treat as plain text (old behavior)
+        console.log("[handover] Fallback to plain text:", e);
+        void applyQuickText(event.payload);
+      }
+    });
+
+    return async () => {
+      if (intervalId) clearInterval(intervalId);
+      const unlisten = await unlistenPromise;
+      unlisten();
+      const unlistenHandover = await unlistenHandoverPromise;
+      unlistenHandover();
+
+      // Clean up storage listener
+      window.removeEventListener("storage", handleStorageChange);
+    };
+  });
+
+  // Storage listener for syncing history across windows
+  function handleStorageChange(event: StorageEvent) {
+    if (event.key === "howlingual_history") {
+      try {
+        const newValue = event.newValue ? JSON.parse(event.newValue) : [];
+        // Only update if different to avoid redundant renders?
+        // Simple assignment is safer for sync.
+        history = newValue;
+        console.log("[Sync] History updated from storage event");
+      } catch (e) {
+        console.warn("Failed to sync history", e);
+      }
+    } else if (event.key === "howlingual_favorites") {
+      try {
+        favorites = event.newValue ? JSON.parse(event.newValue) : [];
+        console.log("[Sync] Favorites updated from storage event");
+      } catch (e) {
+        console.warn("Failed to sync favorites", e);
+      }
+    } else if (event.key === "howlingual_showTechInfo") {
+      showTechInfo = event.newValue === "true";
+      console.log("[Sync] showTechInfo updated:", showTechInfo);
+    }
+  }
+
+  // Add storage listener
+  onMount(() => {
+    window.addEventListener("storage", handleStorageChange);
   });
 
   // Auto-save settings when changed
@@ -276,6 +574,7 @@
       customStyles: customStyles,
       allowRewrite: allowRewrite,
       quickShortcut: quickShortcut,
+      autoRunQuick: autoRunQuick,
     };
     localStorage.setItem("howlingual_settings", JSON.stringify(settings));
 
@@ -469,30 +768,103 @@
 
   async function openMainScreen() {
     try {
-      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-      let target = await WebviewWindow.getByLabel("main");
-      if (!target) {
-        target = new WebviewWindow("main", {
-          title: "Howlingual",
-          url: "/?view=main",
-          width: 800,
-          height: 600,
-          minWidth: 600,
-          minHeight: 400,
-          resizable: true,
-          decorations: true,
-        });
+      isOpeningMain = true; // Flag to prevent compact window from clearing text
+
+      // Build handover payload with full translation state
+      console.log(
+        "[handover] Current translations:",
+        translations.length,
+        translations,
+      );
+      const handoverPayload = JSON.stringify({
+        sourceText: inputQuery,
+        translations: translations.map((t) => ({
+          text: t.text,
+          reason: t.reason,
+        })),
+        detailedExplanation: detailedExplanation
+          ? $state.snapshot(detailedExplanation)
+          : null,
+        sourceLang: detectedLang || sourceLang,
+        targetLang: targetLang,
+        styleLevels: $state.snapshot(styleLevels),
+        techMetrics: $state.snapshot(techMetrics),
+        showTechInfo: showTechInfo,
+        isTranslating: isTranslating, // Pass translating state
+      });
+      console.log(
+        "[handover] Sending payload:",
+        handoverPayload.length,
+        "chars",
+      );
+
+      // Use dedicated handover command with full state
+      await invoke("handover_to_main", { text: handoverPayload });
+
+      // Hide the quick window after handover
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const currentWindow = getCurrentWindow();
+        if (currentWindow.label === "compact") {
+          await currentWindow.hide();
+        }
+      } catch (hideError) {
+        console.warn("Failed to hide quick window:", hideError);
       }
-      await target.show();
-      await target.setFocus();
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      const current = getCurrentWindow();
-      if (current.label === "compact") {
-        await current.hide();
-      }
-      return;
     } catch (error) {
       console.warn("Main window open failed:", error);
+      isOpeningMain = false;
+    }
+  }
+
+  async function applyQuickText(text: string) {
+    // Clear ALL previous state when new text arrives
+    inputQuery = ""; // Clear first to force reactivity
+    // Pre-populate empty translation slots (so card backgrounds are visible)
+    translations = [
+      { id: 1, text: "", reason: "" },
+      { id: 2, text: "", reason: "" },
+      { id: 3, text: "", reason: "" },
+    ];
+    detailedExplanation = null;
+    errorMessage = "";
+    // Reset tech metrics
+    techMetrics = {
+      time: 0,
+      waitTime: 0,
+      genTime: 0,
+      model: "",
+      inputTokens: 0,
+      outputTokens: 0,
+      tokensPerSec: 0,
+      isReal: false,
+      firstTokenReceived: false,
+    };
+
+    await tick();
+
+    // Set the new text
+    // Set the new text
+    inputQuery = text;
+    // Sync to service immediately
+    await emit("sync_input_command", { text });
+
+    await tick();
+    autoResize();
+
+    // Focus the textarea
+    if (textareaEl) {
+      textareaEl.focus();
+    }
+
+    // Auto-start translation if there's text
+    if (text.trim()) {
+      if (autoRunQuick) {
+        console.log("[AutoRun] Triggering translation automatically");
+        await startTranslation();
+      } else {
+        console.log("[AutoRun] Skipped (disabled)");
+      }
     }
   }
 
@@ -847,13 +1219,6 @@
     checkScroll();
   }
 
-  async function applyQuickText(text: string) {
-    inputQuery = text;
-    await tick();
-    await autoResize();
-    if (textareaEl) textareaEl.focus();
-  }
-
   let showFade = $state(false);
 
   function checkScroll() {
@@ -919,12 +1284,15 @@
     // Auto-scroll logic: detect if user scrolled up
     if (isTranslating) {
       const isNearBottom = scrollHeight - scrollTop - clientHeight < 50;
+      // Use smaller threshold for compact mode (smaller scroll area)
+      const scrollUpThreshold = isCompactMode ? 3 : 10;
+      const scrollDownThreshold = isCompactMode ? 2 : 5;
       const scrollDelta = scrollTop - lastScrollTop;
 
-      if (scrollDelta < -10 && !isNearBottom) {
+      if (scrollDelta < -scrollUpThreshold && !isNearBottom) {
         // User scrolled up significantly, disable auto-scroll
         autoScrollEnabled = false;
-      } else if (isNearBottom && scrollDelta > 5) {
+      } else if (isNearBottom && scrollDelta > scrollDownThreshold) {
         // User explicitly scrolled down to bottom, re-enable
         autoScrollEnabled = true;
       }
@@ -1098,23 +1466,7 @@
       }
     }
 
-    loadLastResult();
-
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === LAST_RESULT_KEY && event.newValue) {
-        loadLastResult();
-      }
-    };
-    const handleFocus = () => {
-      loadLastResult();
-    };
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener("focus", handleFocus);
-
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener("focus", handleFocus);
-    };
+    /* Last result loading disabled by user request */
   });
 
   function loadHistory(item: HistoryItem) {
@@ -1228,13 +1580,23 @@
   }
 
   let showTechInfo = $state(false);
+  let showTechInfoInitialized = $state(false);
 
-  $effect(() => {
+  // Load showTechInfo from localStorage on first mount
+  onMount(() => {
     const stored = localStorage.getItem("howlingual_showTechInfo");
-    if (stored !== null) showTechInfo = stored === "true";
+    if (stored !== null) {
+      showTechInfo = stored === "true";
+    }
+    showTechInfoInitialized = true;
+    console.log("[TechInfo] Initialized, showTechInfo =", showTechInfo);
   });
+
+  // Save showTechInfo only after initialized (prevent overwriting on load)
   $effect(() => {
-    localStorage.setItem("howlingual_showTechInfo", String(showTechInfo));
+    if (showTechInfoInitialized) {
+      localStorage.setItem("howlingual_showTechInfo", String(showTechInfo));
+    }
   });
 
   let techMetrics = $state({
@@ -1291,167 +1653,22 @@
     }
 
     try {
-      console.log(
-        `[Translation] Starting translation with model: ${currentModel}`,
-      );
-      console.log(`[Translation] Input: "${inputQuery.substring(0, 30)}..."`);
-
-      // Call AI API with Streaming
-      // Get explanation language based on app language setting
-      const explanationLangName = getLanguageName(appLanguage);
-
-      const startTime = Date.now();
-      let usingRealTokens = false;
-      initialTokens = Math.ceil(inputQuery.length / 1.5) + 40; // Approx input + system prompts
-
-      // Tech Info Reset
-      techMetrics = {
-        time: 0,
-        waitTime: 0,
-        genTime: 0,
-        model: currentModel,
-        inputTokens: initialTokens,
-        outputTokens: 0,
-        tokensPerSec: 0,
-        isReal: false,
-        firstTokenReceived: false,
-      };
-      firstTokenTime = 0;
-
-      clearInterval(timerInterval);
-      timerInterval = setInterval(() => {
-        techMetrics.time = (Date.now() - startTime) / 1000;
-      }, 100);
-
-      // Extract prompts for active styles
-      const activeStylePrompts: Record<string, string> = {};
-      Object.keys(styleLevels).forEach((name) => {
-        if (styleLevels[name] > 0) {
-          const styleDef = customStyles.find((s) => s.name === name);
-          if (styleDef && styleDef.prompt) {
-            activeStylePrompts[name] = styleDef.prompt;
-          }
-        }
-      });
-
-      await translateTextStream(
-        inputQuery,
+      // Dispatch Command to Service
+      await emit("start_translation_command", {
+        text: inputQuery,
         sourceLang,
         targetLang,
-        styleLevels,
-        currentModel,
-        (partialResult, usage) => {
-          // Update Tech Info Tokens
-          if (usage) {
-            techMetrics.inputTokens = usage.input_tokens;
-            techMetrics.outputTokens = usage.output_tokens;
-            techMetrics.isReal = true;
-            usingRealTokens = true;
-          } else if (!usingRealTokens) {
-            let outputChars = 0;
-            if (partialResult.candidates) {
-              outputChars += partialResult.candidates.reduce(
-                (acc, c) =>
-                  acc + (c.text?.length || 0) + (c.reason?.length || 0),
-                0,
-              );
-            }
-            if (partialResult.detailed_explanation) {
-              outputChars += JSON.stringify(
-                partialResult.detailed_explanation,
-              ).length;
-            }
-            techMetrics.outputTokens = Math.ceil(outputChars / 1.5);
-          }
-
-          // Track first token time
-          if (
-            !techMetrics.firstTokenReceived &&
-            (partialResult.candidates?.length > 0 ||
-              partialResult.detected_source_language)
-          ) {
-            firstTokenTime = Date.now();
-            techMetrics.waitTime = (firstTokenTime - startTime) / 1000;
-            techMetrics.firstTokenReceived = true;
-          }
-
-          // Update generation time and speed
-          if (techMetrics.firstTokenReceived) {
-            techMetrics.genTime = (Date.now() - firstTokenTime) / 1000;
-            if (techMetrics.genTime > 0 && techMetrics.outputTokens > 0) {
-              techMetrics.tokensPerSec = Math.round(
-                techMetrics.outputTokens / techMetrics.genTime,
-              );
-            }
-          }
-          // Handle Detection Result updates
-          if (isAutoDetect && partialResult.detected_source_language) {
-            // Only update if we haven't finalized it yet or it changed
-            if (detectedLang !== partialResult.detected_source_language) {
-              detectedLang = partialResult.detected_source_language;
-              isDetecting = false;
-            }
-          }
-
-          // Update Translations
-          if (partialResult.candidates && partialResult.candidates.length > 0) {
-            const next = [...translations];
-            partialResult.candidates.forEach((c, i) => {
-              next[i] = {
-                ...c,
-                id: c.id || i + 1,
-                reason: c.reason || "", // Ensure reason is at least empty string
-              };
-            });
-            translations = next;
-
-            // Auto-scroll to show new content
-            autoScrollToBottom();
-          }
-
-          // Update Detailed Explanation
-          if (partialResult.detailed_explanation) {
-            detailedExplanation = partialResult.detailed_explanation as any;
-            showExplanation = true;
-          }
-        },
-        explanationLangName,
-        activeStylePrompts,
-      );
-
-      // Save History
-      if (translations.length > 0) {
-        const newEntry: HistoryItem = {
-          id: crypto.randomUUID(),
-          timestamp: Date.now(),
-          sourceText: inputQuery,
-          sourceLang: detectedLang || sourceLang,
-          targetLang: targetLang,
-          translations: translations.map((t) => ({
-            text: t.text,
-            reason: t.reason,
-          })),
-          detailedExplanation: detailedExplanation
-            ? $state.snapshot(detailedExplanation)
-            : null,
-          styleLevels: $state.snapshot(styleLevels),
-        };
-        history = [newEntry, ...history].slice(0, 50);
-        localStorage.setItem("howlingual_history", JSON.stringify(history));
-      }
-
-      persistLastResult();
-
-      // Final check for detecting state just in case
-      if (isAutoDetect) isDetecting = false;
+        styles: styleLevels,
+        model: currentModel,
+        explanationLang: getLanguageName(appLanguage),
+        apiKeys: $state.snapshot(apiKeys),
+        // Add any other params needed
+        initialTokens: Math.ceil(inputQuery.length / 1.5) + 40,
+      });
     } catch (error) {
       console.error("Translation failed:", error);
-      errorMessage =
-        "AI翻訳エラーが発生しました。\nAPIキーの設定やネットワーク接続を確認してください。";
-      isDetecting = false;
-    } finally {
+      errorMessage = "Translation failed to start.";
       isTranslating = false;
-      clearInterval(timerInterval);
     }
   }
 
@@ -1477,7 +1694,12 @@
       </div>
       <button
         class="compact-main-btn"
-        onclick={openMainScreen}
+        onclick={async () => {
+          // Stop consuming pending text in this window
+          isOpeningMain = true;
+          // Use proper handover logic
+          await openMainScreen();
+        }}
         title={t(appLanguage, "openMain")}
       >
         <span>{t(appLanguage, "openMain")}</span>
@@ -1659,7 +1881,10 @@
       </div>
     </div>
 
-    <div class="scroll-wrapper compact-scroll-wrapper" class:at-bottom={isAtBottom}>
+    <div
+      class="scroll-wrapper compact-scroll-wrapper"
+      class:at-bottom={isAtBottom}
+    >
       <section
         class="main-scroll glass compact-scroll"
         class:is-scrolling={isScrolling}
@@ -1683,54 +1908,74 @@
         </div>
 
         <!-- Sticky Controls Bar (morphs based on scroll state) -->
-        <div class="controls-bar glass compact-controls" class:scrolled={isScrolledDown}>
+        <div
+          class="controls-bar glass compact-controls"
+          class:scrolled={isScrolledDown}
+        >
           <p class="text-preview" class:visible={isScrolledDown}>
             {inputQuery}
           </p>
           <div class="compact-style-row" class:hidden={isScrolledDown}>
-            <div class="compact-style-wrapper">
-              <button
-                class="compact-style-chip"
-                class:open={compactStylesOpen}
-                aria-expanded={compactStylesOpen}
-                onclick={() => (compactStylesOpen = !compactStylesOpen)}
+            <!-- Horizontal style chips like main window -->
+            <div
+              class="styles-row compact-styles-row"
+              class:fade-out={isTranslating}
+            >
+              <div
+                style="flex: 1; display: flex; align-items: center; gap: 6px; overflow: hidden; height: 100%;"
               >
-                <span class="chip-text">{t(appLanguage, "tabStyles")}</span>
-                {#if activeStyleCount > 0}
-                  <span class="chip-count">{activeStyleCount}</span>
-                {/if}
-                <svg
-                  class="chip-chevron"
-                  width="12"
-                  height="12"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <path d="M6 9l6 6 6-6"></path>
-                </svg>
-              </button>
-              {#if compactStylesOpen}
-                <div
-                  class="compact-style-dropdown glass"
-                  transition:fade={{ duration: 120 }}
-                >
-                  {#each customStyles as style (style.id)}
-                    <button
-                      class="style-row"
-                      data-level={styleLevels[style.name] || 0}
-                      onclick={() => cycleLevel(style.name)}
+                {#each customStyles.slice(0, 3) as style (style.id)}
+                  <button
+                    class="style-chip"
+                    data-level={styleLevels[style.name] || 0}
+                    onclick={() => cycleLevel(style.name)}
+                    onpointerdown={(e) => handleDrag(style.name, e)}
+                  >
+                    <span
+                      class="chip-fill"
+                      style="width: {(styleLevels[style.name] || 0) * 50}%"
+                    ></span>
+                    <span class="chip-text">{style.name}</span>
+                  </button>
+                {/each}
+              </div>
+
+              {#if customStyles.length > 3}
+                <div class="style-dropdown-wrapper">
+                  <button
+                    class="style-chip add-chip"
+                    onclick={() => (compactStylesOpen = !compactStylesOpen)}
+                    class:active={compactStylesOpen}
+                  >
+                    ･･･
+                  </button>
+                  {#if compactStylesOpen}
+                    <div
+                      class="style-dropdown glass"
+                      transition:fade={{ duration: 100 }}
                     >
-                      <span class="style-name">{style.name}</span>
-                      <span class="level-meter">
-                        <span
-                          class="level-fill"
-                          style="width: {(styleLevels[style.name] || 0) * 50}%"
-                        ></span>
-                      </span>
-                    </button>
-                  {/each}
+                      {#each customStyles.slice(3) as style (style.id)}
+                        <button
+                          class="dropdown-item"
+                          data-level={styleLevels[style.name] || 0}
+                          onclick={(e) => {
+                            e.stopPropagation();
+                            cycleLevel(style.name);
+                          }}
+                          onpointerdown={(e) => handleDrag(style.name, e)}
+                        >
+                          <span
+                            class="dropdown-item-fill"
+                            style="width: {(styleLevels[style.name] || 0) *
+                              50}%"
+                          ></span>
+                          <div class="dropdown-item-content">
+                            <span>{style.name}</span>
+                          </div>
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
                 </div>
               {/if}
             </div>
@@ -1796,7 +2041,7 @@
                 {techMetrics.waitTime.toFixed(2)}s
               {/if}
             </span>
-            <span class="tech-divider">|</span>
+            <span class="tech-divider">→</span>
             <span class="tech-item">
               <span class="tech-label">Gen:</span>
               {#if isTranslating}
@@ -2022,7 +2267,13 @@
                                   fill="currentColor"
                                   stroke="none"
                                 >
-                                  <rect x="6" y="6" width="12" height="12" rx="1" />
+                                  <rect
+                                    x="6"
+                                    y="6"
+                                    width="12"
+                                    height="12"
+                                    rx="1"
+                                  />
                                 </svg>
                               {:else}
                                 <svg
@@ -2146,7 +2397,8 @@
                     points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"
                   ></polygon>
                 </svg>
-                <span class="save-label">{t(appLanguage, "saveToFavorites")}</span
+                <span class="save-label"
+                  >{t(appLanguage, "saveToFavorites")}</span
                 >
               </button>
             </div>
@@ -2162,94 +2414,37 @@
   </main>
 {:else}
   <main class="container">
-  <!-- App Header -->
-  <header class="app-header">
-    <div class="header-left">
-      <img
-        src={theme === "light" ? "/icon-light.svg" : "/icon-dark.svg"}
-        alt="Howlingual"
-        class="app-icon"
-      />
-      <h1 class="app-title">Howlingual</h1>
+    <!-- App Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <img
+          src={theme === "light" ? "/icon-light.svg" : "/icon-dark.svg"}
+          alt="Howlingual"
+          class="app-icon"
+        />
+        <h1 class="app-title">Howlingual</h1>
 
-      <!-- Language Direction Header -->
-      <div
-        class="lang-selector-group"
-        style="display: flex; align-items: center; gap: 8px; margin-left: 24px;"
-      >
-        <div class="lang-selector">
-          <button
-            class="lang-btn"
-            class:open={showSourceLangMenu}
-            disabled={isTranslating}
-            onclick={(e) => {
-              e.stopPropagation();
-              showSourceLangMenu = !showSourceLangMenu;
-              showTargetLangMenu = false;
-            }}
-          >
-            {#if isAutoDetect}
-              <svg
-                class="sparkle-icon"
-                class:is-active={isSparkling}
-                class:is-detecting={isDetecting}
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-              >
-                <path
-                  class="star-1"
-                  d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
-                ></path>
-                <path
-                  class="star-2"
-                  d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
-                ></path>
-                <path
-                  class="star-3"
-                  d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
-                ></path>
-              </svg>
-            {/if}
-            {#if isAutoDetect && detectedLang && translations.length > 0}
-              {detectedLang}（{appLanguage === "ja"
-                ? "自動"
-                : appLanguage === "en"
-                  ? "auto"
-                  : appLanguage === "zh"
-                    ? "自动"
-                    : "自務"}）
-            {:else if isAutoDetect}
-              {t(appLanguage, "autoDetect")}
-            {:else}
-              {sourceLang}
-            {/if}
-            <svg
-              class="chevron-icon"
-              width="10"
-              height="10"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
+        <!-- Language Direction Header -->
+        <div
+          class="lang-selector-group"
+          style="display: flex; align-items: center; gap: 8px; margin-left: 24px;"
+        >
+          <div class="lang-selector">
+            <button
+              class="lang-btn"
+              class:open={showSourceLangMenu}
+              disabled={isTranslating}
+              onclick={(e) => {
+                e.stopPropagation();
+                showSourceLangMenu = !showSourceLangMenu;
+                showTargetLangMenu = false;
+              }}
             >
-              <path d="M6 9l6 6 6-6"></path>
-            </svg>
-          </button>
-          {#if showSourceLangMenu}
-            <div
-              class="lang-menu"
-              in:fly={{ y: -5, duration: 200 }}
-              out:fade={{ duration: 150 }}
-            >
-              <button
-                class="lang-option auto-detect {isAutoDetect ? 'active' : ''}"
-                onclick={() => selectSourceLang(null)}
-              >
+              {#if isAutoDetect}
                 <svg
                   class="sparkle-icon"
                   class:is-active={isSparkling}
+                  class:is-detecting={isDetecting}
                   width="16"
                   height="16"
                   viewBox="0 0 24 24"
@@ -2268,394 +2463,287 @@
                     d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
                   ></path>
                 </svg>
-                自動検出
-              </button>
-              <div class="menu-divider"></div>
-              {#each languages as lang}
-                <button
-                  class="lang-option {!isAutoDetect && lang === sourceLang
-                    ? 'active'
-                    : ''}"
-                  onclick={() => selectSourceLang(lang)}>{lang}</button
-                >
-              {/each}
-            </div>
-          {/if}
-        </div>
-
-        <svg
-          class="arrow-icon"
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <path d="M5 12h14M12 5l7 7-7 7"></path>
-        </svg>
-
-        <div class="lang-selector">
-          <button
-            class="lang-btn"
-            class:open={showTargetLangMenu}
-            disabled={isTranslating}
-            onclick={(e) => {
-              e.stopPropagation();
-              showTargetLangMenu = !showTargetLangMenu;
-              showSourceLangMenu = false;
-            }}
-          >
-            {targetLang}
-            <svg
-              class="chevron-icon"
-              width="10"
-              height="10"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path d="M6 9l6 6 6-6"></path>
-            </svg>
-          </button>
-          {#if showTargetLangMenu}
-            <div
-              class="lang-menu"
-              in:fly={{ y: -5, duration: 200 }}
-              out:fade={{ duration: 150 }}
-            >
-              {#each languages as lang}
-                <button
-                  class="lang-option {lang === targetLang ? 'active' : ''}"
-                  onclick={() => selectTargetLang(lang)}>{lang}</button
-                >
-              {/each}
-            </div>
-          {/if}
-        </div>
-      </div>
-    </div>
-
-    <div class="header-right">
-      <button
-        class="icon-btn header-btn history-btn"
-        class:animating={historyAnimating}
-        title={t(appLanguage, "history")}
-        onclick={() => (showHistory = true)}
-        onmouseenter={triggerHistoryAnim}
-      >
-        <svg
-          class="history-icon"
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <circle cx="12" cy="12" r="10"></circle>
-          <polyline class="clock-hands" points="12 6 12 12 16 14"></polyline>
-        </svg>
-      </button>
-      <button
-        class="icon-btn header-btn settings-btn"
-        class:animating={settingsAnimating}
-        title={t(appLanguage, "settings")}
-        onclick={openSettings}
-        onmouseenter={triggerSettingsAnim}
-      >
-        <svg
-          class="settings-icon"
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <circle cx="12" cy="12" r="3"></circle>
-          <path
-            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
-          ></path>
-        </svg>
-      </button>
-    </div>
-  </header>
-
-  <!-- Unified Scroll Container -->
-  <div class="scroll-wrapper" class:at-bottom={isAtBottom}>
-    <section
-      class="main-scroll glass"
-      class:is-scrolling={isScrolling}
-      bind:this={scrollContainerEl}
-      onscroll={onMainScroll}
-    >
-      <!-- Original Text Input -->
-      <div class="input-area">
-        <div class="textarea-container" class:has-overflow={showFade}>
-          <textarea
-            bind:this={textareaEl}
-            bind:value={inputQuery}
-            oninput={autoResize}
-            onscroll={checkScroll}
-            class:long-text={isLongText}
-            placeholder={t(appLanguage, "inputPlaceholder")}
-          ></textarea>
-          <div class="fade-overlay"></div>
-        </div>
-      </div>
-
-      <!-- Sticky Controls Bar (morphs based on scroll state) -->
-      <div class="controls-bar glass" class:scrolled={isScrolledDown}>
-        <!-- Scrolled state: show text preview -->
-        <p class="text-preview" class:visible={isScrolledDown}>
-          {inputQuery}
-        </p>
-        <!-- Default state: show style chips -->
-        <div
-          class="styles-row"
-          class:fade-out={isTranslating}
-          class:hidden={isScrolledDown}
-          bind:this={styleContainerRef}
-        >
-          <!-- Clipper Container for smooth "infinite" feel -->
-          <div
-            style="flex: 1; display: flex; align-items: center; gap: 8px; overflow: hidden; height: 100%; mask-image: linear-gradient(to right, black 90%, transparent 100%);"
-          >
-            {#each visibleStyles as style (style.id)}
-              <button
-                class="style-chip"
-                data-level={styleLevels[style.name] || 0}
-                onclick={() => cycleLevel(style.name)}
-                onpointerdown={(e) => handleDrag(style.name, e)}
-                animate:flip={{ duration: 300, easing: quintOut }}
-                in:receive={{ key: style.id }}
-                out:send={{ key: style.id }}
+              {/if}
+              {#if isAutoDetect && detectedLang && translations.length > 0}
+                {detectedLang}（{appLanguage === "ja"
+                  ? "自動"
+                  : appLanguage === "en"
+                    ? "auto"
+                    : appLanguage === "zh"
+                      ? "自动"
+                      : "自務"}）
+              {:else if isAutoDetect}
+                {t(appLanguage, "autoDetect")}
+              {:else}
+                {sourceLang}
+              {/if}
+              <svg
+                class="chevron-icon"
+                width="10"
+                height="10"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
               >
-                <span
-                  class="chip-fill"
-                  style="width: {(styleLevels[style.name] || 0) * 50}%"
-                ></span>
-                <span class="chip-text">{style.name}</span>
-              </button>
-            {/each}
-          </div>
-
-          <div class="style-dropdown-wrapper">
-            <button
-              class="style-chip add-chip"
-              onclick={() => (styleOverflowOpen = !styleOverflowOpen)}
-              class:active={styleOverflowOpen}
-              class:has-active={hasActiveHiddenStyles}
-            >
-              ･･･
+                <path d="M6 9l6 6 6-6"></path>
+              </svg>
             </button>
-            {#if styleOverflowOpen}
+            {#if showSourceLangMenu}
               <div
-                class="style-dropdown glass"
-                transition:fade={{ duration: 100 }}
+                class="lang-menu"
+                in:fly={{ y: -5, duration: 200 }}
+                out:fade={{ duration: 150 }}
               >
-                {#if hiddenStyles.length > 0}
-                  <div class="dropdown-section-label">
-                    {t(appLanguage, "tabStyles")}
-                  </div>
-                  {#each hiddenStyles as style (style.id)}
-                    <button
-                      class="dropdown-item"
-                      data-level={styleLevels[style.name] || 0}
-                      onclick={() => cycleLevel(style.name)}
-                      onpointerdown={(e) => handleDrag(style.name, e)}
-                      animate:flip={{ duration: 300, easing: quintOut }}
-                      in:receive={{ key: style.id }}
-                      out:send={{ key: style.id }}
-                    >
-                      <span
-                        class="dropdown-item-fill"
-                        style="width: {(styleLevels[style.name] || 0) * 50}%"
-                      ></span>
-                      <div class="dropdown-item-content">
-                        <span>{style.name}</span>
-                      </div>
-                    </button>
-                  {/each}
-                  <div class="dropdown-divider"></div>
-                {/if}
                 <button
-                  class="dropdown-item settings-link"
-                  onclick={() => {
-                    styleOverflowOpen = false;
-                    openStyles();
-                  }}
+                  class="lang-option auto-detect {isAutoDetect ? 'active' : ''}"
+                  onclick={() => selectSourceLang(null)}
                 >
                   <svg
-                    width="14"
-                    height="14"
+                    class="sparkle-icon"
+                    class:is-active={isSparkling}
+                    width="16"
+                    height="16"
                     viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    class="icon-left"
+                    fill="currentColor"
                   >
-                    <path d="M12 20h9"></path>
                     <path
-                      d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"
+                      class="star-1"
+                      d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
+                    ></path>
+                    <path
+                      class="star-2"
+                      d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
+                    ></path>
+                    <path
+                      class="star-3"
+                      d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
                     ></path>
                   </svg>
-                  {t(appLanguage, "settingsTitle")}
+                  自動検出
                 </button>
+                <div class="menu-divider"></div>
+                {#each languages as lang}
+                  <button
+                    class="lang-option {!isAutoDetect && lang === sourceLang
+                      ? 'active'
+                      : ''}"
+                    onclick={() => selectSourceLang(lang)}>{lang}</button
+                  >
+                {/each}
+              </div>
+            {/if}
+          </div>
+
+          <svg
+            class="arrow-icon"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M5 12h14M12 5l7 7-7 7"></path>
+          </svg>
+
+          <div class="lang-selector">
+            <button
+              class="lang-btn"
+              class:open={showTargetLangMenu}
+              disabled={isTranslating}
+              onclick={(e) => {
+                e.stopPropagation();
+                showTargetLangMenu = !showTargetLangMenu;
+                showSourceLangMenu = false;
+              }}
+            >
+              {targetLang}
+              <svg
+                class="chevron-icon"
+                width="10"
+                height="10"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <path d="M6 9l6 6 6-6"></path>
+              </svg>
+            </button>
+            {#if showTargetLangMenu}
+              <div
+                class="lang-menu"
+                in:fly={{ y: -5, duration: 200 }}
+                out:fade={{ duration: 150 }}
+              >
+                {#each languages as lang}
+                  <button
+                    class="lang-option {lang === targetLang ? 'active' : ''}"
+                    onclick={() => selectTargetLang(lang)}>{lang}</button
+                  >
+                {/each}
               </div>
             {/if}
           </div>
         </div>
-
-        <!-- Single action button that morphs -->
-        <button
-          class="action-btn"
-          class:translate-mode={!isScrolledDown}
-          class:scroll-mode={isScrolledDown}
-          class:loading={isTranslating}
-          title={isScrolledDown
-            ? t(appLanguage, "scrollToTop")
-            : t(appLanguage, "translate")}
-          onclick={isScrolledDown ? scrollToTop : startTranslation}
-          disabled={!isScrolledDown && (isTranslating || !inputQuery.trim())}
-        >
-          {#if isScrolledDown}
-            <svg
-              class="btn-icon"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="m18 15-6-6-6 6" />
-            </svg>
-          {:else if isTranslating}
-            <span class="loading-spinner"></span>
-          {:else}
-            <svg
-              class="btn-icon"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="m5 8 6 6" />
-              <path d="m4 14 6-6 2-3" />
-              <path d="M2 5h12" />
-              <path d="M7 2h1" />
-              <path d="m22 22-5-10-5 10" />
-              <path d="M14 18h6" />
-            </svg>
-          {/if}
-        </button>
       </div>
 
-      {#if showTechInfo && (isTranslating || techMetrics.time > 0)}
-        <div class="tech-info-display" transition:fade>
-          <span class="tech-item">
-            <span class="tech-label">Wait:</span>
-            {#if isTranslating && !techMetrics.firstTokenReceived}
-              {techMetrics.time.toFixed(1)}s
-            {:else}
-              {techMetrics.waitTime.toFixed(2)}s
-            {/if}
-          </span>
-          <span class="tech-divider">→</span>
-          <span class="tech-item">
-            <span class="tech-label">Gen:</span>
-            {#if isTranslating}
-              {techMetrics.genTime.toFixed(1)}s
-            {:else}
-              {techMetrics.genTime.toFixed(2)}s
-            {/if}
-          </span>
-          <span class="tech-divider">=</span>
-          <span class="tech-item">
-            <span class="tech-label">Total:</span>
-            {techMetrics.time.toFixed(1)}s
-          </span>
-          <span class="tech-divider">|</span>
-          <span class="tech-item">
-            <span class="tech-label">Model:</span>
-            {techMetrics.model}
-          </span>
-          <span class="tech-divider">|</span>
-          <span class="tech-item tech-tokens">
-            <span class="token-row">
-              <span class="tech-label">In:</span>
-              {#if isTranslating && !techMetrics.isReal}
-                <span class="loading-dots-inline">...</span>
-              {:else}
-                {techMetrics.inputTokens}
-              {/if}
-            </span>
-            <span class="token-row">
-              <span class="tech-label">Out:</span>
-              {#if isTranslating && !techMetrics.isReal}
-                <span class="loading-dots-inline">...</span>
-              {:else}
-                {techMetrics.outputTokens}
-              {/if}
-              {#if techMetrics.tokensPerSec > 0}
-                <span style="opacity: 0.6; margin-left: 4px;"
-                  >({techMetrics.tokensPerSec}/s)</span
-                >
-              {/if}
-            </span>
-          </span>
-        </div>
-      {/if}
+      <div class="header-right">
+        <button
+          class="icon-btn header-btn history-btn"
+          class:animating={historyAnimating}
+          title={t(appLanguage, "history")}
+          onclick={() => (showHistory = true)}
+          onmouseenter={triggerHistoryAnim}
+        >
+          <svg
+            class="history-icon"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline class="clock-hands" points="12 6 12 12 16 14"></polyline>
+          </svg>
+        </button>
+        <button
+          class="icon-btn header-btn settings-btn"
+          class:animating={settingsAnimating}
+          title={t(appLanguage, "settings")}
+          onclick={openSettings}
+          onmouseenter={triggerSettingsAnim}
+        >
+          <svg
+            class="settings-icon"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="12" cy="12" r="3"></circle>
+            <path
+              d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
+            ></path>
+          </svg>
+        </button>
+      </div>
+    </header>
 
-      <!-- Error Display -->
-      {#if errorMessage}
-        <div class="error-display">
-          <div class="error-icon-wrapper">
-            <svg
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              class="error-icon"
-            >
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
-              <line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
+    <!-- Unified Scroll Container -->
+    <div class="scroll-wrapper" class:at-bottom={isAtBottom}>
+      <section
+        class="main-scroll glass"
+        class:is-scrolling={isScrolling}
+        bind:this={scrollContainerEl}
+        onscroll={onMainScroll}
+      >
+        <!-- Original Text Input -->
+        <div class="input-area">
+          <div class="textarea-container" class:has-overflow={showFade}>
+            <textarea
+              bind:this={textareaEl}
+              bind:value={inputQuery}
+              oninput={autoResize}
+              onscroll={checkScroll}
+              class:long-text={isLongText}
+              placeholder={t(appLanguage, "inputPlaceholder")}
+            ></textarea>
+            <div class="fade-overlay"></div>
           </div>
-          <p class="error-message">{errorMessage}</p>
         </div>
-      {/if}
 
-      <!-- Translation Results -->
-      <div class="output-area">
-        {#each translations as item (item.id)}
-          <div class="candidate-card" out:fade={{ duration: 200 }}>
+        <!-- Sticky Controls Bar (morphs based on scroll state) -->
+        <div class="controls-bar glass" class:scrolled={isScrolledDown}>
+          <!-- Scrolled state: show text preview -->
+          <p class="text-preview" class:visible={isScrolledDown}>
+            {inputQuery}
+          </p>
+          <!-- Default state: show style chips -->
+          <div
+            class="styles-row"
+            class:fade-out={isTranslating}
+            class:hidden={isScrolledDown}
+            bind:this={styleContainerRef}
+          >
+            <!-- Clipper Container for smooth "infinite" feel -->
             <div
-              class="card-inner-content"
-              class:content-fade={isTranslating && !item.text}
+              style="flex: 1; display: flex; align-items: center; gap: 8px; overflow: hidden; height: 100%; mask-image: linear-gradient(to right, black 90%, transparent 100%);"
             >
-              <p class="translated-text">{item.text}</p>
-              <div class="card-footer">
-                {#if item.reason}
-                  <p class="reason">
+              {#each visibleStyles as style (style.id)}
+                <button
+                  class="style-chip"
+                  data-level={styleLevels[style.name] || 0}
+                  onclick={() => cycleLevel(style.name)}
+                  onpointerdown={(e) => handleDrag(style.name, e)}
+                  animate:flip={{ duration: 300, easing: quintOut }}
+                  in:receive={{ key: style.id }}
+                  out:send={{ key: style.id }}
+                >
+                  <span
+                    class="chip-fill"
+                    style="width: {(styleLevels[style.name] || 0) * 50}%"
+                  ></span>
+                  <span class="chip-text">{style.name}</span>
+                </button>
+              {/each}
+            </div>
+
+            <div class="style-dropdown-wrapper">
+              <button
+                class="style-chip add-chip"
+                onclick={() => (styleOverflowOpen = !styleOverflowOpen)}
+                class:active={styleOverflowOpen}
+                class:has-active={hasActiveHiddenStyles}
+              >
+                ･･･
+              </button>
+              {#if styleOverflowOpen}
+                <div
+                  class="style-dropdown glass"
+                  transition:fade={{ duration: 100 }}
+                >
+                  {#if hiddenStyles.length > 0}
+                    <div class="dropdown-section-label">
+                      {t(appLanguage, "tabStyles")}
+                    </div>
+                    {#each hiddenStyles as style (style.id)}
+                      <button
+                        class="dropdown-item"
+                        data-level={styleLevels[style.name] || 0}
+                        onclick={() => cycleLevel(style.name)}
+                        onpointerdown={(e) => handleDrag(style.name, e)}
+                        animate:flip={{ duration: 300, easing: quintOut }}
+                        in:receive={{ key: style.id }}
+                        out:send={{ key: style.id }}
+                      >
+                        <span
+                          class="dropdown-item-fill"
+                          style="width: {(styleLevels[style.name] || 0) * 50}%"
+                        ></span>
+                        <div class="dropdown-item-content">
+                          <span>{style.name}</span>
+                        </div>
+                      </button>
+                    {/each}
+                    <div class="dropdown-divider"></div>
+                  {/if}
+                  <button
+                    class="dropdown-item settings-link"
+                    onclick={() => {
+                      styleOverflowOpen = false;
+                      openStyles();
+                    }}
+                  >
                     <svg
                       width="14"
                       height="14"
@@ -2663,282 +2751,453 @@
                       fill="none"
                       stroke="currentColor"
                       stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      style="flex-shrink: 0; margin-top: 2px;"
+                      class="icon-left"
                     >
-                      <circle cx="12" cy="12" r="10"></circle>
-                      <line x1="12" y1="16" x2="12" y2="12"></line>
-                      <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      <path d="M12 20h9"></path>
+                      <path
+                        d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"
+                      ></path>
                     </svg>
-                    <span>{item.reason}</span>
-                  </p>
-                {/if}
-                <div class="candidate-actions" class:hide={!item.text}>
-                  <button
-                    class="icon-btn replace-btn"
-                    class:replaced={replacedId === item.id}
-                    title={t(appLanguage, "replaceSelection")}
-                    onclick={() => handleReplace(item.id, item.text)}
-                  >
-                    {#if replacedId === item.id}
-                      <svg
-                        class="check-icon"
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
-                        <polyline points="20 6 9 17 4 12"></polyline>
-                      </svg>
-                    {:else}
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
-                        <path d="M16 3l5 5-11 11H5v-5L16 3z"></path>
-                        <path d="M15 5l4 4"></path>
-                      </svg>
-                    {/if}
+                    {t(appLanguage, "settingsTitle")}
                   </button>
-                  <div class="action-menu">
-                    <button
-                      class="icon-btn action-menu-trigger"
-                      title={t(appLanguage, "moreActions")}
-                      aria-expanded={actionMenuOpenId === item.id}
-                      onclick={() => toggleActionMenu(item.id)}
-                    >
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
-                        <circle cx="12" cy="6" r="1.5"></circle>
-                        <circle cx="12" cy="12" r="1.5"></circle>
-                        <circle cx="12" cy="18" r="1.5"></circle>
-                      </svg>
-                    </button>
-                    {#if actionMenuOpenId === item.id}
-                      <div class="action-menu-dropdown glass" transition:fade>
-                        <button
-                          class="action-menu-item copy-item"
-                          class:animating={copyAnimating[item.id]}
-                          class:copied={copiedId === item.id}
-                          onclick={() => handleCopy(item.id, item.text)}
-                          onmouseenter={() => triggerCopyAnim(item.id)}
-                        >
-                          <span class="action-menu-icon">
-                            {#if copiedId === item.id}
-                              <svg
-                                class="check-icon"
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2.5"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                              >
-                                <polyline points="20 6 9 17 4 12"></polyline>
-                              </svg>
-                            {:else}
-                              <svg
-                                class="copy-icon"
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                              >
-                                <rect
-                                  x="9"
-                                  y="9"
-                                  width="13"
-                                  height="13"
-                                  rx="2"
-                                  ry="2"
-                                ></rect>
-                                <path
-                                  d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                                ></path>
-                              </svg>
-                            {/if}
-                          </span>
-                          <span>{t(appLanguage, "copy")}</span>
-                        </button>
-                        <button
-                          class="action-menu-item speak-item"
-                          class:active={isSpeakingId === item.id}
-                          class:animating={speakAnimating[item.id]}
-                          onclick={() =>
-                            handleSpeak(item.id, item.text, targetLang)}
-                          onmouseenter={() => triggerSpeakAnim(item.id)}
-                        >
-                          <span class="action-menu-icon">
-                            {#if isSpeakingId === item.id}
-                              <svg
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="currentColor"
-                                stroke="none"
-                              >
-                                <rect x="6" y="6" width="12" height="12" rx="1" />
-                              </svg>
-                            {:else}
-                              <svg
-                                class="speak-icon"
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                style="overflow: visible;"
-                              >
-                                <polygon
-                                  points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
-                                ></polygon>
-                                <path
-                                  class="sound-wave wave-1"
-                                  d="M15.54 8.46a5 5 0 0 1 0 7.07"
-                                ></path>
-                                <path
-                                  class="sound-wave wave-2"
-                                  d="M19.07 4.93a10 10 0 0 1 0 14.14"
-                                ></path>
-                                <path
-                                  class="sound-wave wave-3"
-                                  d="M22.07 1.93a14 14 0 0 1 0 20.14"
-                                ></path>
-                              </svg>
-                            {/if}
-                          </span>
-                          <span>
-                            {isSpeakingId === item.id
-                              ? t(appLanguage, "stop")
-                              : t(appLanguage, "speak")}
-                          </span>
-                        </button>
-                      </div>
-                    {/if}
-                  </div>
                 </div>
-              </div>
+              {/if}
             </div>
           </div>
-        {/each}
 
-        <!-- Explanation -->
-        {#if detailedExplanation && detailedExplanation.points && detailedExplanation.points.length > 0}
-          <div class="explanation-card" transition:fade={{ duration: 200 }}>
-            <h3>
+          <!-- Single action button that morphs -->
+          <button
+            class="action-btn"
+            class:translate-mode={!isScrolledDown}
+            class:scroll-mode={isScrolledDown}
+            class:loading={isTranslating}
+            title={isScrolledDown
+              ? t(appLanguage, "scrollToTop")
+              : t(appLanguage, "translate")}
+            onclick={isScrolledDown ? scrollToTop : startTranslation}
+            disabled={!isScrolledDown && (isTranslating || !inputQuery.trim())}
+          >
+            {#if isScrolledDown}
               <svg
-                width="14"
-                height="14"
+                class="btn-icon"
+                width="20"
+                height="20"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
                 stroke-width="2"
                 stroke-linecap="round"
                 stroke-linejoin="round"
-                class="sparkle-icon"
               >
-                <path
-                  d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .962L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"
-                />
-                <path d="M20 3v4" />
-                <path d="M22 5h-4" />
-                <path d="M4 17v2" />
-                <path d="M5 18H3" />
+                <path d="m18 15-6-6-6 6" />
               </svg>
-              {t(appLanguage, "explanation")}
-            </h3>
-            <ul class="explanation-list">
-              {#each detailedExplanation.points as point}
-                <li>
-                  <strong>{point.term}</strong>: {point.explanation}
-                </li>
-              {/each}
-            </ul>
+            {:else if isTranslating}
+              <span class="loading-spinner"></span>
+            {:else}
+              <svg
+                class="btn-icon"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="m5 8 6 6" />
+                <path d="m4 14 6-6 2-3" />
+                <path d="M2 5h12" />
+                <path d="M7 2h1" />
+                <path d="m22 22-5-10-5 10" />
+                <path d="M14 18h6" />
+              </svg>
+            {/if}
+          </button>
+        </div>
+
+        {#if showTechInfo && (isTranslating || techMetrics.time > 0)}
+          <div class="tech-info-display" transition:fade>
+            <span class="tech-item">
+              <span class="tech-label">Wait:</span>
+              {#if isTranslating && !techMetrics.firstTokenReceived}
+                {techMetrics.time.toFixed(1)}s
+              {:else}
+                {techMetrics.waitTime.toFixed(2)}s
+              {/if}
+            </span>
+            <span class="tech-divider">→</span>
+            <span class="tech-item">
+              <span class="tech-label">Gen:</span>
+              {#if isTranslating}
+                {techMetrics.genTime.toFixed(1)}s
+              {:else}
+                {techMetrics.genTime.toFixed(2)}s
+              {/if}
+            </span>
+            <span class="tech-divider">=</span>
+            <span class="tech-item">
+              <span class="tech-label">Total:</span>
+              {techMetrics.time.toFixed(1)}s
+            </span>
+            <span class="tech-divider">|</span>
+            <span class="tech-item">
+              <span class="tech-label">Model:</span>
+              {techMetrics.model}
+            </span>
+            <span class="tech-divider">|</span>
+            <span class="tech-item tech-tokens">
+              <span class="token-row">
+                <span class="tech-label">In:</span>
+                {#if isTranslating && !techMetrics.isReal}
+                  <span class="loading-dots-inline">...</span>
+                {:else}
+                  {techMetrics.inputTokens}
+                {/if}
+              </span>
+              <span class="token-row">
+                <span class="tech-label">Out:</span>
+                {#if isTranslating && !techMetrics.isReal}
+                  <span class="loading-dots-inline">...</span>
+                {:else}
+                  {techMetrics.outputTokens}
+                {/if}
+                {#if techMetrics.tokensPerSec > 0}
+                  <span style="opacity: 0.6; margin-left: 4px;"
+                    >({techMetrics.tokensPerSec}/s)</span
+                  >
+                {/if}
+              </span>
+            </span>
           </div>
         {/if}
 
-        <!-- Bottom Favorite Button (Small) -->
-        {#if translations.some((t) => t.text) && !isTranslating}
-          <div
-            style="display: flex; justify-content: center; align-items: center; gap: 6px; margin-top: 16px; padding-bottom: 16px;"
-          >
-            <button
-              class="save-favorite-btn"
-              class:active={isFavorited(inputQuery)}
-              class:animating={starAnimatingId === "current"}
-              onclick={() => {
-                const itemToSave = {
-                  id: crypto.randomUUID(),
-                  timestamp: Date.now(),
-                  sourceText: inputQuery,
-                  sourceLang: detectedLang || sourceLang,
-                  targetLang: targetLang,
-                  translations: translations.map((t) => ({
-                    text: t.text,
-                    reason: t.reason,
-                  })),
-                  detailedExplanation: detailedExplanation
-                    ? $state.snapshot(detailedExplanation)
-                    : undefined,
-                  styleLevels: $state.snapshot(styleLevels),
-                };
-                toggleFavorite(itemToSave);
-                if (starAnimatingId === "") triggerStarAnim("current");
-              }}
-              aria-label="Favorite current translation"
-            >
+        <!-- Error Display -->
+        {#if errorMessage}
+          <div class="error-display">
+            <div class="error-icon-wrapper">
               <svg
-                class="save-star-icon"
-                width="14"
-                height="14"
+                width="24"
+                height="24"
                 viewBox="0 0 24 24"
-                fill={isFavorited(inputQuery) ? "currentColor" : "none"}
+                fill="none"
                 stroke="currentColor"
                 stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="error-icon"
               >
-                <polygon
-                  points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"
-                ></polygon>
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
-              <span class="save-label">{t(appLanguage, "saveToFavorites")}</span
-              >
-            </button>
+            </div>
+            <p class="error-message">{errorMessage}</p>
           </div>
         {/if}
-      </div>
-    </section>
-    <!-- Custom scrollbar indicator with fade animation -->
-    <div
-      class="scroll-indicator"
-      class:visible={isScrolling}
-      style="top: {scrollThumbTop}px; height: {scrollThumbHeight}px;"
-    ></div>
-  </div>
-</main>
+
+        <!-- Translation Results -->
+        <div class="output-area">
+          {#each translations as item (item.id)}
+            <div class="candidate-card" out:fade={{ duration: 200 }}>
+              <div
+                class="card-inner-content"
+                class:content-fade={isTranslating && !item.text}
+              >
+                <p class="translated-text">{item.text}</p>
+                <div class="card-footer">
+                  {#if item.reason}
+                    <p class="reason">
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        style="flex-shrink: 0; margin-top: 2px;"
+                      >
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
+                      <span>{item.reason}</span>
+                    </p>
+                  {/if}
+                  <div class="candidate-actions" class:hide={!item.text}>
+                    <button
+                      class="icon-btn replace-btn"
+                      class:replaced={replacedId === item.id}
+                      title={t(appLanguage, "replaceSelection")}
+                      onclick={() => handleReplace(item.id, item.text)}
+                    >
+                      {#if replacedId === item.id}
+                        <svg
+                          class="check-icon"
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2.5"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        >
+                          <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                      {:else}
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        >
+                          <path d="M16 3l5 5-11 11H5v-5L16 3z"></path>
+                          <path d="M15 5l4 4"></path>
+                        </svg>
+                      {/if}
+                    </button>
+                    <div class="action-menu">
+                      <button
+                        class="icon-btn action-menu-trigger"
+                        title={t(appLanguage, "moreActions")}
+                        aria-expanded={actionMenuOpenId === item.id}
+                        onclick={() => toggleActionMenu(item.id)}
+                      >
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        >
+                          <circle cx="12" cy="6" r="1.5"></circle>
+                          <circle cx="12" cy="12" r="1.5"></circle>
+                          <circle cx="12" cy="18" r="1.5"></circle>
+                        </svg>
+                      </button>
+                      {#if actionMenuOpenId === item.id}
+                        <div class="action-menu-dropdown glass" transition:fade>
+                          <button
+                            class="action-menu-item copy-item"
+                            class:animating={copyAnimating[item.id]}
+                            class:copied={copiedId === item.id}
+                            onclick={() => handleCopy(item.id, item.text)}
+                            onmouseenter={() => triggerCopyAnim(item.id)}
+                          >
+                            <span class="action-menu-icon">
+                              {#if copiedId === item.id}
+                                <svg
+                                  class="check-icon"
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2.5"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                >
+                                  <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                              {:else}
+                                <svg
+                                  class="copy-icon"
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                >
+                                  <rect
+                                    x="9"
+                                    y="9"
+                                    width="13"
+                                    height="13"
+                                    rx="2"
+                                    ry="2"
+                                  ></rect>
+                                  <path
+                                    d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                                  ></path>
+                                </svg>
+                              {/if}
+                            </span>
+                            <span>{t(appLanguage, "copy")}</span>
+                          </button>
+                          <button
+                            class="action-menu-item speak-item"
+                            class:active={isSpeakingId === item.id}
+                            class:animating={speakAnimating[item.id]}
+                            onclick={() =>
+                              handleSpeak(item.id, item.text, targetLang)}
+                            onmouseenter={() => triggerSpeakAnim(item.id)}
+                          >
+                            <span class="action-menu-icon">
+                              {#if isSpeakingId === item.id}
+                                <svg
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 24 24"
+                                  fill="currentColor"
+                                  stroke="none"
+                                >
+                                  <rect
+                                    x="6"
+                                    y="6"
+                                    width="12"
+                                    height="12"
+                                    rx="1"
+                                  />
+                                </svg>
+                              {:else}
+                                <svg
+                                  class="speak-icon"
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                  style="overflow: visible;"
+                                >
+                                  <polygon
+                                    points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
+                                  ></polygon>
+                                  <path
+                                    class="sound-wave wave-1"
+                                    d="M15.54 8.46a5 5 0 0 1 0 7.07"
+                                  ></path>
+                                  <path
+                                    class="sound-wave wave-2"
+                                    d="M19.07 4.93a10 10 0 0 1 0 14.14"
+                                  ></path>
+                                  <path
+                                    class="sound-wave wave-3"
+                                    d="M22.07 1.93a14 14 0 0 1 0 20.14"
+                                  ></path>
+                                </svg>
+                              {/if}
+                            </span>
+                            <span>
+                              {isSpeakingId === item.id
+                                ? t(appLanguage, "stop")
+                                : t(appLanguage, "speak")}
+                            </span>
+                          </button>
+                        </div>
+                      {/if}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          {/each}
+
+          <!-- Explanation -->
+          {#if detailedExplanation && detailedExplanation.points && detailedExplanation.points.length > 0}
+            <div class="explanation-card" transition:fade={{ duration: 200 }}>
+              <h3>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  class="sparkle-icon"
+                >
+                  <path
+                    d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .962L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"
+                  />
+                  <path d="M20 3v4" />
+                  <path d="M22 5h-4" />
+                  <path d="M4 17v2" />
+                  <path d="M5 18H3" />
+                </svg>
+                {t(appLanguage, "explanation")}
+              </h3>
+              <ul class="explanation-list">
+                {#each detailedExplanation.points as point}
+                  <li>
+                    <strong>{point.term}</strong>: {point.explanation}
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
+
+          <!-- Bottom Favorite Button (Small) -->
+          {#if translations.some((t) => t.text) && !isTranslating}
+            <div
+              style="display: flex; justify-content: center; align-items: center; gap: 6px; margin-top: 16px; padding-bottom: 16px;"
+            >
+              <button
+                class="save-favorite-btn"
+                class:active={isFavorited(inputQuery)}
+                class:animating={starAnimatingId === "current"}
+                onclick={() => {
+                  const itemToSave = {
+                    id: crypto.randomUUID(),
+                    timestamp: Date.now(),
+                    sourceText: inputQuery,
+                    sourceLang: detectedLang || sourceLang,
+                    targetLang: targetLang,
+                    translations: translations.map((t) => ({
+                      text: t.text,
+                      reason: t.reason,
+                    })),
+                    detailedExplanation: detailedExplanation
+                      ? $state.snapshot(detailedExplanation)
+                      : undefined,
+                    styleLevels: $state.snapshot(styleLevels),
+                  };
+                  toggleFavorite(itemToSave);
+                  if (starAnimatingId === "") triggerStarAnim("current");
+                }}
+                aria-label="Favorite current translation"
+              >
+                <svg
+                  class="save-star-icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill={isFavorited(inputQuery) ? "currentColor" : "none"}
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <polygon
+                    points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"
+                  ></polygon>
+                </svg>
+                <span class="save-label"
+                  >{t(appLanguage, "saveToFavorites")}</span
+                >
+              </button>
+            </div>
+          {/if}
+        </div>
+      </section>
+      <!-- Custom scrollbar indicator with fade animation -->
+      <div
+        class="scroll-indicator"
+        class:visible={isScrolling}
+        style="top: {scrollThumbTop}px; height: {scrollThumbHeight}px;"
+      ></div>
+    </div>
+  </main>
 {/if}
 
 <!-- Settings Modal -->
@@ -3141,6 +3400,50 @@
                     </div>
                   </div>
 
+                  <!-- Auto Run Quick Translate -->
+                  <div class="settings-section">
+                    <div class="settings-label">
+                      {t(appLanguage, "autoRunQuick") ||
+                        "クイック翻訳の自動実行"}
+                    </div>
+                    <div class="settings-card-row">
+                      <span
+                        id="auto-run-label"
+                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                      >
+                        {t(appLanguage, "autoRunQuickDesc") ||
+                          "ショートカット呼出時に自動で翻訳を開始します"}
+                      </span>
+                      <button
+                        onclick={() => (autoRunQuick = !autoRunQuick)}
+                        style="
+                        width: 44px; 
+                        height: 24px; 
+                        background: {autoRunQuick
+                          ? '#3b82f6'
+                          : 'rgba(255,255,255,0.1)'}; 
+                        border-radius: 99px; 
+                        position: relative; 
+                        border: none; 
+                        cursor: pointer;
+                        transition: background 0.2s;"
+                        aria-labelledby="auto-run-label"
+                      >
+                        <div
+                          style="
+                          width: 18px; 
+                          height: 18px; 
+                          background: white; 
+                          border-radius: 50%; 
+                          position: absolute; 
+                          top: 3px; 
+                          left: {autoRunQuick ? '23px' : '3px'}; 
+                          transition: left 0.2s;"
+                        ></div>
+                      </button>
+                    </div>
+                  </div>
+
                   <!-- Technical Info -->
                   <div class="settings-section">
                     <div class="settings-label">
@@ -3197,10 +3500,45 @@
                         bind:value={shortcutDraft}
                         placeholder={t(appLanguage, "quickShortcutHint")}
                         onkeydown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            void applyShortcut();
+                          e.preventDefault();
+                          e.stopPropagation();
+
+                          // Ignore standalone modifier keys
+                          if (
+                            ["Control", "Shift", "Alt", "Meta"].includes(e.key)
+                          ) {
+                            return;
                           }
+
+                          // Reset current draft
+                          let parts = [];
+                          const isMac = navigator.userAgent.includes("Mac");
+
+                          if (e.metaKey) {
+                            if (isMac) parts.push("Command");
+                            else parts.push("Super");
+                          }
+                          if (e.ctrlKey) parts.push("Ctrl");
+                          if (e.altKey) parts.push("Alt");
+                          if (e.shiftKey) parts.push("Shift");
+
+                          // Handle key
+                          let key = e.key.toUpperCase();
+                          if (key === " ") key = "Space";
+                          // Function keys
+                          if (
+                            key.length > 1 &&
+                            !key.startsWith("F") &&
+                            key !== "Space" &&
+                            key !== "ENTER" &&
+                            key !== "TAB"
+                          ) {
+                            // E.g. "PageUp"
+                            // Just use as is
+                          }
+
+                          parts.push(key);
+                          shortcutDraft = parts.join("+");
                         }}
                       />
                       <button
@@ -3844,35 +4182,15 @@
     width: 100%;
     height: 100vh;
     padding: 10px;
-    border-radius: 16px;
-    border: 1px solid var(--border-color);
-    background: linear-gradient(
-      180deg,
-      rgba(20, 20, 25, 0.95),
-      rgba(12, 12, 16, 0.9)
-    );
+    border-radius: 0;
+    border: none;
+    background: var(--bg-color);
     position: relative;
     overflow: visible;
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.3);
   }
 
   .compact-shell::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background:
-      radial-gradient(
-        circle at 20% 0%,
-        rgba(59, 130, 246, 0.18),
-        transparent 45%
-      ),
-      radial-gradient(
-        circle at 90% 100%,
-        rgba(16, 185, 129, 0.12),
-        transparent 50%
-      );
-    opacity: 0.6;
-    pointer-events: none;
+    display: none;
   }
 
   .compact-header {
@@ -4051,8 +4369,8 @@
     position: absolute;
     top: calc(100% + 8px);
     left: 0;
-    width: 220px;
-    max-height: 180px;
+    min-width: 280px;
+    max-height: 300px;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -4062,8 +4380,11 @@
     z-index: 1200;
   }
 
-  .compact-style-dropdown .style-row {
+  .compact-style-dropdown .style-chip {
     width: 100%;
+    justify-content: flex-start;
+    padding: 8px 12px;
+    font-size: 13px;
   }
 
   .style-row {
@@ -4956,7 +5277,9 @@
     border-radius: 8px;
     font-size: 12px;
     cursor: pointer;
-    transition: background 0.2s, color 0.2s;
+    transition:
+      background 0.2s,
+      color 0.2s;
   }
 
   .action-menu-item:hover {
@@ -5995,15 +6318,19 @@
   }
 
   .compact-shell .tech-info-display {
-    flex-wrap: wrap;
-    justify-content: flex-start;
-    gap: 6px 12px;
-    font-size: 10px;
-    align-items: flex-start;
+    flex-wrap: nowrap;
+    justify-content: center;
+    gap: 6px;
+    font-size: 11px;
+    align-items: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .compact-shell .tech-divider {
-    display: none;
+    display: inline;
+    opacity: 0.4;
   }
 
   .compact-shell .tech-item {
@@ -6238,23 +6565,11 @@
   }
 
   :global([data-theme="light"]) .compact-shell {
-    background: rgba(255, 255, 255, 0.96);
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
+    background: var(--bg-color);
   }
 
   :global([data-theme="light"]) .compact-shell::before {
-    background:
-      radial-gradient(
-        circle at 20% 0%,
-        rgba(59, 130, 246, 0.12),
-        transparent 45%
-      ),
-      radial-gradient(
-        circle at 90% 100%,
-        rgba(16, 185, 129, 0.08),
-        transparent 50%
-      );
-    opacity: 0.7;
+    display: none;
   }
 
   :global([data-theme="light"]) .compact-main-btn {
