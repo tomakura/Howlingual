@@ -6,6 +6,7 @@ interface Translations {
 	// Header
 	settings: string;
 	history: string;
+	openMain: string;
 
 	// Language Selection
 	autoDetect: string;
@@ -19,6 +20,8 @@ interface Translations {
 	copy: string;
 	speak: string;
 	stop: string;
+	replaceSelection: string;
+	moreActions: string;
 
 	// Explanation
 	explanation: string;
@@ -57,6 +60,10 @@ interface Translations {
 	aiTabDescription: string;
 	showTechInfo: string;
 	showTechInfoDesc: string;
+	quickShortcut: string;
+	quickShortcutHint: string;
+	applyShortcut: string;
+	shortcutInvalid: string;
 
 	// Styles
 	polite: string;
@@ -78,6 +85,7 @@ const translations: Record<AppLanguage, Translations> = {
 	ja: {
 		settings: "設定",
 		history: "履歴",
+		openMain: "メインを開く",
 		autoDetect: "自動検出",
 		detecting: "検出中...",
 		inputPlaceholder: "テキストを入力または選択...",
@@ -87,6 +95,8 @@ const translations: Record<AppLanguage, Translations> = {
 		copy: "コピー",
 		speak: "読み上げ",
 		stop: "停止",
+		replaceSelection: "選択文を置換",
+		moreActions: "その他の操作",
 		explanation: "解説",
 		settingsTitle: "設定",
 		tabGeneral: "一般",
@@ -121,6 +131,10 @@ const translations: Record<AppLanguage, Translations> = {
 		aiTabDescription: "選択したAIプロバイダーのモデルが有効になります。",
 		showTechInfo: "技術情報を表示",
 		showTechInfoDesc: "翻訳時に処理時間やトークン数を表示します。",
+		quickShortcut: "クイック起動ショートカット",
+		quickShortcutHint: "例: CommandOrControl+Shift+H",
+		applyShortcut: "適用",
+		shortcutInvalid: "ショートカットが無効です",
 		polite: "丁寧",
 		business: "ビジネス",
 		casual: "カジュアル",
@@ -138,6 +152,7 @@ const translations: Record<AppLanguage, Translations> = {
 	en: {
 		settings: "Settings",
 		history: "History",
+		openMain: "Open Main",
 		autoDetect: "Auto-detect",
 		detecting: "Detecting...",
 		inputPlaceholder: "Enter or select text...",
@@ -147,6 +162,8 @@ const translations: Record<AppLanguage, Translations> = {
 		copy: "Copy",
 		speak: "Speak",
 		stop: "Stop",
+		replaceSelection: "Replace selection",
+		moreActions: "More actions",
 		explanation: "Explanation",
 		settingsTitle: "Settings",
 		tabGeneral: "General",
@@ -181,6 +198,10 @@ const translations: Record<AppLanguage, Translations> = {
 		aiTabDescription: "The model from the selected AI provider will be active.",
 		showTechInfo: "Show Technical Info",
 		showTechInfoDesc: "Display processing time and token count during translation.",
+		quickShortcut: "Quick Shortcut",
+		quickShortcutHint: "Example: CommandOrControl+Shift+H",
+		applyShortcut: "Apply",
+		shortcutInvalid: "Invalid shortcut",
 		polite: "Polite",
 		business: "Business",
 		casual: "Casual",
@@ -198,6 +219,7 @@ const translations: Record<AppLanguage, Translations> = {
 	zh: {
 		settings: "设置",
 		history: "历史",
+		openMain: "打开主界面",
 		autoDetect: "自动检测",
 		detecting: "检测中...",
 		inputPlaceholder: "输入或选择文本...",
@@ -207,6 +229,8 @@ const translations: Record<AppLanguage, Translations> = {
 		copy: "复制",
 		speak: "朗读",
 		stop: "停止",
+		replaceSelection: "替换所选",
+		moreActions: "更多操作",
 		explanation: "解说",
 		settingsTitle: "设置",
 		tabGeneral: "常规",
@@ -241,6 +265,10 @@ const translations: Record<AppLanguage, Translations> = {
 		aiTabDescription: "所选AI提供商的模型将处于活动状态。",
 		showTechInfo: "显示技术信息",
 		showTechInfoDesc: "翻译时显示处理时间和令牌计数",
+		quickShortcut: "???????",
+		quickShortcutHint: "?: CommandOrControl+Shift+H",
+		applyShortcut: "??",
+		shortcutInvalid: "?????",
 		polite: "礼貌",
 		business: "商务",
 		casual: "休闲",
@@ -258,6 +286,7 @@ const translations: Record<AppLanguage, Translations> = {
 	ko: {
 		settings: "설정",
 		history: "기록",
+		openMain: "메인 열기",
 		autoDetect: "자동 감지",
 		detecting: "감지 중...",
 		inputPlaceholder: "텍스트를 입력하거나 선택...",
@@ -267,6 +296,8 @@ const translations: Record<AppLanguage, Translations> = {
 		copy: "복사",
 		speak: "읽기",
 		stop: "정지",
+		replaceSelection: "선택 문장 바꾸기",
+		moreActions: "추가 작업",
 		explanation: "설명",
 		settingsTitle: "설정",
 		tabGeneral: "일반",
@@ -301,6 +332,10 @@ const translations: Record<AppLanguage, Translations> = {
 		aiTabDescription: "선택한 AI 제공업체의 모델이 활성화됩니다.",
 		showTechInfo: "기술 정보 표시",
 		showTechInfoDesc: "번역 시 처리 시간 및 토큰 수 표시",
+		quickShortcut: "?? ?? ???",
+		quickShortcutHint: "?: CommandOrControl+Shift+H",
+		applyShortcut: "??",
+		shortcutInvalid: "???? ???? ????",
 		polite: "정중",
 		business: "비즈니스",
 		casual: "캐주얼",

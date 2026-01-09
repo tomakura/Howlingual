@@ -12,7 +12,9 @@
   "app": {
     "windows": [
       {
-        "title": "tauri-apphowlingual",
+        "label": "main",
+        "title": "Howlingual",
+        "url": "/?view=main",
         "width": 800,
         "height": 600,
         "minWidth": 600,

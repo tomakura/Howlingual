@@ -3,6 +3,7 @@
   import { fade, scale, fly, crossfade } from "svelte/transition";
   import { flip } from "svelte/animate";
   import { quintOut } from "svelte/easing";
+  import { invoke } from "@tauri-apps/api/core";
   import { translateTextStream, type AiModel } from "$lib/ai_service";
   import {
     t,
@@ -33,6 +34,12 @@
   let appLanguage = $state<"ja" | "en" | "zh" | "ko">("ja");
   let allowRewrite = $state(false);
   let selectedProvider = $state<"openai" | "gemini" | "anthropic">("openai");
+  let isCompactMode = $state(false);
+  const DEFAULT_SHORTCUT = "CommandOrControl+Shift+H";
+  let quickShortcut = $state(DEFAULT_SHORTCUT);
+  let shortcutDraft = $state(DEFAULT_SHORTCUT);
+  let shortcutError = $state("");
+  let shortcutSaving = $state(false);
 
   let historyAnimating = $state(false);
   function triggerHistoryAnim() {
@@ -174,8 +181,36 @@
     availableModels.filter((m) => m.provider === selectedProvider),
   );
 
+  async function detectWindowMode() {
+    const params = new URLSearchParams(window.location.search);
+    const viewParam = params.get("view");
+    if (viewParam === "compact") {
+      isCompactMode = true;
+      await tick();
+      autoResize();
+      return;
+    }
+    if (viewParam === "main") {
+      isCompactMode = false;
+      await tick();
+      autoResize();
+      return;
+    }
+
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      isCompactMode = getCurrentWindow().label === "compact";
+      await tick();
+      autoResize();
+      return;
+    } catch (error) {
+      console.warn("Window mode detection failed:", error);
+    }
+  }
+
   // Load settings on mount
   onMount(() => {
+    void detectWindowMode();
     const saved = localStorage.getItem("howlingual_settings");
     if (saved) {
       try {
@@ -195,6 +230,7 @@
         if (parsed.customStyles) customStyles = parsed.customStyles;
         if (parsed.allowRewrite !== undefined)
           allowRewrite = parsed.allowRewrite;
+        if (parsed.quickShortcut) quickShortcut = parsed.quickShortcut;
 
         // Apply theme on load
         document.documentElement.setAttribute("data-theme", theme);
@@ -202,6 +238,31 @@
         console.warn("Failed to parse saved settings", e);
       }
     }
+
+    shortcutDraft = quickShortcut;
+    const viewParam = new URLSearchParams(window.location.search).get("view");
+    if (viewParam !== "compact") {
+      void syncShortcut();
+    }
+  });
+
+  onMount(() => {
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen<string>("quick-text", async (event) => {
+          if (typeof event.payload !== "string") return;
+          await applyQuickText(event.payload);
+        });
+      } catch (error) {
+        console.warn("Quick text listener failed:", error);
+      }
+    })();
+
+    return () => {
+      if (unlisten) unlisten();
+    };
   });
 
   // Auto-save settings when changed
@@ -214,6 +275,7 @@
       appLanguage: appLanguage,
       customStyles: customStyles,
       allowRewrite: allowRewrite,
+      quickShortcut: quickShortcut,
     };
     localStorage.setItem("howlingual_settings", JSON.stringify(settings));
 
@@ -233,6 +295,10 @@
     メール: 0,
     簡潔: 0,
   });
+  let compactStylesOpen = $state(false);
+  let activeStyleCount = $derived(
+    Object.values(styleLevels).filter((level) => level > 0).length,
+  );
 
   // Sync styleLevels with customStyles
   $effect(() => {
@@ -315,6 +381,11 @@
         document.activeElement.blur();
       }
 
+      if (actionMenuOpenId !== null) {
+        actionMenuOpenId = null;
+        return;
+      }
+
       if (showResetConfirmation) {
         showResetConfirmation = false;
         return;
@@ -394,6 +465,68 @@
 
   function closeSettings() {
     showSettings = false;
+  }
+
+  async function openMainScreen() {
+    try {
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      let target = await WebviewWindow.getByLabel("main");
+      if (!target) {
+        target = new WebviewWindow("main", {
+          title: "Howlingual",
+          url: "/?view=main",
+          width: 800,
+          height: 600,
+          minWidth: 600,
+          minHeight: 400,
+          resizable: true,
+          decorations: true,
+        });
+      }
+      await target.show();
+      await target.setFocus();
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      const current = getCurrentWindow();
+      if (current.label === "compact") {
+        await current.hide();
+      }
+      return;
+    } catch (error) {
+      console.warn("Main window open failed:", error);
+    }
+  }
+
+  async function syncShortcut() {
+    try {
+      await invoke("update_shortcut", { shortcut: quickShortcut });
+      shortcutError = "";
+    } catch (error) {
+      console.warn("Shortcut sync failed:", error);
+    }
+  }
+
+  async function applyShortcut() {
+    const nextShortcut = shortcutDraft.trim();
+    if (!nextShortcut) {
+      shortcutError = t(appLanguage, "shortcutInvalid");
+      return;
+    }
+    if (nextShortcut === quickShortcut) {
+      shortcutError = "";
+      return;
+    }
+    shortcutSaving = true;
+    try {
+      await invoke("update_shortcut", { shortcut: nextShortcut });
+      quickShortcut = nextShortcut;
+      shortcutDraft = nextShortcut;
+      shortcutError = "";
+    } catch (error) {
+      console.warn("Shortcut update failed:", error);
+      shortcutError = t(appLanguage, "shortcutInvalid");
+    } finally {
+      shortcutSaving = false;
+    }
   }
 
   // Use selected model for translations (instead of env variable)
@@ -490,11 +623,15 @@
         !target.closest(".lang-selector") &&
         !target.closest(".style-dropdown-wrapper") &&
         !target.closest(".settings-panel") && // Added to close settings on outside click
-        !target.closest(".history-panel") // Added to close history on outside click
+        !target.closest(".history-panel") && // Added to close history on outside click
+        !target.closest(".compact-style") &&
+        !target.closest(".action-menu")
       ) {
         showSourceLangMenu = false;
         showTargetLangMenu = false;
         styleOverflowOpen = false;
+        compactStylesOpen = false;
+        actionMenuOpenId = null;
         showSettings = false; // Close settings
         showHistory = false; // Close history
       }
@@ -507,14 +644,35 @@
 
   // Copy feedback state
   let copiedId: number | null = $state(null);
+  let replacedId: number | null = $state(null);
+  let actionMenuOpenId: number | null = $state(null);
 
   function handleCopy(id: number, text: string) {
     console.log(`[UI] Copy triggered for ID: ${id}`);
     navigator.clipboard.writeText(text);
+    actionMenuOpenId = null;
     copiedId = id;
     setTimeout(() => {
       copiedId = null;
     }, 1500);
+  }
+
+  async function handleReplace(id: number, text: string) {
+    console.log(`[UI] Replace triggered for ID: ${id}`);
+    actionMenuOpenId = null;
+    try {
+      await navigator.clipboard.writeText(text);
+      replacedId = id;
+      setTimeout(() => {
+        if (replacedId === id) replacedId = null;
+      }, 1500);
+    } catch (error) {
+      console.warn("Replace failed:", error);
+    }
+  }
+
+  function toggleActionMenu(id: number) {
+    actionMenuOpenId = actionMenuOpenId === id ? null : id;
   }
 
   // Button animation states (to prevent animation interruption on hover end)
@@ -533,6 +691,7 @@
 
   function handleSpeak(id: number, text: string, lang: string) {
     if (!window.speechSynthesis) return;
+    actionMenuOpenId = null;
 
     // If already speaking THIS card, stop it
     if (isSpeakingId === id) {
@@ -674,7 +833,7 @@
 
     // Limit to approx 10 lines (13px * 1.5 * 10 = ~195px, let's say 200px)
     // If shrinking font isn't enough, we cap it and allow scroll
-    const maxHeight = 200;
+    const maxHeight = isCompactMode ? 120 : 200;
 
     if (scrollHeight > maxHeight) {
       textareaEl.style.height = maxHeight + "px";
@@ -686,6 +845,13 @@
 
     // Update scroll fade
     checkScroll();
+  }
+
+  async function applyQuickText(text: string) {
+    inputQuery = text;
+    await tick();
+    await autoResize();
+    if (textareaEl) textareaEl.focus();
   }
 
   let showFade = $state(false);
@@ -826,6 +992,20 @@
     styleLevels: Record<string, number>;
   };
 
+  type LastResultSnapshot = {
+    timestamp: number;
+    sourceText: string;
+    sourceLang: string;
+    targetLang: string;
+    detectedLang: string;
+    isAutoDetect: boolean;
+    translations: { text: string; reason: string }[];
+    detailedExplanation: {
+      points: { term: string; explanation: string }[];
+    } | null;
+    styleLevels: Record<string, number>;
+  };
+
   let history: HistoryItem[] = $state([]);
   let favorites: HistoryItem[] = $state([]);
   let showHistory = $state(false);
@@ -917,6 +1097,24 @@
         console.error("Failed to load favorites", e);
       }
     }
+
+    loadLastResult();
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === LAST_RESULT_KEY && event.newValue) {
+        loadLastResult();
+      }
+    };
+    const handleFocus = () => {
+      loadLastResult();
+    };
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("focus", handleFocus);
+    };
   });
 
   function loadHistory(item: HistoryItem) {
@@ -959,12 +1157,74 @@
       styleLevels = { ...styleLevels, ...item.styleLevels };
     }
 
+    persistLastResult();
+
     showHistory = false;
   }
 
   function clearHistory() {
     history = [];
     localStorage.removeItem("howlingual_history");
+  }
+
+  const LAST_RESULT_KEY = "howlingual_last_result";
+
+  function persistLastResult() {
+    if (!translations.some((t) => t.text)) return;
+    const snapshot: LastResultSnapshot = {
+      timestamp: Date.now(),
+      sourceText: inputQuery,
+      sourceLang: sourceLang,
+      targetLang: targetLang,
+      detectedLang: detectedLang,
+      isAutoDetect: isAutoDetect,
+      translations: translations.map((t) => ({
+        text: t.text,
+        reason: t.reason,
+      })),
+      detailedExplanation: detailedExplanation
+        ? $state.snapshot(detailedExplanation)
+        : null,
+      styleLevels: $state.snapshot(styleLevels),
+    };
+    localStorage.setItem(LAST_RESULT_KEY, JSON.stringify(snapshot));
+  }
+
+  function applyLastResult(snapshot: LastResultSnapshot) {
+    if (!snapshot || isTranslating) return;
+    if (!Array.isArray(snapshot.translations)) return;
+    inputQuery = snapshot.sourceText || "";
+    isAutoDetect = snapshot.isAutoDetect;
+    sourceLang = snapshot.sourceLang || sourceLang;
+    targetLang = snapshot.targetLang || targetLang;
+    detectedLang = snapshot.detectedLang || "";
+    translations = snapshot.translations.map((t, i) => ({
+      id: i + 1,
+      text: t.text,
+      reason: t.reason,
+    }));
+    if (snapshot.detailedExplanation?.points?.length) {
+      detailedExplanation = snapshot.detailedExplanation;
+      showExplanation = true;
+    } else {
+      detailedExplanation = null;
+      showExplanation = false;
+    }
+    styleLevels = { ...styleLevels, ...snapshot.styleLevels };
+  }
+
+  function loadLastResult() {
+    if (isTranslating) return;
+    const saved = localStorage.getItem(LAST_RESULT_KEY);
+    if (!saved) return;
+    try {
+      const parsed = JSON.parse(saved) as LastResultSnapshot;
+      if (parsed && parsed.sourceText) {
+        applyLastResult(parsed);
+      }
+    } catch (error) {
+      console.warn("Failed to load last result", error);
+    }
   }
 
   let showTechInfo = $state(false);
@@ -1180,6 +1440,8 @@
         localStorage.setItem("howlingual_history", JSON.stringify(history));
       }
 
+      persistLastResult();
+
       // Final check for detecting state just in case
       if (isAutoDetect) isDetecting = false;
     } catch (error) {
@@ -1202,7 +1464,704 @@
 
 <svelte:window onkeydown={handleWindowKeydown} onresize={checkBottomPosition} />
 
-<main class="container">
+{#if isCompactMode}
+  <main class="compact-shell">
+    <header class="compact-header">
+      <div class="compact-brand">
+        <img
+          src={theme === "light" ? "/icon-light.svg" : "/icon-dark.svg"}
+          alt="Howlingual"
+          class="app-icon compact-icon"
+        />
+        <span class="compact-name">Howlingual</span>
+      </div>
+      <button
+        class="compact-main-btn"
+        onclick={openMainScreen}
+        title={t(appLanguage, "openMain")}
+      >
+        <span>{t(appLanguage, "openMain")}</span>
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M5 12h14"></path>
+          <path d="M13 5l7 7-7 7"></path>
+        </svg>
+      </button>
+    </header>
+
+    <div class="compact-lang-row">
+      <div class="lang-selector-group compact-lang-group">
+        <div class="lang-selector">
+          <button
+            class="lang-btn"
+            class:open={showSourceLangMenu}
+            disabled={isTranslating}
+            onclick={(e) => {
+              e.stopPropagation();
+              showSourceLangMenu = !showSourceLangMenu;
+              showTargetLangMenu = false;
+            }}
+          >
+            {#if isAutoDetect}
+              <svg
+                class="sparkle-icon"
+                class:is-active={isSparkling}
+                class:is-detecting={isDetecting}
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <path
+                  class="star-1"
+                  d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
+                ></path>
+                <path
+                  class="star-2"
+                  d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
+                ></path>
+                <path
+                  class="star-3"
+                  d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
+                ></path>
+              </svg>
+            {/if}
+            {#if isAutoDetect && detectedLang && translations.length > 0}
+              {detectedLang}・{appLanguage === "ja"
+                ? "検出"
+                : appLanguage === "en"
+                  ? "auto"
+                  : appLanguage === "zh"
+                    ? "检测"
+                    : "감지"}・
+            {:else if isAutoDetect}
+              {t(appLanguage, "autoDetect")}
+            {:else}
+              {sourceLang}
+            {/if}
+            <svg
+              class="chevron-icon"
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M6 9l6 6 6-6"></path>
+            </svg>
+          </button>
+          {#if showSourceLangMenu}
+            <div
+              class="lang-menu"
+              in:fly={{ y: -5, duration: 200 }}
+              out:fade={{ duration: 150 }}
+            >
+              <button
+                class="lang-option auto-detect {isAutoDetect ? 'active' : ''}"
+                onclick={() => selectSourceLang(null)}
+              >
+                <svg
+                  class="sparkle-icon"
+                  class:is-active={isSparkling}
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                >
+                  <path
+                    class="star-1"
+                    d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
+                  ></path>
+                  <path
+                    class="star-2"
+                    d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
+                  ></path>
+                  <path
+                    class="star-3"
+                    d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
+                  ></path>
+                </svg>
+                自動検出
+              </button>
+              <div class="menu-divider"></div>
+              {#each languages as lang}
+                <button
+                  class="lang-option {!isAutoDetect && lang === sourceLang
+                    ? 'active'
+                    : ''}"
+                  onclick={() => selectSourceLang(lang)}>{lang}</button
+                >
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <svg
+          class="arrow-icon"
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path d="M5 12h14M12 5l7 7-7 7"></path>
+        </svg>
+
+        <div class="lang-selector">
+          <button
+            class="lang-btn"
+            class:open={showTargetLangMenu}
+            disabled={isTranslating}
+            onclick={(e) => {
+              e.stopPropagation();
+              showTargetLangMenu = !showTargetLangMenu;
+              showSourceLangMenu = false;
+            }}
+          >
+            {targetLang}
+            <svg
+              class="chevron-icon"
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M6 9l6 6 6-6"></path>
+            </svg>
+          </button>
+          {#if showTargetLangMenu}
+            <div
+              class="lang-menu"
+              in:fly={{ y: -5, duration: 200 }}
+              out:fade={{ duration: 150 }}
+            >
+              {#each languages as lang}
+                <button
+                  class="lang-option {lang === targetLang ? 'active' : ''}"
+                  onclick={() => selectTargetLang(lang)}>{lang}</button
+                >
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
+    </div>
+
+    <div class="scroll-wrapper compact-scroll-wrapper" class:at-bottom={isAtBottom}>
+      <section
+        class="main-scroll glass compact-scroll"
+        class:is-scrolling={isScrolling}
+        bind:this={scrollContainerEl}
+        onscroll={onMainScroll}
+      >
+        <!-- Original Text Input -->
+        <div class="input-area compact-input-area">
+          <div class="textarea-container" class:has-overflow={showFade}>
+            <textarea
+              bind:this={textareaEl}
+              bind:value={inputQuery}
+              oninput={autoResize}
+              onscroll={checkScroll}
+              class:long-text={isLongText}
+              class="compact-textarea"
+              placeholder={t(appLanguage, "inputPlaceholder")}
+            ></textarea>
+            <div class="fade-overlay"></div>
+          </div>
+        </div>
+
+        <!-- Sticky Controls Bar (morphs based on scroll state) -->
+        <div class="controls-bar glass compact-controls" class:scrolled={isScrolledDown}>
+          <p class="text-preview" class:visible={isScrolledDown}>
+            {inputQuery}
+          </p>
+          <div class="compact-style-row" class:hidden={isScrolledDown}>
+            <div class="compact-style-wrapper">
+              <button
+                class="compact-style-chip"
+                class:open={compactStylesOpen}
+                aria-expanded={compactStylesOpen}
+                onclick={() => (compactStylesOpen = !compactStylesOpen)}
+              >
+                <span class="chip-text">{t(appLanguage, "tabStyles")}</span>
+                {#if activeStyleCount > 0}
+                  <span class="chip-count">{activeStyleCount}</span>
+                {/if}
+                <svg
+                  class="chip-chevron"
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path d="M6 9l6 6 6-6"></path>
+                </svg>
+              </button>
+              {#if compactStylesOpen}
+                <div
+                  class="compact-style-dropdown glass"
+                  transition:fade={{ duration: 120 }}
+                >
+                  {#each customStyles as style (style.id)}
+                    <button
+                      class="style-row"
+                      data-level={styleLevels[style.name] || 0}
+                      onclick={() => cycleLevel(style.name)}
+                    >
+                      <span class="style-name">{style.name}</span>
+                      <span class="level-meter">
+                        <span
+                          class="level-fill"
+                          style="width: {(styleLevels[style.name] || 0) * 50}%"
+                        ></span>
+                      </span>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </div>
+
+          <button
+            class="action-btn"
+            class:translate-mode={!isScrolledDown}
+            class:scroll-mode={isScrolledDown}
+            class:loading={isTranslating}
+            title={isScrolledDown
+              ? t(appLanguage, "scrollToTop")
+              : t(appLanguage, "translate")}
+            onclick={isScrolledDown ? scrollToTop : startTranslation}
+            disabled={!isScrolledDown && (isTranslating || !inputQuery.trim())}
+          >
+            {#if isScrolledDown}
+              <svg
+                class="btn-icon"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="m18 15-6-6-6 6" />
+              </svg>
+            {:else if isTranslating}
+              <span class="loading-spinner"></span>
+            {:else}
+              <svg
+                class="btn-icon"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="m5 8 6 6" />
+                <path d="m4 14 6-6 2-3" />
+                <path d="M2 5h12" />
+                <path d="M7 2h1" />
+                <path d="m22 22-5-10-5 10" />
+                <path d="M14 18h6" />
+              </svg>
+            {/if}
+          </button>
+        </div>
+
+        {#if showTechInfo && (isTranslating || techMetrics.time > 0)}
+          <div class="tech-info-display" transition:fade>
+            <span class="tech-item">
+              <span class="tech-label">Wait:</span>
+              {#if isTranslating && !techMetrics.firstTokenReceived}
+                {techMetrics.time.toFixed(1)}s
+              {:else}
+                {techMetrics.waitTime.toFixed(2)}s
+              {/if}
+            </span>
+            <span class="tech-divider">|</span>
+            <span class="tech-item">
+              <span class="tech-label">Gen:</span>
+              {#if isTranslating}
+                {techMetrics.genTime.toFixed(1)}s
+              {:else}
+                {techMetrics.genTime.toFixed(2)}s
+              {/if}
+            </span>
+            <span class="tech-divider">=</span>
+            <span class="tech-item">
+              <span class="tech-label">Total:</span>
+              {techMetrics.time.toFixed(1)}s
+            </span>
+            <span class="tech-divider">|</span>
+            <span class="tech-item">
+              <span class="tech-label">Model:</span>
+              {techMetrics.model}
+            </span>
+            <span class="tech-divider">|</span>
+            <span class="tech-item tech-tokens">
+              <span class="token-row">
+                <span class="tech-label">In:</span>
+                {#if isTranslating && !techMetrics.isReal}
+                  <span class="loading-dots-inline">...</span>
+                {:else}
+                  {techMetrics.inputTokens}
+                {/if}
+              </span>
+              <span class="token-row">
+                <span class="tech-label">Out:</span>
+                {#if isTranslating && !techMetrics.isReal}
+                  <span class="loading-dots-inline">...</span>
+                {:else}
+                  {techMetrics.outputTokens}
+                {/if}
+                {#if techMetrics.tokensPerSec > 0}
+                  <span style="opacity: 0.6; margin-left: 4px;"
+                    >({techMetrics.tokensPerSec}/s)</span
+                  >
+                {/if}
+              </span>
+            </span>
+          </div>
+        {/if}
+
+        <!-- Error Display -->
+        {#if errorMessage}
+          <div class="error-display">
+            <div class="error-icon-wrapper">
+              <svg
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="error-icon"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+            </div>
+            <p class="error-message">{errorMessage}</p>
+          </div>
+        {/if}
+
+        <!-- Translation Results -->
+        <div class="output-area compact-output">
+          {#each translations as item (item.id)}
+            <div class="candidate-card" out:fade={{ duration: 200 }}>
+              <div
+                class="card-inner-content"
+                class:content-fade={isTranslating && !item.text}
+              >
+                <p class="translated-text">{item.text}</p>
+                <div class="card-footer">
+                  {#if item.reason}
+                    <p class="reason">
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        style="flex-shrink: 0; margin-top: 2px;"
+                      >
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
+                      <span>{item.reason}</span>
+                    </p>
+                  {/if}
+                  <div class="candidate-actions" class:hide={!item.text}>
+                    <button
+                      class="icon-btn replace-btn"
+                      class:replaced={replacedId === item.id}
+                      title={t(appLanguage, "replaceSelection")}
+                      onclick={() => handleReplace(item.id, item.text)}
+                    >
+                      {#if replacedId === item.id}
+                        <svg
+                          class="check-icon"
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2.5"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        >
+                          <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                      {:else}
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        >
+                          <path d="M16 3l5 5-11 11H5v-5L16 3z"></path>
+                          <path d="M15 5l4 4"></path>
+                        </svg>
+                      {/if}
+                    </button>
+                    <div class="action-menu">
+                      <button
+                        class="icon-btn action-menu-trigger"
+                        title={t(appLanguage, "moreActions")}
+                        aria-expanded={actionMenuOpenId === item.id}
+                        onclick={() => toggleActionMenu(item.id)}
+                      >
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        >
+                          <circle cx="12" cy="6" r="1.5"></circle>
+                          <circle cx="12" cy="12" r="1.5"></circle>
+                          <circle cx="12" cy="18" r="1.5"></circle>
+                        </svg>
+                      </button>
+                      {#if actionMenuOpenId === item.id}
+                        <div class="action-menu-dropdown glass" transition:fade>
+                          <button
+                            class="action-menu-item copy-item"
+                            class:animating={copyAnimating[item.id]}
+                            class:copied={copiedId === item.id}
+                            onclick={() => handleCopy(item.id, item.text)}
+                            onmouseenter={() => triggerCopyAnim(item.id)}
+                          >
+                            <span class="action-menu-icon">
+                              {#if copiedId === item.id}
+                                <svg
+                                  class="check-icon"
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2.5"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                >
+                                  <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                              {:else}
+                                <svg
+                                  class="copy-icon"
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                >
+                                  <rect
+                                    x="9"
+                                    y="9"
+                                    width="13"
+                                    height="13"
+                                    rx="2"
+                                    ry="2"
+                                  ></rect>
+                                  <path
+                                    d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                                  ></path>
+                                </svg>
+                              {/if}
+                            </span>
+                            <span>{t(appLanguage, "copy")}</span>
+                          </button>
+                          <button
+                            class="action-menu-item speak-item"
+                            class:active={isSpeakingId === item.id}
+                            class:animating={speakAnimating[item.id]}
+                            onclick={() =>
+                              handleSpeak(item.id, item.text, targetLang)}
+                            onmouseenter={() => triggerSpeakAnim(item.id)}
+                          >
+                            <span class="action-menu-icon">
+                              {#if isSpeakingId === item.id}
+                                <svg
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 24 24"
+                                  fill="currentColor"
+                                  stroke="none"
+                                >
+                                  <rect x="6" y="6" width="12" height="12" rx="1" />
+                                </svg>
+                              {:else}
+                                <svg
+                                  class="speak-icon"
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                  style="overflow: visible;"
+                                >
+                                  <polygon
+                                    points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
+                                  ></polygon>
+                                  <path
+                                    class="sound-wave wave-1"
+                                    d="M15.54 8.46a5 5 0 0 1 0 7.07"
+                                  ></path>
+                                  <path
+                                    class="sound-wave wave-2"
+                                    d="M19.07 4.93a10 10 0 0 1 0 14.14"
+                                  ></path>
+                                  <path
+                                    class="sound-wave wave-3"
+                                    d="M22.07 1.93a14 14 0 0 1 0 20.14"
+                                  ></path>
+                                </svg>
+                              {/if}
+                            </span>
+                            <span>
+                              {isSpeakingId === item.id
+                                ? t(appLanguage, "stop")
+                                : t(appLanguage, "speak")}
+                            </span>
+                          </button>
+                        </div>
+                      {/if}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          {/each}
+
+          <!-- Explanation -->
+          {#if detailedExplanation && detailedExplanation.points && detailedExplanation.points.length > 0}
+            <div class="explanation-card" transition:fade={{ duration: 200 }}>
+              <h3>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  class="sparkle-icon"
+                >
+                  <path
+                    d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .962L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"
+                  />
+                  <path d="M20 3v4" />
+                  <path d="M22 5h-4" />
+                  <path d="M4 17v2" />
+                  <path d="M5 18H3" />
+                </svg>
+                {t(appLanguage, "explanation")}
+              </h3>
+              <ul class="explanation-list">
+                {#each detailedExplanation.points as point}
+                  <li>
+                    <strong>{point.term}</strong>: {point.explanation}
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
+
+          <!-- Bottom Favorite Button (Small) -->
+          {#if translations.some((t) => t.text) && !isTranslating}
+            <div
+              style="display: flex; justify-content: center; align-items: center; gap: 6px; margin-top: 16px; padding-bottom: 16px;"
+            >
+              <button
+                class="save-favorite-btn"
+                class:active={isFavorited(inputQuery)}
+                class:animating={starAnimatingId === "current"}
+                onclick={() => {
+                  const itemToSave = {
+                    id: crypto.randomUUID(),
+                    timestamp: Date.now(),
+                    sourceText: inputQuery,
+                    sourceLang: detectedLang || sourceLang,
+                    targetLang: targetLang,
+                    translations: translations.map((t) => ({
+                      text: t.text,
+                      reason: t.reason,
+                    })),
+                    detailedExplanation: detailedExplanation
+                      ? $state.snapshot(detailedExplanation)
+                      : undefined,
+                    styleLevels: $state.snapshot(styleLevels),
+                  };
+                  toggleFavorite(itemToSave);
+                  if (starAnimatingId === "") triggerStarAnim("current");
+                }}
+                aria-label="Favorite current translation"
+              >
+                <svg
+                  class="save-star-icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill={isFavorited(inputQuery) ? "currentColor" : "none"}
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <polygon
+                    points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"
+                  ></polygon>
+                </svg>
+                <span class="save-label">{t(appLanguage, "saveToFavorites")}</span
+                >
+              </button>
+            </div>
+          {/if}
+        </div>
+      </section>
+      <div
+        class="scroll-indicator"
+        class:visible={isScrolling}
+        style="top: {scrollThumbTop}px; height: {scrollThumbHeight}px;"
+      ></div>
+    </div>
+  </main>
+{:else}
+  <main class="container">
   <!-- App Header -->
   <header class="app-header">
     <div class="header-left">
@@ -1717,14 +2676,12 @@
                 {/if}
                 <div class="candidate-actions" class:hide={!item.text}>
                   <button
-                    class="icon-btn copy-btn"
-                    class:copied={copiedId === item.id}
-                    class:animating={copyAnimating[item.id]}
-                    title={t(appLanguage, "copy")}
-                    onclick={() => handleCopy(item.id, item.text)}
-                    onmouseenter={() => triggerCopyAnim(item.id)}
+                    class="icon-btn replace-btn"
+                    class:replaced={replacedId === item.id}
+                    title={t(appLanguage, "replaceSelection")}
+                    onclick={() => handleReplace(item.id, item.text)}
                   >
-                    {#if copiedId === item.id}
+                    {#if replacedId === item.id}
                       <svg
                         class="check-icon"
                         width="14"
@@ -1740,70 +2697,149 @@
                       </svg>
                     {:else}
                       <svg
-                        class="copy-icon"
                         width="14"
                         height="14"
                         viewBox="0 0 24 24"
                         fill="none"
                         stroke="currentColor"
                         stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
                       >
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"
-                        ></rect>
-                        <path
-                          d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                        ></path>
+                        <path d="M16 3l5 5-11 11H5v-5L16 3z"></path>
+                        <path d="M15 5l4 4"></path>
                       </svg>
                     {/if}
                   </button>
-                  <button
-                    class="icon-btn speak-btn"
-                    class:active={isSpeakingId === item.id}
-                    class:animating={speakAnimating[item.id]}
-                    title={isSpeakingId === item.id
-                      ? t(appLanguage, "stop")
-                      : t(appLanguage, "speak")}
-                    onclick={() => handleSpeak(item.id, item.text, targetLang)}
-                    onmouseenter={() => triggerSpeakAnim(item.id)}
-                  >
-                    {#if isSpeakingId === item.id}
+                  <div class="action-menu">
+                    <button
+                      class="icon-btn action-menu-trigger"
+                      title={t(appLanguage, "moreActions")}
+                      aria-expanded={actionMenuOpenId === item.id}
+                      onclick={() => toggleActionMenu(item.id)}
+                    >
                       <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="currentColor"
-                        stroke="none"
-                      >
-                        <rect x="6" y="6" width="12" height="12" rx="1" />
-                      </svg>
-                    {:else}
-                      <svg
-                        class="speak-icon"
                         width="14"
                         height="14"
                         viewBox="0 0 24 24"
                         fill="none"
                         stroke="currentColor"
                         stroke-width="2"
-                        style="overflow: visible;"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
                       >
-                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
-                        ></polygon>
-                        <path
-                          class="sound-wave wave-1"
-                          d="M15.54 8.46a5 5 0 0 1 0 7.07"
-                        ></path>
-                        <path
-                          class="sound-wave wave-2"
-                          d="M19.07 4.93a10 10 0 0 1 0 14.14"
-                        ></path>
-                        <path
-                          class="sound-wave wave-3"
-                          d="M22.07 1.93a14 14 0 0 1 0 20.14"
-                        ></path>
+                        <circle cx="12" cy="6" r="1.5"></circle>
+                        <circle cx="12" cy="12" r="1.5"></circle>
+                        <circle cx="12" cy="18" r="1.5"></circle>
                       </svg>
+                    </button>
+                    {#if actionMenuOpenId === item.id}
+                      <div class="action-menu-dropdown glass" transition:fade>
+                        <button
+                          class="action-menu-item copy-item"
+                          class:animating={copyAnimating[item.id]}
+                          class:copied={copiedId === item.id}
+                          onclick={() => handleCopy(item.id, item.text)}
+                          onmouseenter={() => triggerCopyAnim(item.id)}
+                        >
+                          <span class="action-menu-icon">
+                            {#if copiedId === item.id}
+                              <svg
+                                class="check-icon"
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2.5"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                              >
+                                <polyline points="20 6 9 17 4 12"></polyline>
+                              </svg>
+                            {:else}
+                              <svg
+                                class="copy-icon"
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                              >
+                                <rect
+                                  x="9"
+                                  y="9"
+                                  width="13"
+                                  height="13"
+                                  rx="2"
+                                  ry="2"
+                                ></rect>
+                                <path
+                                  d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                                ></path>
+                              </svg>
+                            {/if}
+                          </span>
+                          <span>{t(appLanguage, "copy")}</span>
+                        </button>
+                        <button
+                          class="action-menu-item speak-item"
+                          class:active={isSpeakingId === item.id}
+                          class:animating={speakAnimating[item.id]}
+                          onclick={() =>
+                            handleSpeak(item.id, item.text, targetLang)}
+                          onmouseenter={() => triggerSpeakAnim(item.id)}
+                        >
+                          <span class="action-menu-icon">
+                            {#if isSpeakingId === item.id}
+                              <svg
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="currentColor"
+                                stroke="none"
+                              >
+                                <rect x="6" y="6" width="12" height="12" rx="1" />
+                              </svg>
+                            {:else}
+                              <svg
+                                class="speak-icon"
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                style="overflow: visible;"
+                              >
+                                <polygon
+                                  points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
+                                ></polygon>
+                                <path
+                                  class="sound-wave wave-1"
+                                  d="M15.54 8.46a5 5 0 0 1 0 7.07"
+                                ></path>
+                                <path
+                                  class="sound-wave wave-2"
+                                  d="M19.07 4.93a10 10 0 0 1 0 14.14"
+                                ></path>
+                                <path
+                                  class="sound-wave wave-3"
+                                  d="M22.07 1.93a14 14 0 0 1 0 20.14"
+                                ></path>
+                              </svg>
+                            {/if}
+                          </span>
+                          <span>
+                            {isSpeakingId === item.id
+                              ? t(appLanguage, "stop")
+                              : t(appLanguage, "speak")}
+                          </span>
+                        </button>
+                      </div>
                     {/if}
-                  </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1903,9 +2939,10 @@
     ></div>
   </div>
 </main>
+{/if}
 
 <!-- Settings Modal -->
-{#if showSettings}
+{#if showSettings && !isCompactMode}
   <div
     class="settings-overlay"
     transition:fade={{ duration: 200 }}
@@ -2146,6 +3183,42 @@
                         ></div>
                       </button>
                     </div>
+                  </div>
+
+                  <!-- Quick Shortcut -->
+                  <div class="settings-section">
+                    <label class="settings-label" for="quick-shortcut-input"
+                      >{t(appLanguage, "quickShortcut")}</label
+                    >
+                    <div class="shortcut-row">
+                      <input
+                        id="quick-shortcut-input"
+                        class="settings-input"
+                        bind:value={shortcutDraft}
+                        placeholder={t(appLanguage, "quickShortcutHint")}
+                        onkeydown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void applyShortcut();
+                          }
+                        }}
+                      />
+                      <button
+                        class="save-btn apply-shortcut-btn"
+                        onclick={() => void applyShortcut()}
+                        disabled={shortcutSaving ||
+                          shortcutDraft.trim() === "" ||
+                          shortcutDraft === quickShortcut}
+                      >
+                        {t(appLanguage, "applyShortcut")}
+                      </button>
+                    </div>
+                    <div class="shortcut-hint">
+                      {t(appLanguage, "quickShortcutHint")}
+                    </div>
+                    {#if shortcutError}
+                      <div class="shortcut-error">{shortcutError}</div>
+                    {/if}
                   </div>
 
                   <!-- App Language -->
@@ -2448,7 +3521,7 @@
   </div>
 {/if}
 
-{#if showHistory}
+{#if showHistory && !isCompactMode}
   <div
     class="settings-overlay"
     transition:fade={{ duration: 200 }}
@@ -2764,6 +3837,287 @@
     overflow: hidden;
   }
 
+  .compact-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    height: 100vh;
+    padding: 10px;
+    border-radius: 16px;
+    border: 1px solid var(--border-color);
+    background: linear-gradient(
+      180deg,
+      rgba(20, 20, 25, 0.95),
+      rgba(12, 12, 16, 0.9)
+    );
+    position: relative;
+    overflow: visible;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.3);
+  }
+
+  .compact-shell::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(
+        circle at 20% 0%,
+        rgba(59, 130, 246, 0.18),
+        transparent 45%
+      ),
+      radial-gradient(
+        circle at 90% 100%,
+        rgba(16, 185, 129, 0.12),
+        transparent 50%
+      );
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  .compact-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    z-index: 3000;
+  }
+
+  .compact-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .compact-icon {
+    width: 24px;
+    height: 24px;
+  }
+
+  .compact-name {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+
+  .compact-main-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: rgba(59, 130, 246, 0.2);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    color: #93c5fd;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .compact-main-btn:hover {
+    background: rgba(59, 130, 246, 0.3);
+  }
+
+  .compact-lang-row {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 4px;
+    position: relative;
+    z-index: 2500;
+  }
+
+  .compact-lang-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .compact-shell .lang-btn {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .scroll-wrapper.compact-scroll-wrapper {
+    margin: 0 6px 6px;
+    border-radius: 16px;
+  }
+
+  .main-scroll.compact-scroll {
+    padding: 12px 12px 14px;
+    gap: 10px;
+  }
+
+  .compact-textarea {
+    width: 100%;
+    min-height: 72px;
+    max-height: 120px;
+    background: transparent;
+    border: none;
+    color: var(--text-main);
+    resize: none;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .compact-textarea::placeholder {
+    color: var(--text-muted);
+  }
+
+  .controls-bar.compact-controls {
+    top: -12px;
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  .compact-shell .text-preview {
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .compact-style-row {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    transition:
+      opacity 0.3s ease,
+      transform 0.3s ease;
+  }
+
+  .compact-style-row.hidden {
+    opacity: 0;
+    transform: translateY(8px);
+    pointer-events: none;
+  }
+
+  .compact-style-wrapper {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .compact-style-chip {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    color: var(--text-main);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .compact-style-chip:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .compact-style-chip.open {
+    background: rgba(59, 130, 246, 0.2);
+    border-color: rgba(59, 130, 246, 0.35);
+    color: #93c5fd;
+  }
+
+  .chip-text {
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: 0.3px;
+  }
+
+  .chip-count {
+    min-width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    padding: 0 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(59, 130, 246, 0.3);
+    color: #bfdbfe;
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  .chip-chevron {
+    transition: transform 0.2s var(--easing);
+  }
+
+  .compact-style-chip.open .chip-chevron {
+    transform: rotate(180deg);
+  }
+
+  .compact-style-dropdown {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    width: 220px;
+    max-height: 180px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+    padding: 6px;
+    border-radius: 12px;
+    z-index: 1200;
+  }
+
+  .compact-style-dropdown .style-row {
+    width: 100%;
+  }
+
+  .style-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 10px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-main);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .style-row:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .style-name {
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .level-meter {
+    width: 64px;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+  }
+
+  .level-fill {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: var(--primary-color);
+    opacity: 0.6;
+    transition: width 0.2s var(--easing);
+  }
+
+  .style-row[data-level="1"] .level-fill {
+    opacity: 0.45;
+  }
+
+  .style-row[data-level="2"] .level-fill {
+    opacity: 0.8;
+  }
+
+  .output-area.compact-output {
+    gap: 10px;
+  }
+
   /* App Header & Layout */
   .app-header {
     display: flex;
@@ -2909,7 +4263,7 @@
     border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 4px;
-    z-index: 1000; /* Extra high to be sure */
+    z-index: 5000; /* Ensure above compact scroll surface */
     min-width: 100px;
   }
 
@@ -3567,6 +4921,76 @@
     flex-shrink: 0;
   }
 
+  .action-menu {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .action-menu-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 6px;
+    min-width: 150px;
+    padding: 6px;
+    background: rgba(24, 24, 28, 0.95);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    z-index: 140;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  .action-menu-item {
+    border: none;
+    background: transparent;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+  }
+
+  .action-menu-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--primary-hover);
+  }
+
+  .action-menu-item.copied {
+    color: #22c55e;
+  }
+
+  .action-menu-item.active {
+    color: var(--primary-hover);
+  }
+
+  .action-menu-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+  }
+
+  .action-menu-item.copy-item.animating .copy-icon {
+    animation: copySlide 0.6s var(--easing);
+  }
+
+  .action-menu-item.speak-item.animating .wave-2 {
+    animation: wavePulse 1.2s ease-in-out;
+  }
+
+  .action-menu-item.speak-item.animating .wave-3 {
+    animation: wavePulse 1.2s ease-in-out 0.15s;
+  }
+
   .candidate-card:hover .candidate-actions {
     opacity: 1;
   }
@@ -3607,6 +5031,10 @@
   }
   .icon-btn:active {
     transform: scale(0.92);
+  }
+
+  .replace-btn.replaced {
+    color: #34d399;
   }
 
   /* コピーボタン: 紙が重なるように上に移動 */
@@ -3942,6 +5370,36 @@
     gap: 8px;
   }
 
+  .shortcut-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .shortcut-row .settings-input {
+    flex: 1;
+  }
+
+  .apply-shortcut-btn {
+    min-width: 88px;
+    height: 36px;
+  }
+
+  .save-btn.apply-shortcut-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .shortcut-hint {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .shortcut-error {
+    font-size: 12px;
+    color: #f87171;
+  }
+
   /* Star Button Animation */
   .star-btn {
     background: transparent;
@@ -4070,6 +5528,12 @@
     transition:
       border-color 0.2s,
       box-shadow 0.2s;
+  }
+
+  .settings-card-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
 
   .settings-select:focus,
@@ -4530,6 +5994,22 @@
     gap: 4px;
   }
 
+  .compact-shell .tech-info-display {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 6px 12px;
+    font-size: 10px;
+    align-items: flex-start;
+  }
+
+  .compact-shell .tech-divider {
+    display: none;
+  }
+
+  .compact-shell .tech-item {
+    white-space: nowrap;
+  }
+
   /* ==================== LIGHT MODE OVERRIDES ==================== */
 
   /* Style chips */
@@ -4551,6 +6031,15 @@
   }
   :global([data-theme="light"]) .lang-option:hover {
     background: rgba(0, 0, 0, 0.05);
+  }
+  :global([data-theme="light"]) .action-menu-dropdown {
+    background: rgba(255, 255, 255, 0.95);
+    border-color: rgba(0, 0, 0, 0.08);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  }
+  :global([data-theme="light"]) .action-menu-item:hover {
+    background: rgba(0, 0, 0, 0.06);
+    color: #2563eb;
   }
 
   /* Icon buttons */
@@ -4746,5 +6235,57 @@
   /* Tab content */
   :global([data-theme="light"]) .tab-content-wrapper {
     color: #1a1a1a;
+  }
+
+  :global([data-theme="light"]) .compact-shell {
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
+  }
+
+  :global([data-theme="light"]) .compact-shell::before {
+    background:
+      radial-gradient(
+        circle at 20% 0%,
+        rgba(59, 130, 246, 0.12),
+        transparent 45%
+      ),
+      radial-gradient(
+        circle at 90% 100%,
+        rgba(16, 185, 129, 0.08),
+        transparent 50%
+      );
+    opacity: 0.7;
+  }
+
+  :global([data-theme="light"]) .compact-main-btn {
+    background: rgba(59, 130, 246, 0.12);
+    border-color: rgba(59, 130, 246, 0.2);
+    color: #2563eb;
+  }
+
+  :global([data-theme="light"]) .compact-style-chip {
+    background: rgba(0, 0, 0, 0.05);
+    border-color: rgba(0, 0, 0, 0.12);
+    color: #1a1a1a;
+  }
+
+  :global([data-theme="light"]) .compact-style-chip.open {
+    background: rgba(59, 130, 246, 0.12);
+    border-color: rgba(59, 130, 246, 0.2);
+    color: #2563eb;
+  }
+
+  :global([data-theme="light"]) .chip-count {
+    background: rgba(59, 130, 246, 0.2);
+    color: #1d4ed8;
+  }
+
+  :global([data-theme="light"]) .style-row {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.1);
+  }
+
+  :global([data-theme="light"]) .level-meter {
+    background: rgba(0, 0, 0, 0.08);
   }
 </style>
