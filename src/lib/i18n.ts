@@ -11,6 +11,7 @@ interface Translations {
 	// Language Selection
 	autoDetect: string;
 	detecting: string;
+	detected: string;
 
 	// Translation UI
 	inputPlaceholder: string;
@@ -60,6 +61,10 @@ interface Translations {
 	aiTabDescription: string;
 	showTechInfo: string;
 	showTechInfoDesc: string;
+	autoStart: string;
+	autoStartDesc: string;
+	startMinimized: string;
+	startMinimizedDesc: string;
 	quickShortcut: string;
 	quickShortcutHint: string;
 	applyShortcut: string;
@@ -90,6 +95,7 @@ const translations: Record<AppLanguage, Translations> = {
 		openMain: "メインを開く",
 		autoDetect: "自動検出",
 		detecting: "検出中...",
+		detected: "検出",
 		inputPlaceholder: "テキストを入力または選択...",
 		translating: "翻訳中･･･",
 		translate: "翻訳",
@@ -133,6 +139,10 @@ const translations: Record<AppLanguage, Translations> = {
 		aiTabDescription: "選択したAIプロバイダーのモデルが有効になります。",
 		showTechInfo: "技術情報を表示",
 		showTechInfoDesc: "翻訳時に処理時間やトークン数を表示します。",
+		autoStart: "スタートアップで起動",
+		autoStartDesc: "OS 起動時にアプリを自動で起動します",
+		startMinimized: "起動時はメイン画面を最小化",
+		startMinimizedDesc: "起動時にメイン画面を最小化して開始します",
 		quickShortcut: "クイック起動ショートカット",
 		quickShortcutHint: "例: CommandOrControl+Shift+H",
 		applyShortcut: "適用",
@@ -159,6 +169,7 @@ const translations: Record<AppLanguage, Translations> = {
 		openMain: "Open Main",
 		autoDetect: "Auto-detect",
 		detecting: "Detecting...",
+		detected: "Detected",
 		inputPlaceholder: "Enter or select text...",
 		translating: "Translating...",
 		translate: "Translate",
@@ -202,6 +213,10 @@ const translations: Record<AppLanguage, Translations> = {
 		aiTabDescription: "The model from the selected AI provider will be active.",
 		showTechInfo: "Show Technical Info",
 		showTechInfoDesc: "Display processing time and token count during translation.",
+		autoStart: "Launch on startup",
+		autoStartDesc: "Automatically launch the app when the OS starts.",
+		startMinimized: "Start with main window minimized",
+		startMinimizedDesc: "Minimize the main window on launch.",
 		quickShortcut: "Quick Shortcut",
 		quickShortcutHint: "Example: CommandOrControl+Shift+H",
 		applyShortcut: "Apply",
@@ -228,6 +243,7 @@ const translations: Record<AppLanguage, Translations> = {
 		openMain: "打开主界面",
 		autoDetect: "自动检测",
 		detecting: "检测中...",
+		detected: "检测",
 		inputPlaceholder: "输入或选择文本...",
 		translating: "翻译中...",
 		translate: "翻译",
@@ -271,6 +287,10 @@ const translations: Record<AppLanguage, Translations> = {
 		aiTabDescription: "所选AI提供商的模型将处于活动状态。",
 		showTechInfo: "显示技术信息",
 		showTechInfoDesc: "翻译时显示处理时间和令牌计数",
+		autoStart: "开机自启",
+		autoStartDesc: "系统启动时自动启动应用",
+		startMinimized: "启动时最小化主窗口",
+		startMinimizedDesc: "启动时将主窗口最小化显示",
 		quickShortcut: "???????",
 		quickShortcutHint: "?: CommandOrControl+Shift+H",
 		applyShortcut: "??",
@@ -297,6 +317,7 @@ const translations: Record<AppLanguage, Translations> = {
 		openMain: "메인 열기",
 		autoDetect: "자동 감지",
 		detecting: "감지 중...",
+		detected: "감지",
 		inputPlaceholder: "텍스트를 입력하거나 선택...",
 		translating: "번역 중...",
 		translate: "번역",
@@ -340,6 +361,10 @@ const translations: Record<AppLanguage, Translations> = {
 		aiTabDescription: "선택한 AI 제공업체의 모델이 활성화됩니다.",
 		showTechInfo: "기술 정보 표시",
 		showTechInfoDesc: "번역 시 처리 시간 및 토큰 수 표시",
+		autoStart: "시작 프로그램 실행",
+		autoStartDesc: "OS 시작 시 앱을 자동으로 실행합니다.",
+		startMinimized: "시작 시 메인 창 최소화",
+		startMinimizedDesc: "실행 시 메인 창을 최소화합니다.",
 		quickShortcut: "?? ?? ???",
 		quickShortcutHint: "?: CommandOrControl+Shift+H",
 		applyShortcut: "??",

@@ -4,10 +4,12 @@
   "description": "Capability for main and compact windows",
   "windows": [
     "main",
-    "compact"
+    "compact",
+    "service"
   ],
   "permissions": [
     "core:default",
+    "autostart:default",
     "opener:default",
     "core:event:default",
     "core:window:default"

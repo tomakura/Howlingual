@@ -46,12 +46,36 @@
 		await listen("sync_input_command", async (event: any) => {
 			const payload = event.payload;
 			// console.log("[Service] Sync input:", payload);
+			const shouldReset = Boolean(payload.resetTranslations);
 			if (payload.text !== undefined) inputQuery = payload.text;
 			if (payload.sourceLang !== undefined)
 				sourceLang = payload.sourceLang;
 			if (payload.targetLang !== undefined)
 				targetLang = payload.targetLang;
 			if (payload.styles !== undefined) styleLevels = payload.styles;
+
+			if (shouldReset && !isTranslating) {
+				isTranslating = false;
+				detectedLang = "";
+				translations = [
+					{ id: 1, text: "", reason: "" },
+					{ id: 2, text: "", reason: "" },
+					{ id: 3, text: "", reason: "" },
+				];
+				detailedExplanation = null;
+				techMetrics = {
+					time: 0,
+					waitTime: 0,
+					genTime: 0,
+					model: currentModel,
+					inputTokens: 0,
+					outputTokens: 0,
+					tokensPerSec: 0,
+					isReal: false,
+					firstTokenReceived: false,
+				};
+				if (timerInterval) clearInterval(timerInterval);
+			}
 
 			await broadcastUpdate();
 		});

@@ -3,6 +3,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_autostart::MacosLauncher;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use arboard::Clipboard;
@@ -121,6 +122,36 @@ fn update_pending_text(text: String, state: State<'_, PendingText>) {
     if let Ok(mut g) = state.0.lock() {
         *g = Some(text);
     }
+}
+
+#[tauri::command]
+fn replace_selection(app: AppHandle, text: String) -> Result<(), String> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        if let Some(window) = app.get_webview_window(COMPACT_WINDOW_LABEL) {
+            let _ = window.hide();
+        }
+        std::thread::sleep(Duration::from_millis(120));
+
+        let mut clipboard = Clipboard::new().map_err(|e| e.to_string())?;
+        let original_text = clipboard.get_text().ok();
+        clipboard.set_text(text).map_err(|e| e.to_string())?;
+        std::thread::sleep(Duration::from_millis(40));
+
+        #[cfg(windows)]
+        send_paste_shortcut();
+        #[cfg(target_os = "macos")]
+        send_paste_shortcut();
+        #[cfg(all(not(windows), not(target_os = "macos")))]
+        send_paste_shortcut();
+
+        std::thread::sleep(Duration::from_millis(250));
+
+        if let Some(orig) = original_text {
+            let _ = clipboard.set_text(orig);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -249,12 +280,85 @@ fn send_copy_shortcut() {
     std::thread::sleep(Duration::from_millis(150));
 }
 
+// Windows: Use SendInput API for keyboard simulation (Paste)
+#[cfg(windows)]
+fn send_paste_shortcut() {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+        VK_CONTROL, VK_V,
+    };
+
+    println!("[paste] Sending Ctrl+V via SendInput (safe)...");
+
+    let paste_inputs = [
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_CONTROL,
+                    wScan: 0,
+                    dwFlags: KEYBD_EVENT_FLAGS(0),
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_V,
+                    wScan: 0,
+                    dwFlags: KEYBD_EVENT_FLAGS(0),
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_V,
+                    wScan: 0,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_CONTROL,
+                    wScan: 0,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+    ];
+    let result = unsafe { SendInput(&paste_inputs, std::mem::size_of::<INPUT>() as i32) };
+    println!("[paste] SendInput result: {}", result);
+
+    std::thread::sleep(Duration::from_millis(50));
+}
+
 // macOS: Use CGEventPost for keyboard simulation
 #[cfg(target_os = "macos")]
 fn send_copy_shortcut() {
     // TODO: Implement macOS keyboard simulation using Core Graphics
     // For now, this is a placeholder
     println!("[copy] macOS keyboard simulation not yet implemented");
+}
+
+// macOS: Use CGEventPost for keyboard simulation (Paste)
+#[cfg(target_os = "macos")]
+fn send_paste_shortcut() {
+    // TODO: Implement macOS keyboard simulation using Core Graphics
+    println!("[paste] macOS keyboard simulation not yet implemented");
 }
 
 // Linux: Placeholder
@@ -265,6 +369,16 @@ fn send_copy_shortcut() {
 ))]
 fn send_copy_shortcut() {
     println!("[copy] Linux keyboard simulation not yet implemented");
+}
+
+// Linux: Placeholder (Paste)
+#[cfg(all(
+    not(windows),
+    not(target_os = "macos"),
+    not(any(target_os = "android", target_os = "ios"))
+))]
+fn send_paste_shortcut() {
+    println!("[paste] Linux keyboard simulation not yet implemented");
 }
 
 // Windows: UI Automation implementation
@@ -396,6 +510,7 @@ fn ensure_compact_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow>
     .min_inner_size(420.0, 520.0)
     .max_inner_size(420.0, 520.0)
     .resizable(false)
+    .decorations(false)
     .always_on_top(true)
     .skip_taskbar(true)
     .visible(false)
@@ -625,6 +740,10 @@ fn handover_to_main(app: AppHandle, text: String) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             greet,
@@ -633,6 +752,7 @@ pub fn run() {
             get_pending_text,
             get_handover_text,
             update_pending_text,
+            replace_selection,
             quit_app,
             handover_to_main
         ])

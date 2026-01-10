@@ -4,7 +4,12 @@
   import { flip } from "svelte/animate";
   import { quintOut } from "svelte/easing";
   import { invoke } from "@tauri-apps/api/core";
-  import { listen, emit } from "@tauri-apps/api/event";
+  import { listen, emit, TauriEvent } from "@tauri-apps/api/event";
+  import {
+    enable as enableAutostart,
+    disable as disableAutostart,
+    isEnabled as isAutostartEnabled,
+  } from "@tauri-apps/plugin-autostart";
   import { type AiModel } from "$lib/ai_service";
   import {
     t,
@@ -42,6 +47,8 @@
   let shortcutError = $state("");
   let shortcutSaving = $state(false);
   let autoRunQuick = $state(true); // Auto-run setting - default ON for backward compatibility
+  let autoStartEnabled = $state(false);
+  let startMinimized = $state(false);
 
   let historyAnimating = $state(false);
   function triggerHistoryAnim() {
@@ -237,6 +244,10 @@
         if (parsed.quickShortcut) quickShortcut = parsed.quickShortcut;
         if (parsed.autoRunQuick !== undefined)
           autoRunQuick = parsed.autoRunQuick;
+        if (parsed.autoStartEnabled !== undefined)
+          autoStartEnabled = parsed.autoStartEnabled;
+        if (parsed.startMinimized !== undefined)
+          startMinimized = parsed.startMinimized;
 
         // Apply theme on load
         document.documentElement.setAttribute("data-theme", theme);
@@ -256,6 +267,37 @@
     const viewParam = new URLSearchParams(window.location.search).get("view");
     if (viewParam !== "compact") {
       void syncShortcut();
+    }
+
+    (async () => {
+      try {
+        autoStartEnabled = await isAutostartEnabled();
+      } catch (e) {
+        console.warn("Failed to read autostart state", e);
+      }
+    })();
+
+    if (viewParam === "main" && startMinimized) {
+      const minimizeWithRetry = async () => {
+        try {
+          const { getCurrentWindow } = await import("@tauri-apps/api/window");
+          const window = getCurrentWindow();
+          await window.minimize();
+          setTimeout(async () => {
+            try {
+              if (!(await window.isMinimized())) await window.minimize();
+            } catch {}
+          }, 600);
+          setTimeout(async () => {
+            try {
+              if (!(await window.isMinimized())) await window.minimize();
+            } catch {}
+          }, 1200);
+        } catch (e) {
+          console.warn("Failed to minimize on start", e);
+        }
+      };
+      setTimeout(minimizeWithRetry, 400);
     }
   });
 
@@ -298,13 +340,21 @@
 
             persistLastResult(); // Helper function
           }
+          lastTranslatedText = p.inputQuery || inputQuery;
         }
 
         isTranslating = p.isTranslating;
+        if (!p.isTranslating) {
+          isDetecting = false;
+        }
         translations = p.translations; // Direct sync
 
-        if (p.detailedExplanation) {
-          detailedExplanation = p.detailedExplanation;
+        if ("detailedExplanation" in p) {
+          detailedExplanation = p.detailedExplanation || null;
+          showExplanation = Boolean(p.detailedExplanation);
+        } else if (p.isTranslating) {
+          detailedExplanation = null;
+          showExplanation = false;
         }
         if (p.inputQuery && p.inputQuery !== inputQuery) {
           inputQuery = p.inputQuery;
@@ -312,9 +362,19 @@
 
         // Sync Language Settings
         if (p.sourceLang) {
-          applySourceLangFromSync(p.sourceLang, p.detectedLang);
+          if (
+            isAutoDetect &&
+            p.detectedLang &&
+            p.sourceLang !== AUTO_DETECT_LABEL
+          ) {
+            detectedLang = p.detectedLang;
+            isDetecting = false;
+          } else {
+            applySourceLangFromSync(p.sourceLang, p.detectedLang);
+          }
         } else if (p.detectedLang && isAutoDetect) {
           detectedLang = p.detectedLang;
+          isDetecting = false;
         }
         if (p.targetLang) {
           targetLang = p.targetLang;
@@ -356,6 +416,7 @@
           hasReceivedText = true;
 
           // Use applyQuickText which respects autoRunQuick setting
+          syncShowTechInfoFromStorage();
           await applyQuickText(text);
 
           // Stop polling once we got text
@@ -371,7 +432,21 @@
             // Clear previous results but keep input if user typed something
             translations = [];
             detailedExplanation = null;
+            showExplanation = false;
+            isTranslating = false;
             errorMessage = "";
+            techMetrics = {
+              time: 0,
+              waitTime: 0,
+              genTime: 0,
+              model: "",
+              inputTokens: 0,
+              outputTokens: 0,
+              tokensPerSec: 0,
+              isReal: false,
+              firstTokenReceived: false,
+            };
+            autoScrollEnabled = true;
           }
         }
       } catch (error) {
@@ -434,6 +509,7 @@
       isOpeningMain = false; // Reset flag so we can capture again
 
       // Force UI update with new text
+      syncShowTechInfoFromStorage();
       void applyQuickText(event.payload);
     });
 
@@ -454,6 +530,7 @@
 
         // Restore source text
         inputQuery = payload.sourceText || "";
+        lastTranslatedText = inputQuery;
 
         // Restore translations
         if (payload.translations && Array.isArray(payload.translations)) {
@@ -468,6 +545,9 @@
         if (payload.detailedExplanation) {
           detailedExplanation = payload.detailedExplanation;
           showExplanation = true;
+        } else {
+          detailedExplanation = null;
+          showExplanation = false;
         }
 
         // Restore language settings
@@ -567,6 +647,8 @@
       allowRewrite: allowRewrite,
       quickShortcut: quickShortcut,
       autoRunQuick: autoRunQuick,
+      autoStartEnabled: autoStartEnabled,
+      startMinimized: startMinimized,
     };
     localStorage.setItem("howlingual_settings", JSON.stringify(settings));
 
@@ -666,6 +748,11 @@
   }
 
   function handleWindowKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      void startTranslation();
+      return;
+    }
     if (e.key === "Escape") {
       // Blur active element to prevent focus rings after closing
       if (document.activeElement instanceof HTMLElement) {
@@ -820,7 +907,10 @@
       { id: 3, text: "", reason: "" },
     ];
     detailedExplanation = null;
+    showExplanation = false;
     errorMessage = "";
+    autoScrollEnabled = true;
+    lastStreamCharCount = 0;
     // Reset tech metrics
     techMetrics = {
       time: 0,
@@ -838,8 +928,13 @@
 
     // Apply the new input text
     inputQuery = text;
-    // Sync to service immediately
-    await syncSharedState();
+    if (isAutoDetect) {
+      const trimmed = text.trim();
+      detectedLang = trimmed ? detectLanguageSimple(trimmed) : "";
+      isDetecting = false;
+    }
+    // Sync to service immediately and reset service-side state
+    await syncSharedState(true);
 
     await tick();
     autoResize();
@@ -862,12 +957,13 @@
 
   let syncTimer: ReturnType<typeof setTimeout> | null = null;
 
-  async function syncSharedState() {
+  async function syncSharedState(resetTranslations = false) {
     await emit("sync_input_command", {
       text: inputQuery,
       sourceLang,
       targetLang,
       styles: $state.snapshot(styleLevels),
+      resetTranslations,
     });
   }
 
@@ -883,6 +979,11 @@
 
   function handleInputChange() {
     void autoResize();
+    if (isAutoDetect) {
+      const trimmed = inputQuery.trim();
+      detectedLang = trimmed ? detectLanguageSimple(trimmed) : "";
+      isDetecting = false;
+    }
     scheduleSyncSharedState();
   }
 
@@ -946,11 +1047,12 @@
   ];
 
   let isSparkling = $state(false);
+  const AUTO_DETECT_LABEL = "自動検出";
 
   function applySourceLangFromSync(lang: string, detected?: string) {
-    if (lang === "自動検出") {
+    if (lang === AUTO_DETECT_LABEL) {
       isAutoDetect = true;
-      sourceLang = "自動検出";
+      sourceLang = AUTO_DETECT_LABEL;
       detectedLang = detected || "";
       return;
     }
@@ -963,7 +1065,7 @@
   function selectSourceLang(lang: string | null) {
     if (lang === null) {
       isAutoDetect = true;
-      sourceLang = "自動検出";
+      sourceLang = AUTO_DETECT_LABEL;
       detectedLang = ""; // Clear previous detection
       // Trigger temporary sparkle animation
       isSparkling = true;
@@ -974,6 +1076,7 @@
       isAutoDetect = false;
       sourceLang = lang;
       detectedLang = ""; // Clear detection when manually selecting
+      isDetecting = false;
     }
     console.log(
       `[UI] Source Language Selected: ${sourceLang} (Auto: ${isAutoDetect})`,
@@ -1055,7 +1158,6 @@
   function handleCopy(id: number, text: string) {
     console.log(`[UI] Copy triggered for ID: ${id}`);
     navigator.clipboard.writeText(text);
-    actionMenuOpenId = null;
     copiedId = id;
     setTimeout(() => {
       copiedId = null;
@@ -1066,7 +1168,7 @@
     console.log(`[UI] Replace triggered for ID: ${id}`);
     actionMenuOpenId = null;
     try {
-      await navigator.clipboard.writeText(text);
+      await invoke("replace_selection", { text });
       replacedId = id;
       setTimeout(() => {
         if (replacedId === id) replacedId = null;
@@ -1096,7 +1198,6 @@
 
   function handleSpeak(id: number, text: string, lang: string) {
     if (!window.speechSynthesis) return;
-    actionMenuOpenId = null;
 
     // If already speaking THIS card, stop it
     if (isSpeakingId === id) {
@@ -1289,6 +1390,7 @@
   let autoScrollEnabled = $state(true);
   let lastScrollTop = 0;
   let isAtBottom = $state(true);
+  let lastStreamCharCount = $state(0);
 
   function onMainScroll() {
     if (!scrollContainerEl || !textareaEl) return;
@@ -1363,8 +1465,35 @@
   }
 
   $effect(() => {
+    if (!scrollContainerEl) return;
+    translations;
+    const currentCharCount = translations.reduce(
+      (sum, t) => sum + (t.text ? t.text.length : 0),
+      0,
+    );
+    if (isTranslating && currentCharCount > lastStreamCharCount) {
+      void tick().then(autoScrollToBottom);
+    }
+    lastStreamCharCount = currentCharCount;
+  });
+
+  $effect(() => {
     if (inputQuery !== undefined) {
       autoResize();
+    }
+  });
+
+  let lastTranslatedText = $state("");
+
+  $effect(() => {
+    if (isTranslating) return;
+    if (inputQuery !== lastTranslatedText) {
+      if (detailedExplanation) {
+        detailedExplanation = null;
+      }
+      if (showExplanation) {
+        showExplanation = false;
+      }
     }
   });
 
@@ -1509,6 +1638,7 @@
 
   function loadHistory(item: HistoryItem) {
     inputQuery = item.sourceText;
+    lastTranslatedText = item.sourceText;
     // We try to match sourceLang/targetLang to available options if possible,
     // or just set them if they are strings.
     // For now assuming strings are compatible.
@@ -1584,6 +1714,7 @@
     if (!snapshot || isTranslating) return;
     if (!Array.isArray(snapshot.translations)) return;
     inputQuery = snapshot.sourceText || "";
+    lastTranslatedText = inputQuery;
     isAutoDetect = snapshot.isAutoDetect;
     sourceLang = snapshot.sourceLang || sourceLang;
     targetLang = snapshot.targetLang || targetLang;
@@ -1620,12 +1751,16 @@
   let showTechInfo = $state(false);
   let showTechInfoInitialized = $state(false);
 
-  // Load showTechInfo from localStorage on first mount
-  onMount(() => {
+  function syncShowTechInfoFromStorage() {
     const stored = localStorage.getItem("howlingual_showTechInfo");
     if (stored !== null) {
       showTechInfo = stored === "true";
     }
+  }
+
+  // Load showTechInfo from localStorage on first mount
+  onMount(() => {
+    syncShowTechInfoFromStorage();
     showTechInfoInitialized = true;
     console.log("[TechInfo] Initialized, showTechInfo =", showTechInfo);
   });
@@ -1654,6 +1789,7 @@
 
   async function startTranslation() {
     if (isTranslating || !inputQuery.trim()) return;
+    syncShowTechInfoFromStorage();
     isTranslating = true;
     autoScrollEnabled = true; // Enable auto-scroll for new translation
     showExplanation = false; // Hide explanation during translation
@@ -1670,6 +1806,7 @@
     }
     detailedExplanation = null; // Clear explanation
     errorMessage = "";
+    lastStreamCharCount = 0;
 
     // Handle Auto-detect mock logic
     if (isAutoDetect) {
@@ -1733,8 +1870,8 @@
 
 {#if isCompactMode}
   <main class="compact-shell">
-    <header class="compact-header">
-      <div class="compact-brand">
+      <header class="compact-header" data-tauri-drag-region>
+        <div class="compact-brand">
         <img
           src={theme === "light" ? "/icon-light.svg" : "/icon-dark.svg"}
           alt="Howlingual"
@@ -1742,32 +1879,57 @@
         />
         <span class="compact-name">Howlingual</span>
       </div>
-      <button
-        class="compact-main-btn"
-        onclick={async () => {
-          // Stop consuming pending text in this window
-          isOpeningMain = true;
-          // Use proper handover logic
-          await openMainScreen();
-        }}
-        title={t(appLanguage, "openMain")}
-      >
-        <span>{t(appLanguage, "openMain")}</span>
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path d="M5 12h14"></path>
-          <path d="M13 5l7 7-7 7"></path>
-        </svg>
-      </button>
-    </header>
+        <div class="compact-header-actions" data-tauri-drag-region="false">
+          <button
+            class="compact-main-btn" data-tauri-drag-region="false"
+            onclick={async () => {
+              // Stop consuming pending text in this window
+              isOpeningMain = true;
+              // Use proper handover logic
+              await openMainScreen();
+            }}
+            title={t(appLanguage, "openMain")}
+          >
+            <span>{t(appLanguage, "openMain")}</span>
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M5 12h14"></path>
+              <path d="M13 5l7 7-7 7"></path>
+            </svg>
+          </button>
+          <button
+            class="compact-close-btn" data-tauri-drag-region="false"
+            onclick={async () => {
+              const { getCurrentWindow } = await import("@tauri-apps/api/window");
+              await getCurrentWindow().hide();
+            }}
+            aria-label="Close"
+            title="Close"
+          >
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+      </header>
 
     <div class="compact-lang-row">
       <div class="lang-selector-group compact-lang-group">
@@ -1807,18 +1969,14 @@
               </svg>
             {/if}
             {#if isAutoDetect && detectedLang && translations.length > 0}
-              {detectedLang}・{appLanguage === "ja"
-                ? "検出"
-                : appLanguage === "en"
-                  ? "auto"
-                  : appLanguage === "zh"
-                    ? "检测"
-                    : "감지"}・
-            {:else if isAutoDetect}
-              {t(appLanguage, "autoDetect")}
-            {:else}
-              {sourceLang}
-            {/if}
+                {detectedLang} - {t(appLanguage, "detected")}
+              {:else if isAutoDetect && isDetecting}
+                {t(appLanguage, "detecting")}
+              {:else if isAutoDetect}
+                {t(appLanguage, "autoDetect")}
+              {:else}
+                {sourceLang}
+              {/if}
             <svg
               class="chevron-icon"
               width="10"
@@ -2081,7 +2239,7 @@
           </button>
         </div>
 
-        {#if showTechInfo && (isTranslating || techMetrics.time > 0)}
+          {#if showTechInfo && (isTranslating || techMetrics.time > 0)}
           <div class="tech-info-display" transition:fade>
             <span class="tech-item">
               <span class="tech-label">Wait:</span>
@@ -2113,7 +2271,7 @@
             <span class="tech-divider">|</span>
             <span class="tech-item tech-tokens">
               <span class="token-row">
-                <span class="tech-label">In:</span>
+                <span class="tech-label">↑</span>
                 {#if isTranslating && !techMetrics.isReal}
                   <span class="loading-dots-inline">...</span>
                 {:else}
@@ -2121,7 +2279,7 @@
                 {/if}
               </span>
               <span class="token-row">
-                <span class="tech-label">Out:</span>
+                <span class="tech-label">↓</span>
                 {#if isTranslating && !techMetrics.isReal}
                   <span class="loading-dots-inline">...</span>
                 {:else}
@@ -2129,7 +2287,7 @@
                 {/if}
                 {#if techMetrics.tokensPerSec > 0}
                   <span style="opacity: 0.6; margin-left: 4px;"
-                    >({techMetrics.tokensPerSec}/s)</span
+                    >({techMetrics.tokensPerSec.toFixed(1)}/s)</span
                   >
                 {/if}
               </span>
@@ -2251,7 +2409,10 @@
                         </svg>
                       </button>
                       {#if actionMenuOpenId === item.id}
-                        <div class="action-menu-dropdown glass" transition:fade>
+                        <div
+                          class="action-menu-dropdown glass"
+                          transition:fade={{ duration: 120 }}
+                        >
                           <button
                             class="action-menu-item copy-item"
                             class:animating={copyAnimating[item.id]}
@@ -2515,13 +2676,9 @@
                 </svg>
               {/if}
               {#if isAutoDetect && detectedLang && translations.length > 0}
-                {detectedLang}（{appLanguage === "ja"
-                  ? "自動"
-                  : appLanguage === "en"
-                    ? "auto"
-                    : appLanguage === "zh"
-                      ? "自动"
-                      : "自務"}）
+                {detectedLang} - {t(appLanguage, "detected")}
+              {:else if isAutoDetect && isDetecting}
+                {t(appLanguage, "detecting")}
               {:else if isAutoDetect}
                 {t(appLanguage, "autoDetect")}
               {:else}
@@ -2866,7 +3023,7 @@
           </button>
         </div>
 
-        {#if showTechInfo && (isTranslating || techMetrics.time > 0)}
+          {#if showTechInfo && (isTranslating || techMetrics.time > 0)}
           <div class="tech-info-display" transition:fade>
             <span class="tech-item">
               <span class="tech-label">Wait:</span>
@@ -2914,7 +3071,7 @@
                 {/if}
                 {#if techMetrics.tokensPerSec > 0}
                   <span style="opacity: 0.6; margin-left: 4px;"
-                    >({techMetrics.tokensPerSec}/s)</span
+                    >({techMetrics.tokensPerSec.toFixed(1)}/s)</span
                   >
                 {/if}
               </span>
@@ -3036,7 +3193,10 @@
                         </svg>
                       </button>
                       {#if actionMenuOpenId === item.id}
-                        <div class="action-menu-dropdown glass" transition:fade>
+                        <div
+                          class="action-menu-dropdown glass"
+                          transition:fade={{ duration: 120 }}
+                        >
                           <button
                             class="action-menu-item copy-item"
                             class:animating={copyAnimating[item.id]}
@@ -3531,6 +3691,103 @@
                           position: absolute; 
                           top: 3px; 
                           left: {showTechInfo ? '23px' : '3px'}; 
+                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
+                        ></div>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="settings-section">
+                    <div class="settings-label">
+                      {t(appLanguage, "autoStart") || "スタートアップ起動"}
+                    </div>
+                    <div class="settings-card-row">
+                      <span
+                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                      >
+                        {t(appLanguage, "autoStartDesc") ||
+                          "OS 起動時にアプリを自動で起動します"}
+                      </span>
+                      <button
+                        onclick={async () => {
+                          const next = !autoStartEnabled;
+                          try {
+                            if (next) {
+                              await enableAutostart();
+                            } else {
+                              await disableAutostart();
+                            }
+                            autoStartEnabled = next;
+                          } catch (e) {
+                            console.warn("Failed to update autostart", e);
+                          }
+                        }}
+                        style="
+                        width: 44px; 
+                        height: 24px; 
+                        background: {autoStartEnabled
+                          ? '#3b82f6'
+                          : 'rgba(255,255,255,0.1)'}; 
+                        border-radius: 20px; 
+                        border: none;
+                        cursor: pointer;
+                        position: relative;
+                        transition: background 0.2s;
+                      "
+                        aria-label="Toggle autostart"
+                      >
+                        <div
+                          style="
+                          width: 18px; 
+                          height: 18px; 
+                          background: white; 
+                          border-radius: 50%; 
+                          position: absolute; 
+                          top: 3px; 
+                          left: {autoStartEnabled ? '23px' : '3px'}; 
+                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
+                        ></div>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="settings-section">
+                    <div class="settings-label">
+                      {t(appLanguage, "startMinimized") ||
+                        "起動時にメイン画面を最小化"}
+                    </div>
+                    <div class="settings-card-row">
+                      <span
+                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                      >
+                        {t(appLanguage, "startMinimizedDesc") ||
+                          "起動時にメイン画面を最小化して表示します"}
+                      </span>
+                      <button
+                        onclick={() => (startMinimized = !startMinimized)}
+                        style="
+                        width: 44px; 
+                        height: 24px; 
+                        background: {startMinimized
+                          ? '#3b82f6'
+                          : 'rgba(255,255,255,0.1)'}; 
+                        border-radius: 20px; 
+                        border: none;
+                        cursor: pointer;
+                        position: relative;
+                        transition: background 0.2s;
+                      "
+                        aria-label="Toggle start minimized"
+                      >
+                        <div
+                          style="
+                          width: 18px; 
+                          height: 18px; 
+                          background: white; 
+                          border-radius: 50%; 
+                          position: absolute; 
+                          top: 3px; 
+                          left: {startMinimized ? '23px' : '3px'}; 
                           transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
                           box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
                         ></div>
@@ -4244,10 +4501,46 @@
   }
 
   .compact-header {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: space-between;
     z-index: 3000;
+    user-select: none;
+    cursor: default;
+  }
+
+  .compact-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    z-index: 1;
+    pointer-events: auto;
+  }
+
+  .compact-brand {
+    z-index: 1;
+    pointer-events: auto;
+  }
+
+  .compact-close-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .compact-close-btn:hover {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: rgba(239, 68, 68, 0.3);
+    color: #f87171;
   }
 
   .compact-brand {
@@ -4308,6 +4601,7 @@
   .scroll-wrapper.compact-scroll-wrapper {
     margin: 0 6px 6px;
     border-radius: 16px;
+    overflow: visible;
   }
 
   .main-scroll.compact-scroll {
@@ -4355,6 +4649,11 @@
     opacity: 0;
     transform: translateY(8px);
     pointer-events: none;
+  }
+
+  .compact-style-row .style-dropdown {
+    max-height: 220px;
+    overflow-y: auto;
   }
 
   .compact-style-wrapper {
@@ -5290,6 +5589,24 @@
     opacity: 0;
     transition: opacity 0.2s;
     flex-shrink: 0;
+  }
+
+  .compact-shell .candidate-actions {
+    gap: 0;
+  }
+
+  .compact-shell .candidate-actions .icon-btn {
+    padding: 3px;
+  }
+
+  .compact-shell .reason {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .compact-shell .action-menu-item {
+    padding: 6px 8px;
+    font-size: 12px;
   }
 
   .action-menu {
@@ -6336,11 +6653,12 @@
   }
 
   .tech-info-display {
-    margin-top: 10px;
+    margin-top: 6px;
+    margin-bottom: 12px;
     display: flex;
     justify-content: center;
     gap: 10px;
-    font-size: 11px;
+    font-size: 10px;
     color: var(--text-muted);
     opacity: 0.8;
     align-items: center;
@@ -6368,14 +6686,13 @@
   }
 
   .compact-shell .tech-info-display {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     justify-content: center;
-    gap: 6px;
-    font-size: 11px;
+    gap: 5px;
+    font-size: 10px;
     align-items: center;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    overflow: visible;
   }
 
   .compact-shell .tech-divider {
