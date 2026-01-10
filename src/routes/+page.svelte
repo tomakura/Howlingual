@@ -1719,6 +1719,9 @@
       clearTimeout(syncTimer);
       syncTimer = null;
     }
+    if (scrollTimeout) {
+      clearTimeout(scrollTimeout);
+    }
   });
 </script>
 
