@@ -1197,12 +1197,15 @@
       const levelChange = Math.round(deltaX / (width / 2));
       const newLevel = Math.max(0, Math.min(2, startLevel + levelChange));
       styleLevels[style] = newLevel;
-      scheduleSyncSharedState();
     };
 
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      // Sync state after drag completes
+      if (hasMoved) {
+        scheduleSyncSharedState();
+      }
       // Reset isDragging after a short delay to allow click event to fire and check it
       setTimeout(() => {
         isDragging = false;
