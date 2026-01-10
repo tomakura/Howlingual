@@ -15,6 +15,7 @@
 	let inputQuery = "";
 	let sourceLang = "自動検出";
 	let detectedLang = "";
+	let isDetecting = false;
 	let targetLang = "英語";
 	let styleLevels: Record<string, number> = {};
 	let currentModel = "";
@@ -50,6 +51,10 @@
 			if (payload.text !== undefined) inputQuery = payload.text;
 			if (payload.sourceLang !== undefined)
 				sourceLang = payload.sourceLang;
+			if (payload.detectedLang !== undefined)
+				detectedLang = payload.detectedLang;
+			if (payload.isDetecting !== undefined)
+				isDetecting = payload.isDetecting;
 			if (payload.targetLang !== undefined)
 				targetLang = payload.targetLang;
 			if (payload.styles !== undefined) styleLevels = payload.styles;
@@ -96,6 +101,7 @@
 			inputQuery,
 			sourceLang,
 			detectedLang,
+			isDetecting,
 			targetLang,
 			styleLevels,
 			currentModel,

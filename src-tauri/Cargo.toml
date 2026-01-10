@@ -23,6 +23,11 @@ tauri-plugin-autostart = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+image = "0.25"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"windows\", target_os = \"linux\"))".dependencies]
+xcap = "0.0.14"
+
 
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
 tauri-plugin-global-shortcut = "2.3.1"
@@ -30,10 +35,23 @@ arboard = "3.6.1"
 mouse_position = "0.1.4"
 
 [target."cfg(windows)".dependencies]
-windows = { version = "0.58", features = [
+windows = { version = "0.58.0", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Accessibility",
     "Win32_System_Com",
     "Win32_System_Variant",
-    "Win32_UI_WindowsAndMessaging"
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Imaging",
+    "Media_Ocr",
+    "Globalization",
+    "Graphics_Imaging",
+    "Storage_Streams",
+    "Win32_System_WinRT",
 ] }
+
+
+[target."cfg(target_os = \"macos\")".dependencies]
+objc2 = "0.5"
+objc2-foundation = "0.2"
+objc2-vision = "0.2"

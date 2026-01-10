@@ -11,6 +11,7 @@
     isEnabled as isAutostartEnabled,
   } from "@tauri-apps/plugin-autostart";
   import { type AiModel } from "$lib/ai_service";
+  import CaptureOverlay from "$lib/components/CaptureOverlay.svelte";
   import {
     t,
     getLanguageName,
@@ -28,7 +29,10 @@
 
   // ====== Settings State ======
   let showSettings = $state(false);
-  let settingsTab = $state<"general" | "api" | "styles">("general");
+  let settingsTab = $state<
+    "appearance" | "translation" | "system" | "api" | "styles" | "about"
+  >("appearance");
+  const appVersion = "1.0";
   let selectedModel = $state<AiModel>("gpt-5-mini" as AiModel);
   let apiKeys = $state({
     gemini: "",
@@ -40,7 +44,11 @@
   let appLanguage = $state<"ja" | "en" | "zh" | "ko">("ja");
   let allowRewrite = $state(false);
   let selectedProvider = $state<"openai" | "gemini" | "anthropic">("openai");
-  let isCompactMode = $state(false);
+  // Initialize mode synchronously from URL to prevent flash of wrong UI
+  const initialParams = new URLSearchParams(window.location.search);
+  const initialView = initialParams.get("view");
+  let isCompactMode = $state(initialView === "compact");
+  let isCaptureMode = $state(initialView === "capture");
   const DEFAULT_SHORTCUT = "CommandOrControl+Shift+H";
   let quickShortcut = $state(DEFAULT_SHORTCUT);
   let shortcutDraft = $state(DEFAULT_SHORTCUT);
@@ -195,14 +203,21 @@
     const viewParam = params.get("view");
     if (viewParam === "compact") {
       isCompactMode = true;
+      isCaptureMode = false;
       await tick();
       autoResize();
       return;
     }
     if (viewParam === "main") {
       isCompactMode = false;
+      isCaptureMode = false;
       await tick();
       autoResize();
+      return;
+    }
+    if (viewParam === "capture") {
+      isCaptureMode = true;
+      isCompactMode = false;
       return;
     }
 
@@ -277,27 +292,21 @@
       }
     })();
 
-    if (viewParam === "main" && startMinimized) {
-      const minimizeWithRetry = async () => {
+    // Handle startup visibility
+    if (viewParam === "main") {
+      (async () => {
         try {
           const { getCurrentWindow } = await import("@tauri-apps/api/window");
           const window = getCurrentWindow();
-          await window.minimize();
-          setTimeout(async () => {
-            try {
-              if (!(await window.isMinimized())) await window.minimize();
-            } catch {}
-          }, 600);
-          setTimeout(async () => {
-            try {
-              if (!(await window.isMinimized())) await window.minimize();
-            } catch {}
-          }, 1200);
+          if (!startMinimized) {
+            await window.show();
+            // Ensure focus if not starting minimized
+            await window.setFocus();
+          }
         } catch (e) {
-          console.warn("Failed to minimize on start", e);
+          console.warn("Failed to handle startup visibility", e);
         }
-      };
-      setTimeout(minimizeWithRetry, 400);
+      })();
     }
   });
 
@@ -309,8 +318,46 @@
       console.log("[UI] Requesting Sync State...");
       await emit("request_sync_state");
 
+      // Listen for OCR handover data
+      const unlistenHandover = await listen<string>(
+        "handover_data",
+        async (event) => {
+          const text = event.payload;
+          if (text && text.trim()) {
+            inputQuery = text;
+            await tick();
+            await tick();
+            startTranslation();
+          }
+        },
+      );
+
+      // Check for pending handover text (in case we missed the event during load)
+      try {
+        const pending = await invoke<string | null>("get_handover_text");
+        if (pending && pending.trim()) {
+          inputQuery = pending;
+          await tick();
+          await tick();
+          startTranslation();
+        }
+      } catch (e) {
+        console.warn("Failed to check handover text:", e);
+      }
+
       unlisten = await listen<any>("translation_update", (event) => {
         const p = event.payload;
+
+        // --- ECHO GUARD ---
+        // Ignore updates for old input text to prevent "jumpy" UI when typing fast.
+        // During active detection or translation, the service might echo old states.
+        if (p.inputQuery !== undefined && p.inputQuery !== inputQuery) {
+          // If this window is the one being focused/typed in, ignore external content updates.
+          // This prevents stale echoes from the's service from reverting our local input.
+          if (textareaEl && document.activeElement === textareaEl) {
+            return;
+          }
+        }
 
         // Detect completion for History Saving
         if (isTranslating && !p.isTranslating) {
@@ -345,7 +392,14 @@
 
         isTranslating = p.isTranslating;
         if (!p.isTranslating) {
-          isDetecting = false;
+          // Only stop detecting if we're not in the manual threshold-waiting state
+          if (
+            !isAutoDetect ||
+            inputQuery.trim().length >= 5 ||
+            !inputQuery.trim()
+          ) {
+            isDetecting = false;
+          }
         }
         translations = p.translations; // Direct sync
 
@@ -361,21 +415,22 @@
         }
 
         // Sync Language Settings
-        if (p.sourceLang) {
-          if (
-            isAutoDetect &&
-            p.detectedLang &&
-            p.sourceLang !== AUTO_DETECT_LABEL
-          ) {
+        // Only accept updates if we have enough text to trust the backend (or if manual)
+        // This prevents "flash" updates where backend sees 1 char and says "English"
+        if (!isAutoDetect || inputQuery.trim().length >= 5) {
+          if (p.sourceLang) {
+            if (isAutoDetect && p.sourceLang !== AUTO_DETECT_LABEL) {
+              detectedLang = p.detectedLang || p.sourceLang;
+              isDetecting = false;
+            } else {
+              applySourceLangFromSync(p.sourceLang, p.detectedLang);
+            }
+          } else if (p.detectedLang && isAutoDetect) {
             detectedLang = p.detectedLang;
             isDetecting = false;
-          } else {
-            applySourceLangFromSync(p.sourceLang, p.detectedLang);
           }
-        } else if (p.detectedLang && isAutoDetect) {
-          detectedLang = p.detectedLang;
-          isDetecting = false;
         }
+
         if (p.targetLang) {
           targetLang = p.targetLang;
         }
@@ -717,7 +772,14 @@
   }
 
   let slideDirection = $state(1);
-  const settingsTabOrder = ["general", "api", "styles"];
+  const settingsTabOrder = [
+    "appearance",
+    "translation",
+    "system",
+    "api",
+    "styles",
+    "about",
+  ];
 
   function moveStyle(index: number, direction: "up" | "down") {
     const newStyles = [...customStyles];
@@ -733,9 +795,21 @@
       ];
     }
     customStyles = newStyles;
+    localStorage.setItem(
+      "howlingual_custom_styles",
+      JSON.stringify(customStyles),
+    );
   }
 
-  function changeTab(newTab: "general" | "api" | "styles") {
+  function changeTab(
+    newTab:
+      | "appearance"
+      | "translation"
+      | "system"
+      | "api"
+      | "styles"
+      | "about",
+  ) {
     const currentIndex = settingsTabOrder.indexOf(settingsTab);
     const newIndex = settingsTabOrder.indexOf(newTab);
     slideDirection = newIndex > currentIndex ? 1 : -1;
@@ -743,17 +817,24 @@
   }
 
   function openSettingsModal() {
-    settingsTab = "general";
+    settingsTab = "appearance";
     showSettings = true;
   }
 
-  function handleWindowKeydown(e: KeyboardEvent) {
+  async function handleWindowKeydown(e: KeyboardEvent) {
+    if (isCaptureMode) return; // Let CaptureOverlay handle events
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       void startTranslation();
       return;
     }
     if (e.key === "Escape") {
+      if (isCompactMode) {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        await getCurrentWindow().hide();
+        return;
+      }
+
       // Blur active element to prevent focus rings after closing
       if (document.activeElement instanceof HTMLElement) {
         document.activeElement.blur();
@@ -804,6 +885,26 @@
     if (!editingStyle) return;
     if (!editingStyle.name.trim()) return;
 
+    // Check if the style is a default style and if it has been modified
+    if (editingStyle.isDefault) {
+      const defaults = getDefaultStyles(appLanguage);
+      const originalDefault = defaults.find((d) => d.id === editingStyle!.id);
+
+      // If it is a default style but content changed, it's no longer a "default" (system managed) style
+      // It becomes a custom style derived from a default one.
+      if (originalDefault) {
+        if (
+          editingStyle.name !== originalDefault.name ||
+          editingStyle.prompt !== originalDefault.prompt
+        ) {
+          editingStyle.isDefault = false;
+        }
+      } else {
+        // Should not happen if id matched, but safety fallback
+        editingStyle.isDefault = false;
+      }
+    }
+
     const index = customStyles.findIndex((s) => s.id === editingStyle!.id);
     if (index !== -1) {
       customStyles = customStyles.map((s, i) =>
@@ -812,6 +913,10 @@
     } else {
       customStyles = [...customStyles, editingStyle];
     }
+    localStorage.setItem(
+      "howlingual_custom_styles",
+      JSON.stringify(customStyles),
+    );
     editingStyle = null;
   }
 
@@ -824,8 +929,22 @@
     showDiscardConfirmation = false;
   }
 
-  function deleteStyle(index: number) {
-    customStyles = customStyles.filter((_, i) => i !== index);
+  function deleteStyle(styleId: string) {
+    customStyles = customStyles.filter((s) => s.id !== styleId);
+    localStorage.setItem(
+      "howlingual_custom_styles",
+      JSON.stringify(customStyles),
+    );
+  }
+
+  function resetStyles() {
+    if (confirm(t(appLanguage, "confirmReset"))) {
+      customStyles = [...getDefaultStyles(appLanguage)];
+      localStorage.setItem(
+        "howlingual_custom_styles",
+        JSON.stringify(customStyles),
+      );
+    }
   }
 
   async function addStyle() {
@@ -843,6 +962,16 @@
 
   function closeSettings() {
     showSettings = false;
+  }
+
+  async function startOCR() {
+    try {
+      console.log("[UI] Starting OCR selection...");
+      await invoke("start_selection_ocr");
+    } catch (e) {
+      console.error("[UI] OCR trigger failed:", e);
+      errorMessage = "OCR Error: " + String(e);
+    }
   }
 
   async function openMainScreen() {
@@ -961,6 +1090,8 @@
     await emit("sync_input_command", {
       text: inputQuery,
       sourceLang,
+      detectedLang,
+      isDetecting,
       targetLang,
       styles: $state.snapshot(styleLevels),
       resetTranslations,
@@ -979,10 +1110,22 @@
 
   function handleInputChange() {
     void autoResize();
+    // Synchronous immediate detection with threshold
     if (isAutoDetect) {
       const trimmed = inputQuery.trim();
-      detectedLang = trimmed ? detectLanguageSimple(trimmed) : "";
-      isDetecting = false;
+      if (!trimmed) {
+        detectedLang = "";
+        isDetecting = false;
+      } else if (trimmed.length < 5) {
+        // Wait for more input
+        detectedLang = "";
+        isDetecting = true;
+      } else {
+        // Enough input, detect immediately
+        const res = detectLanguageSimple(trimmed);
+        detectedLang = res;
+        isDetecting = false;
+      }
     }
     scheduleSyncSharedState();
   }
@@ -1318,7 +1461,7 @@
   }
 
   // Auto-resize textarea
-  let textareaEl: HTMLTextAreaElement;
+  let textareaEl = $state<HTMLTextAreaElement>();
   let isLongText = $state(false);
 
   async function autoResize() {
@@ -1378,7 +1521,7 @@
   }
 
   // Unified scroll state
-  let scrollContainerEl: HTMLElement;
+  let scrollContainerEl = $state<HTMLElement>();
   let isScrolledDown = $state(false);
 
   let isScrolling = $state(false);
@@ -1633,6 +1776,15 @@
       }
     }
 
+    const savedStyles = localStorage.getItem("howlingual_custom_styles");
+    if (savedStyles) {
+      try {
+        customStyles = JSON.parse(savedStyles);
+      } catch (e) {
+        console.error("Failed to load styles", e);
+      }
+    }
+
     /* Last result loading disabled by user request */
   });
 
@@ -1810,7 +1962,7 @@
 
     // Handle Auto-detect mock logic
     if (isAutoDetect) {
-      isDetecting = true;
+      // isDetecting = true; // Removed to prevent UI jitter/flash
       // Pre-emptive detection to save tokens on Auto-Switch
       const preDetected = detectLanguageSimple(inputQuery);
       // Update UI immediately (can be overwritten by LLM later)
@@ -1868,10 +2020,12 @@
 
 <svelte:window onkeydown={handleWindowKeydown} onresize={checkBottomPosition} />
 
-{#if isCompactMode}
+{#if isCaptureMode}
+  <CaptureOverlay />
+{:else if isCompactMode}
   <main class="compact-shell">
-      <header class="compact-header" data-tauri-drag-region>
-        <div class="compact-brand">
+    <header class="compact-header">
+      <div class="compact-brand" data-tauri-drag-region>
         <img
           src={theme === "light" ? "/icon-light.svg" : "/icon-dark.svg"}
           alt="Howlingual"
@@ -1879,60 +2033,91 @@
         />
         <span class="compact-name">Howlingual</span>
       </div>
-        <div class="compact-header-actions" data-tauri-drag-region="false">
-          <button
-            class="compact-main-btn" data-tauri-drag-region="false"
-            onclick={async () => {
-              // Stop consuming pending text in this window
-              isOpeningMain = true;
-              // Use proper handover logic
-              await openMainScreen();
-            }}
-            title={t(appLanguage, "openMain")}
+
+      <!-- Spacer that acts as the main drag handle - CRITICAL for allowing drag without blocking buttons -->
+      <div class="header-drag-spacer" data-tauri-drag-region></div>
+
+      <div class="compact-header-actions">
+        <button
+          class="compact-main-btn"
+          onpointerdown={(e) => e.stopPropagation()}
+          onmousedown={(e) => e.stopPropagation()}
+          onclick={async () => {
+            // Stop consuming pending text in this window
+            isOpeningMain = true;
+            // Use proper handover logic
+            await openMainScreen();
+          }}
+          title={t(appLanguage, "openMain")}
+        >
+          <span>{t(appLanguage, "openMain")}</span>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
           >
-            <span>{t(appLanguage, "openMain")}</span>
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M5 12h14"></path>
-              <path d="M13 5l7 7-7 7"></path>
-            </svg>
-          </button>
-          <button
-            class="compact-close-btn" data-tauri-drag-region="false"
-            onclick={async () => {
-              const { getCurrentWindow } = await import("@tauri-apps/api/window");
-              await getCurrentWindow().hide();
-            }}
-            aria-label="Close"
-            title="Close"
+            <path d="M5 12h14"></path>
+            <path d="M13 5l7 7-7 7"></path>
+          </svg>
+        </button>
+        <button
+          class="compact-close-btn"
+          onpointerdown={(e) => e.stopPropagation()}
+          onmousedown={(e) => e.stopPropagation()}
+          onclick={async () => {
+            const { getCurrentWindow } = await import("@tauri-apps/api/window");
+            await getCurrentWindow().hide();
+          }}
+          aria-label="Close"
+          title="Close"
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
           >
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <line x1="18" y1="6" x2="6" y2="18"></line>
-              <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
-          </button>
-        </div>
-      </header>
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    </header>
 
     <div class="compact-lang-row">
       <div class="lang-selector-group compact-lang-group">
+        <button
+          class="icon-btn compact-ocr-btn"
+          onclick={startOCR}
+          title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
+          style="width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; margin-right: 8px; color: var(--text-color);"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M3 7V5a2 2 0 0 1 2-2h2" />
+            <path d="M17 3h2a2 2 0 0 1 2 2v2" />
+            <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+            <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+            <path d="M7 9h10v6H7z" />
+          </svg>
+        </button>
         <div class="lang-selector">
           <button
             class="lang-btn"
@@ -1969,14 +2154,14 @@
               </svg>
             {/if}
             {#if isAutoDetect && detectedLang && translations.length > 0}
-                {detectedLang} - {t(appLanguage, "detected")}
-              {:else if isAutoDetect && isDetecting}
-                {t(appLanguage, "detecting")}
-              {:else if isAutoDetect}
-                {t(appLanguage, "autoDetect")}
-              {:else}
-                {sourceLang}
-              {/if}
+              {detectedLang} - {t(appLanguage, "detected")}
+            {:else if isAutoDetect && isDetecting}
+              {t(appLanguage, "detecting")}
+            {:else if isAutoDetect}
+              {t(appLanguage, "autoDetect")}
+            {:else}
+              {sourceLang}
+            {/if}
             <svg
               class="chevron-icon"
               width="10"
@@ -2239,7 +2424,7 @@
           </button>
         </div>
 
-          {#if showTechInfo && (isTranslating || techMetrics.time > 0)}
+        {#if showTechInfo && (isTranslating || techMetrics.time > 0)}
           <div class="tech-info-display" transition:fade>
             <span class="tech-item">
               <span class="tech-label">Wait:</span>
@@ -2675,10 +2860,12 @@
                   ></path>
                 </svg>
               {/if}
-              {#if isAutoDetect && detectedLang && translations.length > 0}
+              {#if isAutoDetect && detectedLang}
                 {detectedLang} - {t(appLanguage, "detected")}
               {:else if isAutoDetect && isDetecting}
-                {t(appLanguage, "detecting")}
+                <span class="detecting-label">
+                  {t(appLanguage, "detecting")}
+                </span>
               {:else if isAutoDetect}
                 {t(appLanguage, "autoDetect")}
               {:else}
@@ -2972,6 +3159,31 @@
             </div>
           </div>
 
+          <!-- OCR Button (Main) -->
+          <button
+            class="action-btn ocr-main-btn"
+            onclick={startOCR}
+            title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
+            style="width: 50px; margin-right: 12px; background: var(--bg-card); color: var(--text-color); border: 1px solid var(--border-color);"
+          >
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M3 7V5a2 2 0 0 1 2-2h2" />
+              <path d="M17 3h2a2 2 0 0 1 2 2v2" />
+              <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+              <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+              <path d="M7 9h10v6H7z" />
+            </svg>
+          </button>
+
           <!-- Single action button that morphs -->
           <button
             class="action-btn"
@@ -3023,7 +3235,7 @@
           </button>
         </div>
 
-          {#if showTechInfo && (isTranslating || techMetrics.time > 0)}
+        {#if showTechInfo && (isTranslating || techMetrics.time > 0)}
           <div class="tech-info-display" transition:fade>
             <span class="tech-item">
               <span class="tech-label">Wait:</span>
@@ -3133,18 +3345,76 @@
                       <span>{item.reason}</span>
                     </p>
                   {/if}
-                  <div class="candidate-actions" class:hide={!item.text}>
+                  <div
+                    class="candidate-actions"
+                    class:hide={!item.text}
+                    style="gap: 4px;"
+                  >
+                    <!-- Speak Button -->
                     <button
-                      class="icon-btn replace-btn"
-                      class:replaced={replacedId === item.id}
-                      title={t(appLanguage, "replaceSelection")}
-                      onclick={() => handleReplace(item.id, item.text)}
+                      class="icon-btn"
+                      class:active={isSpeakingId === item.id}
+                      class:animating={speakAnimating[item.id]}
+                      title={isSpeakingId === item.id
+                        ? t(appLanguage, "stop")
+                        : t(appLanguage, "speak")}
+                      onclick={() =>
+                        handleSpeak(item.id, item.text, targetLang)}
+                      onmouseenter={() => triggerSpeakAnim(item.id)}
                     >
-                      {#if replacedId === item.id}
+                      {#if isSpeakingId === item.id}
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="currentColor"
+                          stroke="none"
+                        >
+                          <rect x="6" y="6" width="12" height="12" rx="1" />
+                        </svg>
+                      {:else}
+                        <svg
+                          class="speak-icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          style="overflow: visible;"
+                        >
+                          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
+                          ></polygon>
+                          <path
+                            class="sound-wave wave-1"
+                            d="M15.54 8.46a5 5 0 0 1 0 7.07"
+                          ></path>
+                          <path
+                            class="sound-wave wave-2"
+                            d="M19.07 4.93a10 10 0 0 1 0 14.14"
+                          ></path>
+                          <path
+                            class="sound-wave wave-3"
+                            d="M22.07 1.93a14 14 0 0 1 0 20.14"
+                          ></path>
+                        </svg>
+                      {/if}
+                    </button>
+
+                    <!-- Copy Button -->
+                    <button
+                      class="icon-btn"
+                      class:animating={copyAnimating[item.id]}
+                      class:copied={copiedId === item.id}
+                      title={t(appLanguage, "copy")}
+                      onclick={() => handleCopy(item.id, item.text)}
+                      onmouseenter={() => triggerCopyAnim(item.id)}
+                    >
+                      {#if copiedId === item.id}
                         <svg
                           class="check-icon"
-                          width="14"
-                          height="14"
+                          width="16"
+                          height="16"
                           viewBox="0 0 24 24"
                           fill="none"
                           stroke="currentColor"
@@ -3156,158 +3426,22 @@
                         </svg>
                       {:else}
                         <svg
-                          width="14"
-                          height="14"
+                          class="copy-icon"
+                          width="16"
+                          height="16"
                           viewBox="0 0 24 24"
                           fill="none"
                           stroke="currentColor"
                           stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
                         >
-                          <path d="M16 3l5 5-11 11H5v-5L16 3z"></path>
-                          <path d="M15 5l4 4"></path>
+                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"
+                          ></rect>
+                          <path
+                            d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                          ></path>
                         </svg>
                       {/if}
                     </button>
-                    <div class="action-menu">
-                      <button
-                        class="icon-btn action-menu-trigger"
-                        title={t(appLanguage, "moreActions")}
-                        aria-expanded={actionMenuOpenId === item.id}
-                        onclick={() => toggleActionMenu(item.id)}
-                      >
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                        >
-                          <circle cx="12" cy="6" r="1.5"></circle>
-                          <circle cx="12" cy="12" r="1.5"></circle>
-                          <circle cx="12" cy="18" r="1.5"></circle>
-                        </svg>
-                      </button>
-                      {#if actionMenuOpenId === item.id}
-                        <div
-                          class="action-menu-dropdown glass"
-                          transition:fade={{ duration: 120 }}
-                        >
-                          <button
-                            class="action-menu-item copy-item"
-                            class:animating={copyAnimating[item.id]}
-                            class:copied={copiedId === item.id}
-                            onclick={() => handleCopy(item.id, item.text)}
-                            onmouseenter={() => triggerCopyAnim(item.id)}
-                          >
-                            <span class="action-menu-icon">
-                              {#if copiedId === item.id}
-                                <svg
-                                  class="check-icon"
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2.5"
-                                  stroke-linecap="round"
-                                  stroke-linejoin="round"
-                                >
-                                  <polyline points="20 6 9 17 4 12"></polyline>
-                                </svg>
-                              {:else}
-                                <svg
-                                  class="copy-icon"
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2"
-                                >
-                                  <rect
-                                    x="9"
-                                    y="9"
-                                    width="13"
-                                    height="13"
-                                    rx="2"
-                                    ry="2"
-                                  ></rect>
-                                  <path
-                                    d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                                  ></path>
-                                </svg>
-                              {/if}
-                            </span>
-                            <span>{t(appLanguage, "copy")}</span>
-                          </button>
-                          <button
-                            class="action-menu-item speak-item"
-                            class:active={isSpeakingId === item.id}
-                            class:animating={speakAnimating[item.id]}
-                            onclick={() =>
-                              handleSpeak(item.id, item.text, targetLang)}
-                            onmouseenter={() => triggerSpeakAnim(item.id)}
-                          >
-                            <span class="action-menu-icon">
-                              {#if isSpeakingId === item.id}
-                                <svg
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="currentColor"
-                                  stroke="none"
-                                >
-                                  <rect
-                                    x="6"
-                                    y="6"
-                                    width="12"
-                                    height="12"
-                                    rx="1"
-                                  />
-                                </svg>
-                              {:else}
-                                <svg
-                                  class="speak-icon"
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2"
-                                  style="overflow: visible;"
-                                >
-                                  <polygon
-                                    points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
-                                  ></polygon>
-                                  <path
-                                    class="sound-wave wave-1"
-                                    d="M15.54 8.46a5 5 0 0 1 0 7.07"
-                                  ></path>
-                                  <path
-                                    class="sound-wave wave-2"
-                                    d="M19.07 4.93a10 10 0 0 1 0 14.14"
-                                  ></path>
-                                  <path
-                                    class="sound-wave wave-3"
-                                    d="M22.07 1.93a14 14 0 0 1 0 20.14"
-                                  ></path>
-                                </svg>
-                              {/if}
-                            </span>
-                            <span>
-                              {isSpeakingId === item.id
-                                ? t(appLanguage, "stop")
-                                : t(appLanguage, "speak")}
-                            </span>
-                          </button>
-                        </div>
-                      {/if}
-                    </div>
                   </div>
                 </div>
               </div>
@@ -3411,7 +3545,7 @@
 {/if}
 
 <!-- Settings Modal -->
-{#if showSettings && !isCompactMode}
+{#if showSettings && !isCompactMode && !isCaptureMode}
   <div
     class="settings-overlay"
     transition:fade={{ duration: 200 }}
@@ -3533,10 +3667,24 @@
           <div class="settings-sidebar">
             <button
               class="settings-tab vertical"
-              class:active={settingsTab === "general"}
-              onclick={() => changeTab("general")}
+              class:active={settingsTab === "appearance"}
+              onclick={() => changeTab("appearance")}
             >
-              {t(appLanguage, "tabGeneral")}
+              {t(appLanguage, "tabAppearance")}
+            </button>
+            <button
+              class="settings-tab vertical"
+              class:active={settingsTab === "translation"}
+              onclick={() => changeTab("translation")}
+            >
+              {t(appLanguage, "tabTranslation")}
+            </button>
+            <button
+              class="settings-tab vertical"
+              class:active={settingsTab === "system"}
+              onclick={() => changeTab("system")}
+            >
+              {t(appLanguage, "tabSystem")}
             </button>
             <button
               class="settings-tab vertical"
@@ -3552,6 +3700,14 @@
             >
               {t(appLanguage, "tabStyles")}
             </button>
+            <div style="flex: 1;"></div>
+            <button
+              class="settings-tab vertical"
+              class:active={settingsTab === "about"}
+              onclick={() => changeTab("about")}
+            >
+              {t(appLanguage, "tabAbout")}
+            </button>
           </div>
 
           <!-- Content with Transitions -->
@@ -3562,12 +3718,99 @@
                 in:fly={{
                   y: slideDirection * 20,
                   duration: 250,
-                  delay: 250,
+                  delay: 20,
                   opacity: 0,
+                  easing: quintOut,
                 }}
-                out:fly={{ y: -slideDirection * 20, duration: 250, opacity: 0 }}
+                out:fly={{
+                  y: -slideDirection * 20,
+                  duration: 200,
+                  opacity: 0,
+                  easing: quintOut,
+                }}
               >
-                {#if settingsTab === "general"}
+                {#if settingsTab === "appearance"}
+                  <!-- App Language -->
+                  <div class="settings-section">
+                    <label class="settings-label" for="app-lang-select"
+                      >{t(appLanguage, "appLanguage")}</label
+                    >
+                    <select
+                      id="app-lang-select"
+                      class="settings-select"
+                      bind:value={appLanguage}
+                    >
+                      <option value="ja">日本語</option>
+                      <option value="en">English</option>
+                      <option value="zh">中文</option>
+                      <option value="ko">한국어</option>
+                    </select>
+                  </div>
+
+                  <!-- Theme -->
+                  <div class="settings-section">
+                    <div class="settings-label">{t(appLanguage, "theme")}</div>
+                    <div class="theme-toggle">
+                      <button
+                        class="theme-btn"
+                        class:active={theme === "dark"}
+                        onclick={() => (theme = "dark")}
+                      >
+                        {t(appLanguage, "themeDark")}
+                      </button>
+                      <button
+                        class="theme-btn"
+                        class:active={theme === "light"}
+                        onclick={() => (theme = "light")}
+                      >
+                        {t(appLanguage, "themeLight")}
+                      </button>
+                    </div>
+                  </div>
+                {:else if settingsTab === "translation"}
+                  <!-- Default Target Language -->
+                  <div class="settings-section">
+                    <label class="settings-label" for="target-lang-select"
+                      >{t(appLanguage, "defaultTargetLang")}</label
+                    >
+                    <select
+                      id="target-lang-select"
+                      class="settings-select"
+                      bind:value={defaultTargetLang}
+                    >
+                      <option value="日本語"
+                        >{getTargetLanguageName(appLanguage, "日本語")}</option
+                      >
+                      <option value="英語"
+                        >{getTargetLanguageName(appLanguage, "英語")}</option
+                      >
+                      <option value="中国語"
+                        >{getTargetLanguageName(appLanguage, "中国語")}</option
+                      >
+                      <option value="韓国語"
+                        >{getTargetLanguageName(appLanguage, "韓国語")}</option
+                      >
+                      <option value="フランス語"
+                        >{getTargetLanguageName(
+                          appLanguage,
+                          "フランス語",
+                        )}</option
+                      >
+                      <option value="ドイツ語"
+                        >{getTargetLanguageName(
+                          appLanguage,
+                          "ドイツ語",
+                        )}</option
+                      >
+                      <option value="スペイン語"
+                        >{getTargetLanguageName(
+                          appLanguage,
+                          "スペイン語",
+                        )}</option
+                      >
+                    </select>
+                  </div>
+
                   <!-- Allow Rewrite -->
                   <div class="settings-section">
                     <div class="settings-label">
@@ -3697,6 +3940,8 @@
                       </button>
                     </div>
                   </div>
+                {:else if settingsTab === "system"}
+                  <!-- Auto Start -->
                   <div class="settings-section">
                     <div class="settings-label">
                       {t(appLanguage, "autoStart") || "スタートアップ起動"}
@@ -3754,14 +3999,14 @@
                   <div class="settings-section">
                     <div class="settings-label">
                       {t(appLanguage, "startMinimized") ||
-                        "起動時にメイン画面を最小化"}
+                        "起動時にトレイに格納"}
                     </div>
                     <div class="settings-card-row">
                       <span
                         style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
                       >
                         {t(appLanguage, "startMinimizedDesc") ||
-                          "起動時にメイン画面を最小化して表示します"}
+                          "起動時にメイン画面を表示せず、タスクトレイに常駐します"}
                       </span>
                       <button
                         onclick={() => (startMinimized = !startMinimized)}
@@ -3864,87 +4109,6 @@
                     {#if shortcutError}
                       <div class="shortcut-error">{shortcutError}</div>
                     {/if}
-                  </div>
-
-                  <!-- App Language -->
-                  <div class="settings-section">
-                    <label class="settings-label" for="app-lang-select"
-                      >{t(appLanguage, "appLanguage")}</label
-                    >
-                    <select
-                      id="app-lang-select"
-                      class="settings-select"
-                      bind:value={appLanguage}
-                    >
-                      <option value="ja">日本語</option>
-                      <option value="en">English</option>
-                      <option value="zh">中文</option>
-                      <option value="ko">한국어</option>
-                    </select>
-                  </div>
-
-                  <!-- Theme -->
-                  <div class="settings-section">
-                    <div class="settings-label">{t(appLanguage, "theme")}</div>
-                    <div class="theme-toggle">
-                      <button
-                        class="theme-btn"
-                        class:active={theme === "dark"}
-                        onclick={() => (theme = "dark")}
-                      >
-                        {t(appLanguage, "themeDark")}
-                      </button>
-                      <button
-                        class="theme-btn"
-                        class:active={theme === "light"}
-                        onclick={() => (theme = "light")}
-                      >
-                        {t(appLanguage, "themeLight")}
-                      </button>
-                    </div>
-                  </div>
-
-                  <!-- Default Target Language -->
-                  <div class="settings-section">
-                    <label class="settings-label" for="target-lang-select"
-                      >{t(appLanguage, "defaultTargetLang")}</label
-                    >
-                    <select
-                      id="target-lang-select"
-                      class="settings-select"
-                      bind:value={defaultTargetLang}
-                    >
-                      <option value="日本語"
-                        >{getTargetLanguageName(appLanguage, "日本語")}</option
-                      >
-                      <option value="英語"
-                        >{getTargetLanguageName(appLanguage, "英語")}</option
-                      >
-                      <option value="中国語"
-                        >{getTargetLanguageName(appLanguage, "中国語")}</option
-                      >
-                      <option value="韓国語"
-                        >{getTargetLanguageName(appLanguage, "韓国語")}</option
-                      >
-                      <option value="フランス語"
-                        >{getTargetLanguageName(
-                          appLanguage,
-                          "フランス語",
-                        )}</option
-                      >
-                      <option value="ドイツ語"
-                        >{getTargetLanguageName(
-                          appLanguage,
-                          "ドイツ語",
-                        )}</option
-                      >
-                      <option value="スペイン語"
-                        >{getTargetLanguageName(
-                          appLanguage,
-                          "スペイン語",
-                        )}</option
-                      >
-                    </select>
                   </div>
                 {:else if settingsTab === "api"}
                   <!-- AI Settings Tab -->
@@ -4106,60 +4270,94 @@
                                 </svg>
                               </button>
                             </div>
-                            <button
-                              class="icon-btn-small edit-btn"
-                              onclick={() => openStyleEditor(style)}
-                              title="Edit"
+                            <div
+                              style="display: flex; flex-direction: column; gap: 4px;"
                             >
-                              <svg
-                                width="16"
-                                height="16"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
+                              <button
+                                class="icon-btn-small"
+                                title={t(appLanguage, "editStyle")}
+                                onclick={() => openStyleEditor(style)}
                               >
-                                <path d="M12 20h9"></path>
-                                <path
-                                  d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"
-                                ></path>
-                              </svg>
-                            </button>
-                            <button
-                              class="icon-btn-small delete-btn"
-                              onclick={() => deleteStyle(i)}
-                              aria-label={t(appLanguage, "delete")}
-                            >
-                              <svg
-                                width="16"
-                                height="16"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
+                                <svg
+                                  width="16"
+                                  height="16"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                >
+                                  <path
+                                    d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"
+                                  ></path>
+                                  <path
+                                    d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"
+                                  ></path>
+                                </svg>
+                              </button>
+                              <button
+                                class="icon-btn-small danger"
+                                title={t(appLanguage, "delete")}
+                                onclick={() => deleteStyle(style.id)}
                               >
-                                <polyline points="3 6 5 6 21 6"></polyline>
-                                <path
-                                  d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
-                                ></path>
-                              </svg>
-                            </button>
+                                <svg
+                                  width="16"
+                                  height="16"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                >
+                                  <polyline points="3 6 5 6 21 6"></polyline>
+                                  <path
+                                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                                  ></path>
+                                </svg>
+                              </button>
+                            </div>
                           </div>
                         </div>
                         <p class="style-prompt-text">{style.prompt}</p>
                       </div>
                     {/each}
                   </div>
+                {:else if settingsTab === "about"}
+                  <!-- About Tab -->
+                  <div
+                    class="about-tab-content"
+                    style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center; gap: 20px; padding: 40px 0;"
+                  >
+                    <div class="about-logo-wrapper">
+                      <img
+                        src={theme === "light"
+                          ? "icon-light.svg"
+                          : "icon-dark.svg"}
+                        alt="Howlingual Logo"
+                        style="width: 100px; height: 100px; filter: drop-shadow(0 4px 12px rgba(0,0,0,0.2));"
+                      />
+                    </div>
+                    <div class="about-text-content">
+                      <h2
+                        style="font-size: 32px; font-weight: 700; margin: 0; color: var(--text-main);"
+                      >
+                        Howlingual
+                      </h2>
+                      <p
+                        style="font-size: 14px; color: var(--text-muted); margin-top: 8px;"
+                      >
+                        Version {appVersion}
+                      </p>
+                    </div>
+                    <div
+                      class="about-footer-info"
+                      style="margin-top: auto; font-size: 12px; color: var(--text-muted); opacity: 0.6;"
+                    >
+                      <p>© 2026 tomakura</p>
+                    </div>
+                  </div>
                 {/if}
               </div>
             {/key}
           </div>
-        </div>
-
-        <div class="settings-footer">
-          <button class="save-btn" onclick={closeSettings}
-            >{t(appLanguage, "close")}</button
-          >
         </div>
       {/if}
     </div>
@@ -4172,8 +4370,12 @@
     transition:fade={{ duration: 200 }}
     onclick={() => (showHistory = false)}
     role="button"
-    tabindex="-1"
-    onkeydown={() => {}}
+    tabindex="0"
+    onkeydown={(e) => {
+      if (e.key === "Enter") {
+        showHistory = false;
+      }
+    }}
   >
     <div
       class="settings-panel glass"
@@ -4182,6 +4384,7 @@
       role="dialog"
       aria-modal="true"
       tabindex="-1"
+      onkeydown={(e) => e.stopPropagation()}
     >
       <div class="settings-header">
         <h2>{t(appLanguage, "history")}</h2>
@@ -4410,14 +4613,18 @@
   </div>
 {/if}
 
-{#if showResetConfirmation}
+{#if showResetConfirmation && !isCaptureMode}
   <div
     class="modal-overlay"
     transition:fade={{ duration: 200 }}
     onclick={() => (showResetConfirmation = false)}
     role="button"
-    tabindex="-1"
-    onkeydown={() => {}}
+    tabindex="0"
+    onkeydown={(e) => {
+      if (e.key === "Enter") {
+        showResetConfirmation = false;
+      }
+    }}
   >
     <div
       class="modal-card glass"
@@ -4425,6 +4632,7 @@
       role="dialog"
       aria-modal="true"
       tabindex="-1"
+      onkeydown={(e) => e.stopPropagation()}
     >
       <h3>{t(appLanguage, "confirmReset")}</h3>
       <div class="modal-actions">
@@ -4441,14 +4649,18 @@
   </div>
 {/if}
 
-{#if showDiscardConfirmation}
+{#if showDiscardConfirmation && !isCaptureMode}
   <div
     class="modal-overlay"
     transition:fade={{ duration: 200 }}
     onclick={() => (showDiscardConfirmation = false)}
     role="button"
-    tabindex="-1"
-    onkeydown={() => {}}
+    tabindex="0"
+    onkeydown={(e) => {
+      if (e.key === "Enter") {
+        showDiscardConfirmation = false;
+      }
+    }}
   >
     <div
       class="modal-card glass"
@@ -4456,6 +4668,7 @@
       role="dialog"
       aria-modal="true"
       tabindex="-1"
+      onkeydown={(e) => e.stopPropagation()}
     >
       <h3>{t(appLanguage, "confirmDiscard")}</h3>
       <div class="modal-actions">
@@ -4501,26 +4714,37 @@
   }
 
   .compact-header {
-    position: relative;
+    height: 40px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    /* justify-content: space-between;  Removed to allow spacer to grow */
     z-index: 3000;
     user-select: none;
     cursor: default;
+    background: transparent;
+  }
+
+  .compact-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-left: 4px;
+    padding-right: 10px;
+    /* pointer-events: none; REMOVED: Needs to catch drag events now */
+  }
+
+  .header-drag-spacer {
+    flex-grow: 1;
+    height: 100%;
+    background: transparent;
   }
 
   .compact-header-actions {
     display: flex;
     align-items: center;
     gap: 6px;
-    z-index: 1;
-    pointer-events: auto;
-  }
-
-  .compact-brand {
-    z-index: 1;
-    pointer-events: auto;
+    margin-right: 4px;
+    z-index: 3001;
   }
 
   .compact-close-btn {
@@ -4541,12 +4765,6 @@
     background: rgba(239, 68, 68, 0.2);
     border-color: rgba(239, 68, 68, 0.3);
     color: #f87171;
-  }
-
-  .compact-brand {
-    display: flex;
-    align-items: center;
-    gap: 8px;
   }
 
   .compact-icon {
@@ -5916,6 +6134,17 @@
     gap: 12px;
   }
 
+  .style-item-card {
+    background: rgba(255, 255, 255, 0.05); /* Slightly lighter */
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    padding: 8px 12px; /* Reduced from 12px */
+    display: flex;
+    flex-direction: column;
+    gap: 4px; /* Reduced gap */
+    transition: all 0.2s;
+  }
+
   .history-item {
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.1);
@@ -6072,7 +6301,7 @@
 
   .apply-shortcut-btn {
     min-width: 88px;
-    height: 36px;
+    height: 40px; /* Match .settings-input height (10px*2 + 14px line + 1px*2 border approx) */
   }
 
   .save-btn.apply-shortcut-btn:disabled {
@@ -6408,7 +6637,6 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 10px;
     min-height: 32px;
   }
 
@@ -6420,12 +6648,12 @@
 
   .style-header-actions {
     display: flex;
-    gap: 4px;
+    gap: 2px;
   }
 
   .icon-btn-small {
-    width: 28px;
-    height: 28px;
+    width: 20px;
+    height: 20px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -6969,5 +7197,32 @@
 
   :global([data-theme="light"]) .level-meter {
     background: rgba(0, 0, 0, 0.08);
+  }
+
+  /* Fixed width for language buttons to prevent jitter */
+  .lang-btn {
+    min-width: 15rem; /* ~160px depending on base font */
+    justify-content: center;
+    position: relative;
+  }
+
+  /* Ensure text doesn't overflow */
+  .lang-btn span,
+  .detecting-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  @keyframes spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>

@@ -17,8 +17,9 @@
         "url": "/?view=main",
         "width": 800,
         "height": 600,
-        "minWidth": 600,
-        "minHeight": 400
+        "minHeight": 400,
+        "transparent": true,
+        "visible": false
       },
       {
         "label": "tray",
@@ -33,6 +34,18 @@
         "alwaysOnTop": true,
         "visible": false,
         "center": false
+      },
+      {
+        "label": "capture",
+        "title": "Howlingual Capture",
+        "url": "/?view=capture",
+        "decorations": false,
+        "fullscreen": false,
+        "resizable": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true
       },
       {
         "label": "service",

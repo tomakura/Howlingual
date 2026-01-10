@@ -23,15 +23,20 @@ interface Translations {
 	stop: string;
 	replaceSelection: string;
 	moreActions: string;
+	startOCR: string;
 
 	// Explanation
 	explanation: string;
 
 	// Settings
 	settingsTitle: string;
-	tabGeneral: string;
+	tabGeneral: string; // Deprecated but kept for safety if needed, or remove if fully refactored
+	tabAppearance: string;
+	tabTranslation: string;
+	tabSystem: string;
 	tabAi: string;
 	tabStyles: string;
+	tabAbout: string;
 	styleName: string;
 	stylePrompt: string;
 	stylePromptHint: string;
@@ -105,11 +110,16 @@ const translations: Record<AppLanguage, Translations> = {
 		stop: "停止",
 		replaceSelection: "選択文を置換",
 		moreActions: "その他の操作",
+		startOCR: "画面から文字を読み取る",
 		explanation: "解説",
 		settingsTitle: "設定",
 		tabGeneral: "一般",
+		tabAppearance: "表示",
+		tabTranslation: "翻訳",
+		tabSystem: "システム",
 		tabAi: "AI",
-		tabStyles: "文体設定",
+		tabStyles: "文体一覧",
+		tabAbout: "情報",
 		styleName: "文体名",
 		stylePrompt: "プロンプト",
 		stylePromptHint: "AIへの指示を入力してください。（例：〜な口調で翻訳して、〜という用語を使って、など）",
@@ -133,7 +143,7 @@ const translations: Record<AppLanguage, Translations> = {
 		editStyle: "文体を編集",
 		cancel: "キャンセル",
 		allowRewrite: "同一言語の翻訳(リライト)を許可",
-		allowRewriteDescription: "オフにすると、翻訳元と翻訳先が同じ言語の場合、自動的に翻訳先を切り替えます。",
+		allowRewriteDescription: "オンにすると、翻訳元と翻訳先が同じ言語でも、AIによる言い換えとして翻訳を実行します。",
 		confirmDiscard: "変更を破棄しますか？",
 		discard: "破棄して戻る",
 		aiTabDescription: "選択したAIプロバイダーのモデルが有効になります。",
@@ -179,11 +189,16 @@ const translations: Record<AppLanguage, Translations> = {
 		stop: "Stop",
 		replaceSelection: "Replace selection",
 		moreActions: "More actions",
+		startOCR: "Extract Text (OCR)",
 		explanation: "Explanation",
 		settingsTitle: "Settings",
 		tabGeneral: "General",
+		tabAppearance: "Appearance",
+		tabTranslation: "Translation",
+		tabSystem: "System",
 		tabAi: "AI",
-		tabStyles: "Styles",
+		tabStyles: "Style List",
+		tabAbout: "About",
 		styleName: "Style Name",
 		stylePrompt: "Prompt",
 		stylePromptHint: "Please enter instructions for the AI. (e.g., Translate in a ~, use the term ~, etc.)",
@@ -207,7 +222,7 @@ const translations: Record<AppLanguage, Translations> = {
 		editStyle: "Edit Style",
 		cancel: "Cancel",
 		allowRewrite: "Allow rewrite (same language)",
-		allowRewriteDescription: "If disabled, the target language will automatically switch if it matches the source language.",
+		allowRewriteDescription: "Enable to perform AI rewriting even if source and target languages are the same.",
 		confirmDiscard: "Discard changes?",
 		discard: "Discard",
 		aiTabDescription: "The model from the selected AI provider will be active.",
@@ -253,11 +268,16 @@ const translations: Record<AppLanguage, Translations> = {
 		stop: "停止",
 		replaceSelection: "替换所选",
 		moreActions: "更多操作",
+		startOCR: "屏幕文字识别 (OCR)",
 		explanation: "解说",
 		settingsTitle: "设置",
 		tabGeneral: "常规",
+		tabAppearance: "外观",
+		tabTranslation: "翻译",
+		tabSystem: "系统",
 		tabAi: "AI",
 		tabStyles: "风格",
+		tabAbout: "关于",
 		styleName: "风格名称",
 		stylePrompt: "提示词",
 		stylePromptHint: "请输入AI指令。（例如：用〜语气翻译，使用〜术语等）",
@@ -291,10 +311,10 @@ const translations: Record<AppLanguage, Translations> = {
 		autoStartDesc: "系统启动时自动启动应用",
 		startMinimized: "启动时最小化主窗口",
 		startMinimizedDesc: "启动时将主窗口最小化显示",
-		quickShortcut: "???????",
-		quickShortcutHint: "?: CommandOrControl+Shift+H",
-		applyShortcut: "??",
-		shortcutInvalid: "?????",
+		quickShortcut: "快捷键",
+		quickShortcutHint: "例如: CommandOrControl+Shift+H",
+		applyShortcut: "应用",
+		shortcutInvalid: "快捷键无效",
 		polite: "礼貌",
 		business: "商务",
 		casual: "休闲",
@@ -327,11 +347,16 @@ const translations: Record<AppLanguage, Translations> = {
 		stop: "정지",
 		replaceSelection: "선택 문장 바꾸기",
 		moreActions: "추가 작업",
+		startOCR: "화면 문자 인식 (OCR)",
 		explanation: "설명",
 		settingsTitle: "설정",
 		tabGeneral: "일반",
+		tabAppearance: "화면",
+		tabTranslation: "번역",
+		tabSystem: "시스템",
 		tabAi: "AI",
 		tabStyles: "문체",
+		tabAbout: "정보",
 		styleName: "문체 이름",
 		stylePrompt: "프롬프트",
 		stylePromptHint: "AI지침 입력 (예: ~ 말투로 번역, ~ 용어 사용 등)",
@@ -365,10 +390,10 @@ const translations: Record<AppLanguage, Translations> = {
 		autoStartDesc: "OS 시작 시 앱을 자동으로 실행합니다.",
 		startMinimized: "시작 시 메인 창 최소화",
 		startMinimizedDesc: "실행 시 메인 창을 최소화합니다.",
-		quickShortcut: "?? ?? ???",
-		quickShortcutHint: "?: CommandOrControl+Shift+H",
-		applyShortcut: "??",
-		shortcutInvalid: "???? ???? ????",
+		quickShortcut: "단축키",
+		quickShortcutHint: "예: CommandOrControl+Shift+H",
+		applyShortcut: "적용",
+		shortcutInvalid: "유효하지 않은 단축키",
 		polite: "정중",
 		business: "비즈니스",
 		casual: "캐주얼",
@@ -445,4 +470,3 @@ export function getTargetLanguageName(lang: AppLanguage, targetLang: string): st
 }
 
 export default translations;
-
