@@ -604,7 +604,6 @@
     });
 
     styleLevels = nextLevels;
-    scheduleSyncSharedState();
   });
 
   function triggerResetStyles() {
