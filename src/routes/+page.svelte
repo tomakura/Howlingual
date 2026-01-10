@@ -1721,6 +1721,7 @@
     }
     if (scrollTimeout) {
       clearTimeout(scrollTimeout);
+      scrollTimeout = null;
     }
   });
 </script>
