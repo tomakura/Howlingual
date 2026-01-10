@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick, onMount, untrack } from "svelte";
+  import { tick, onMount, onDestroy, untrack } from "svelte";
   import { fade, scale, fly, crossfade } from "svelte/transition";
   import { flip } from "svelte/animate";
   import { quintOut } from "svelte/easing";
@@ -1711,6 +1711,14 @@
   // Initial load: Start empty
   $effect(() => {
     // No initial data
+  });
+
+  // Cleanup on component destroy
+  onDestroy(() => {
+    if (syncTimer) {
+      clearTimeout(syncTimer);
+      syncTimer = null;
+    }
   });
 </script>
 
