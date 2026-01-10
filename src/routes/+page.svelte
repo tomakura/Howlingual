@@ -836,7 +836,7 @@
 
     await tick();
 
-    // Set the new text
+    // Apply the new input text
     inputQuery = text;
     // Sync to service immediately
     await syncSharedState();
