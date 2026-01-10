@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick, onMount, untrack } from "svelte";
+  import { tick, onMount, onDestroy, untrack } from "svelte";
   import { fade, scale, fly, crossfade } from "svelte/transition";
   import { flip } from "svelte/animate";
   import { quintOut } from "svelte/easing";
@@ -306,17 +306,14 @@
         if (p.detailedExplanation) {
           detailedExplanation = p.detailedExplanation;
         }
-        if (p.inputQuery && p.inputQuery !== inputQuery && !isTranslating) {
+        if (p.inputQuery && p.inputQuery !== inputQuery) {
           inputQuery = p.inputQuery;
         }
 
         // Sync Language Settings
         if (p.sourceLang) {
-          if (p.sourceLang !== "自動検出") {
-            selectSourceLang(p.sourceLang);
-          }
-        }
-        if (p.detectedLang) {
+          applySourceLangFromSync(p.sourceLang, p.detectedLang);
+        } else if (p.detectedLang && isAutoDetect) {
           detectedLang = p.detectedLang;
         }
         if (p.targetLang) {
@@ -475,10 +472,7 @@
 
         // Restore language settings
         if (payload.sourceLang) {
-          if (payload.sourceLang !== "自動検出") {
-            selectSourceLang(payload.sourceLang);
-          }
-          detectedLang = payload.sourceLang;
+          applySourceLangFromSync(payload.sourceLang, payload.detectedLang);
         }
         if (payload.targetLang) {
           targetLang = payload.targetLang;
@@ -506,13 +500,11 @@
           isTranslating: payload.isTranslating,
         });
 
+        isTranslating = Boolean(payload.isTranslating);
+
         void tick().then(async () => {
           autoResize();
-          // If translation was active in quick window, continue (restart) it here
-          if (payload.isTranslating) {
-            console.log("[handover] Continuing translation...");
-            await startTranslation();
-          }
+          await emit("request_sync_state");
         });
       } catch (e) {
         // Fallback: treat as plain text (old behavior)
@@ -785,7 +777,8 @@
         detailedExplanation: detailedExplanation
           ? $state.snapshot(detailedExplanation)
           : null,
-        sourceLang: detectedLang || sourceLang,
+        sourceLang: sourceLang,
+        detectedLang: detectedLang,
         targetLang: targetLang,
         styleLevels: $state.snapshot(styleLevels),
         techMetrics: $state.snapshot(techMetrics),
@@ -843,11 +836,10 @@
 
     await tick();
 
-    // Set the new text
-    // Set the new text
+    // Apply the new input text
     inputQuery = text;
     // Sync to service immediately
-    await emit("sync_input_command", { text });
+    await syncSharedState();
 
     await tick();
     autoResize();
@@ -866,6 +858,32 @@
         console.log("[AutoRun] Skipped (disabled)");
       }
     }
+  }
+
+  let syncTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async function syncSharedState() {
+    await emit("sync_input_command", {
+      text: inputQuery,
+      sourceLang,
+      targetLang,
+      styles: $state.snapshot(styleLevels),
+    });
+  }
+
+  function scheduleSyncSharedState(delay = 150) {
+    if (syncTimer) {
+      clearTimeout(syncTimer);
+    }
+    syncTimer = setTimeout(() => {
+      syncTimer = null;
+      void syncSharedState();
+    }, delay);
+  }
+
+  function handleInputChange() {
+    void autoResize();
+    scheduleSyncSharedState();
   }
 
   async function syncShortcut() {
@@ -929,6 +947,19 @@
 
   let isSparkling = $state(false);
 
+  function applySourceLangFromSync(lang: string, detected?: string) {
+    if (lang === "自動検出") {
+      isAutoDetect = true;
+      sourceLang = "自動検出";
+      detectedLang = detected || "";
+      return;
+    }
+
+    isAutoDetect = false;
+    sourceLang = lang;
+    detectedLang = "";
+  }
+
   function selectSourceLang(lang: string | null) {
     if (lang === null) {
       isAutoDetect = true;
@@ -948,12 +979,14 @@
       `[UI] Source Language Selected: ${sourceLang} (Auto: ${isAutoDetect})`,
     );
     showSourceLangMenu = false;
+    scheduleSyncSharedState();
   }
 
   function selectTargetLang(lang: string) {
     console.log(`[UI] Target Language Selected: ${lang}`);
     targetLang = lang;
     showTargetLangMenu = false;
+    scheduleSyncSharedState();
   }
 
   // Prevent same-language translation if allowRewrite is false
@@ -1140,6 +1173,7 @@
     if (isDragging) return;
     styleLevels[style] = (styleLevels[style] + 1) % 3;
     console.log(`[UI] Style cycled: ${style} -> ${styleLevels[style]}`);
+    scheduleSyncSharedState();
   }
 
   function handleDrag(style: string, event: PointerEvent) {
@@ -1168,6 +1202,10 @@
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      // Sync state after drag completes
+      if (hasMoved) {
+        scheduleSyncSharedState();
+      }
       // Reset isDragging after a short delay to allow click event to fire and check it
       setTimeout(() => {
         isDragging = false;
@@ -1677,6 +1715,18 @@
   $effect(() => {
     // No initial data
   });
+
+  // Cleanup on component destroy
+  onDestroy(() => {
+    if (syncTimer) {
+      clearTimeout(syncTimer);
+      syncTimer = null;
+    }
+    if (scrollTimeout) {
+      clearTimeout(scrollTimeout);
+      scrollTimeout = null;
+    }
+  });
 </script>
 
 <svelte:window onkeydown={handleWindowKeydown} onresize={checkBottomPosition} />
@@ -1897,7 +1947,7 @@
             <textarea
               bind:this={textareaEl}
               bind:value={inputQuery}
-              oninput={autoResize}
+              oninput={handleInputChange}
               onscroll={checkScroll}
               class:long-text={isLongText}
               class="compact-textarea"
@@ -2653,7 +2703,7 @@
             <textarea
               bind:this={textareaEl}
               bind:value={inputQuery}
-              oninput={autoResize}
+              oninput={handleInputChange}
               onscroll={checkScroll}
               class:long-text={isLongText}
               placeholder={t(appLanguage, "inputPlaceholder")}
