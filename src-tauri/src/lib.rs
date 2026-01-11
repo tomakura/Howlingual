@@ -561,12 +561,21 @@ fn ensure_capture_window(
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn close_capture_windows(app: &AppHandle) {
+fn close_capture_windows(app: &AppHandle) -> Result<(), String> {
+    let mut errors = Vec::new();
     for (label, window) in app.webview_windows() {
         if label == CAPTURE_WINDOW_LABEL || label.starts_with(CAPTURE_WINDOW_PREFIX) {
-            let _ = window.close();
+            if let Err(e) = window.close() {
+                errors.push(format!("Failed to close window '{}': {}", label, e));
+            }
         }
     }
+    
+    if !errors.is_empty() {
+        return Err(errors.join("; "));
+    }
+    
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -825,13 +834,16 @@ async fn start_selection_ocr(app: AppHandle) -> Result<(), String> {
 
         let monitors = Monitor::all().map_err(|e| e.to_string())?;
 
-        close_capture_windows(&app);
+        // Close any existing capture windows before creating new ones
+        if let Err(e) = close_capture_windows(&app) {
+            println!("[ocr] Warning: Failed to close existing capture windows: {}", e);
+        }
 
         let mut capture_map = HashMap::new();
 
-        // Create capture windows for each monitor
-        // The windows are sized in physical pixels to match the monitor exactly
-        // The webview inside will scale to CSS pixels based on DPI (devicePixelRatio)
+        // Get cursor position once to determine which monitor to focus
+        let cursor_pos = get_cursor_position();
+
         for (index, monitor) in monitors.into_iter().enumerate() {
             let mon_width = monitor.width();
             let mon_height = monitor.height();
@@ -871,7 +883,23 @@ async fn start_selection_ocr(app: AppHandle) -> Result<(), String> {
                 height: mon_height,
             }));
 
-            let _ = window.set_focus();
+            // Focus strategy: focus the window on the monitor containing the cursor.
+            // If cursor position is unavailable, focus the first monitor as a fallback.
+            let should_focus = if let Some((cursor_x, cursor_y)) = cursor_pos {
+                // Check if cursor is within this monitor's bounds
+                cursor_x >= monitor.x()
+                    && cursor_x < monitor.x() + monitor.width() as i32
+                    && cursor_y >= monitor.y()
+                    && cursor_y < monitor.y() + monitor.height() as i32
+            } else {
+                // Fallback: focus the first monitor if cursor position is unavailable
+                index == 0
+            };
+
+            if should_focus {
+                println!("[ocr] Focusing capture window on monitor {}", index);
+                let _ = window.set_focus();
+            }
         }
 
         if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
@@ -900,10 +928,9 @@ async fn finish_selection_ocr(
 
     let image = {
         let state = app.state::<CapturedImages>();
-        let lock = state.0.lock().map_err(|_| "Lock failed")?;
-        lock.get(&monitor_id)
-            .cloned()
-            .ok_or("No captured image found")?
+        let mut lock = state.0.lock().map_err(|_| "Lock failed")?;
+        lock.remove(&monitor_id)
+            .ok_or_else(|| format!("No captured image found for monitor {}", monitor_id))?
     };
 
     // Validate crop bounds before cropping to avoid panics in crop_imm.
@@ -937,11 +964,15 @@ async fn finish_selection_ocr(
     // Crop image
     let sub_image = image::imageops::crop_imm(&image, x_u32, y_u32, width, height).to_image();
 
-    // Close capture window
-    close_capture_windows(&app);
-
-    if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
-        lock.clear();
+    // Close capture windows and clear state only if closure succeeds
+    if let Err(e) = close_capture_windows(&app) {
+        println!("[ocr] Warning: Failed to close some capture windows: {}", e);
+        // Continue anyway, but don't clear state if windows might still be active
+    } else {
+        // Only clear the state if all windows were successfully closed
+        if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
+            lock.clear();
+        }
     }
 
     #[cfg(windows)]
@@ -953,9 +984,15 @@ async fn finish_selection_ocr(
 
 #[tauri::command]
 fn cancel_selection_ocr(app: AppHandle) {
-    close_capture_windows(&app);
-    if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
-        lock.clear();
+    // Close capture windows and clear state only if closure succeeds
+    if let Err(e) = close_capture_windows(&app) {
+        println!("[ocr] Warning: Failed to close some capture windows: {}", e);
+        // Don't clear state if windows might still be active
+    } else {
+        // Only clear the state if all windows were successfully closed
+        if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
+            lock.clear();
+        }
     }
 }
 
@@ -967,7 +1004,7 @@ async fn ocr_windows(image: image::RgbaImage) -> Result<String, String> {
     let mut dynamic = image::DynamicImage::ImageRgba8(image);
 
     let (width, height) = dynamic.dimensions();
-    let scale = if width < 1200 || height < 800 { 2 } else { 1 };
+    let scale = if width < 1200 && height < 800 { 2 } else { 1 };
     if scale > 1 {
         dynamic = dynamic.resize(width * scale, height * scale, image::imageops::Lanczos3);
     }

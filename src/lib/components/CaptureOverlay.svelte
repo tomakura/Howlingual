@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { invoke } from "@tauri-apps/api/core";
+	import { getCurrentWindow } from "@tauri-apps/api/window";
 	import { fade } from "svelte/transition";
 
 	let isSelecting = $state(false);
@@ -99,17 +100,20 @@
 		}
 	}
 
-	function handleKeyDown(e: KeyboardEvent) {
+	async function handleKeyDown(e: KeyboardEvent) {
 		console.log("[Capture] Keydown:", e.key);
 		if (e.key === "Escape") {
 			e.preventDefault();
 			e.stopPropagation();
 			e.stopImmediatePropagation();
 			console.log("[Capture] Closing window via Escape");
-			invoke("cancel_selection_ocr");
-			import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+			try {
+				await invoke("cancel_selection_ocr");
+			} catch (err) {
+				console.error("[Capture] Error canceling OCR:", err);
+			} finally {
 				getCurrentWindow().close();
-			});
+			}
 		}
 	}
 
