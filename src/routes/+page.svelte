@@ -3657,7 +3657,7 @@
     aria-label="Close settings"
   >
     <div
-      class="settings-panel glass"
+      class="settings-panel glass history-panel"
       class:style-editor-mode={!!editingStyle}
       transition:fly={{ y: 20, duration: 300 }}
       onclick={(e) => e.stopPropagation()}
@@ -6272,6 +6272,7 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+    align-items: stretch;
   }
 
   .style-item-card {
@@ -6542,7 +6543,7 @@
     display: flex;
     gap: 12px;
     padding: 12px;
-    align-items: center;
+    align-items: stretch;
     cursor: default;
   }
 
@@ -6557,6 +6558,14 @@
     padding: 0;
     color: inherit;
     font: inherit;
+    align-items: flex-start;
+  }
+
+  /* Prevent history modal content from centering text */
+  .history-panel .settings-body-container,
+  .history-panel .tab-content-wrapper,
+  .history-panel .settings-main-content {
+    align-items: stretch;
   }
 
   .history-item-actions {
