@@ -3435,21 +3435,21 @@
                 </div>
               </div>
               <div class="empty-state-content">
-                <h3 class="empty-title">{appLanguage === 'ja' ? 'テキストを入力してください' : appLanguage === 'en' ? 'Enter text to translate' : appLanguage === 'zh' ? '请输入要翻译的文本' : '번역할 텍스트를 입력하세요'}</h3>
-                <p class="empty-description">{appLanguage === 'ja' ? 'AIが複数の翻訳候補と詳しい解説を提供します' : appLanguage === 'en' ? 'AI will provide multiple translation options with detailed explanations' : appLanguage === 'zh' ? 'AI将提供多种翻译选项并附详细说明' : 'AI가 여러 번역 옵션과 자세한 설명을 제공합니다'}</p>
+                <h3 class="empty-title">{t(appLanguage, 'emptyTitle')}</h3>
+                <p class="empty-description">{t(appLanguage, 'emptyDescription')}</p>
               </div>
               <div class="empty-hints">
                 <div class="empty-hint">
                   <span class="hint-icon">⌨️</span>
-                  <span>{appLanguage === 'ja' ? 'テキストを直接入力' : appLanguage === 'en' ? 'Type text directly' : appLanguage === 'zh' ? '直接输入文本' : '텍스트 직접 입력'}</span>
+                  <span>{t(appLanguage, 'emptyHintType')}</span>
                 </div>
                 <div class="empty-hint">
                   <span class="hint-icon">📋</span>
-                  <span>{appLanguage === 'ja' ? 'クリップボードから貼り付け' : appLanguage === 'en' ? 'Paste from clipboard' : appLanguage === 'zh' ? '从剪贴板粘贴' : '클립보드에서 붙여넣기'}</span>
+                  <span>{t(appLanguage, 'emptyHintPaste')}</span>
                 </div>
                 <div class="empty-hint">
                   <span class="hint-icon">📷</span>
-                  <span>{appLanguage === 'ja' ? 'OCRで画面から読み取り' : appLanguage === 'en' ? 'OCR from screen' : appLanguage === 'zh' ? '通过OCR从屏幕读取' : 'OCR로 화면에서 읽기'}</span>
+                  <span>{t(appLanguage, 'emptyHintOcr')}</span>
                 </div>
               </div>
             </div>
@@ -5941,10 +5941,6 @@
   :global([data-theme="light"]) .candidate-card:hover {
     border-color: rgba(0, 0, 0, 0.12);
     background: rgba(0, 0, 0, 0.04);
-  }
-
-  .candidate-card:hover {
-    border-color: var(--border-color-strong);
   }
 
   /* Empty State Styles */
