@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -7,7 +8,6 @@ use tauri_plugin_autostart::MacosLauncher;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use arboard::Clipboard;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use mouse_position::mouse_position::Mouse;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -34,6 +34,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 const MAIN_WINDOW_LABEL: &str = "main";
 const COMPACT_WINDOW_LABEL: &str = "compact";
 const CAPTURE_WINDOW_LABEL: &str = "capture";
+const CAPTURE_WINDOW_PREFIX: &str = "capture-";
 const DEFAULT_SHORTCUT: &str = "CommandOrControl+Shift+H";
 
 struct ExitState(AtomicBool);
@@ -79,12 +80,12 @@ impl Default for LastCursorPos {
     }
 }
 
-// Store captured screen image for OCR
-struct CapturedImage(Mutex<Option<image::RgbaImage>>);
+// Store captured screen images for OCR (one per monitor)
+struct CapturedImages(Mutex<HashMap<String, image::RgbaImage>>);
 
-impl Default for CapturedImage {
+impl Default for CapturedImages {
     fn default() -> Self {
-        Self(Mutex::new(None))
+        Self(Mutex::new(HashMap::new()))
     }
 }
 
@@ -536,28 +537,66 @@ fn ensure_compact_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow>
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn ensure_capture_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
-    if let Some(window) = app.get_webview_window(CAPTURE_WINDOW_LABEL) {
-        let _ = window.hide(); // Reset visibility state first?
+fn ensure_capture_window(
+    app: &AppHandle,
+    label: &str,
+    url: &str,
+) -> tauri::Result<tauri::WebviewWindow> {
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.hide();
         let _ = window.show();
         let _ = window.set_focus();
         return Ok(window);
     }
 
-    // Capture window needs to be transparent and fullscreen
-    tauri::WebviewWindowBuilder::new(
-        app,
-        CAPTURE_WINDOW_LABEL,
-        tauri::WebviewUrl::App("/?view=capture".into()),
-    )
-    .title("Howlingual Capture")
-    .transparent(true)
-    .resizable(false)
-    .decorations(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .visible(true)
-    .build()
+    tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(url.into()))
+        .title("Howlingual Capture")
+        .transparent(true)
+        .resizable(false)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(true)
+        .build()
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn close_capture_windows(app: &AppHandle) {
+    for (label, window) in app.webview_windows() {
+        if label == CAPTURE_WINDOW_LABEL || label.starts_with(CAPTURE_WINDOW_PREFIX) {
+            let _ = window.close();
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn clamp_window_to_monitor(
+    x: i32,
+    y: i32,
+    win_w: i32,
+    win_h: i32,
+    mon_pos: tauri::PhysicalPosition<i32>,
+    mon_size: tauri::PhysicalSize<u32>,
+) -> (i32, i32) {
+    let mut clamped_x = x;
+    let mut clamped_y = y;
+    let mon_right = mon_pos.x + mon_size.width as i32;
+    let mon_bottom = mon_pos.y + mon_size.height as i32;
+
+    if clamped_x + win_w > mon_right {
+        clamped_x = mon_right - win_w;
+    }
+    if clamped_y + win_h > mon_bottom {
+        clamped_y = mon_bottom - win_h;
+    }
+    if clamped_x < mon_pos.x {
+        clamped_x = mon_pos.x;
+    }
+    if clamped_y < mon_pos.y {
+        clamped_y = mon_pos.y;
+    }
+
+    (clamped_x, clamped_y)
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -604,25 +643,9 @@ fn show_main_window(app: &AppHandle, cursor_pos: Option<(i32, i32)>) -> tauri::R
             let win_h = win_size.height as i32;
 
             // Center window on cursor
-            let mut x = cursor_x - win_w / 2;
-            let mut y = cursor_y - win_h / 2;
-
-            // Using Physical coordinates logic
-            let mon_right = mon_pos.x + mon_size.width as i32;
-            let mon_bottom = mon_pos.y + mon_size.height as i32;
-
-            if x + win_w > mon_right {
-                x = mon_right - win_w;
-            }
-            if y + win_h > mon_bottom {
-                y = mon_bottom - win_h;
-            }
-            if x < mon_pos.x {
-                x = mon_pos.x;
-            }
-            if y < mon_pos.y {
-                y = mon_pos.y;
-            }
+            let x = cursor_x - win_w / 2;
+            let y = cursor_y - win_h / 2;
+            let (x, y) = clamp_window_to_monitor(x, y, win_w, win_h, mon_pos, mon_size);
 
             let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
         }
@@ -690,27 +713,10 @@ fn show_compact_window(
 
             // Start with cursor position offset slightly (so cursor is near top-left of window)
             // UPDATED: Shift it more to the right so it doesn't overlap cursor immediately
-            let mut x = cursor_x + 10;
-            let mut y = cursor_y + 10;
+            let x = cursor_x + 10;
+            let y = cursor_y + 10;
             println!("[debug] Initial calc pos: ({}, {})", x, y);
-
-            // Clamp to monitor bounds
-            // Clamp to monitor bounds
-            let mon_right = mon_pos.x + mon_size.width as i32;
-            let mon_bottom = mon_pos.y + mon_size.height as i32;
-
-            if x + win_w > mon_right {
-                x = mon_right - win_w;
-            }
-            if y + win_h > mon_bottom {
-                y = mon_bottom - win_h;
-            }
-            if x < mon_pos.x {
-                x = mon_pos.x;
-            }
-            if y < mon_pos.y {
-                y = mon_pos.y;
-            }
+            let (x, y) = clamp_window_to_monitor(x, y, win_w, win_h, mon_pos, mon_size);
 
             println!("[debug] Final pos: ({}, {})", x, y);
             let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
@@ -817,48 +823,45 @@ async fn start_selection_ocr(app: AppHandle) -> Result<(), String> {
             let _ = main.hide();
         }
 
-        let cursor = get_cursor_position().ok_or("Could not get cursor position")?;
         let monitors = Monitor::all().map_err(|e| e.to_string())?;
 
-        let monitor = monitors
-            .into_iter()
-            .find(|m| {
-                let x = m.x();
-                let y = m.y();
-                let w = m.width() as i32;
-                let h = m.height() as i32;
-                cursor.0 >= x && cursor.0 < x + w && cursor.1 >= y && cursor.1 < y + h
-            })
-            .ok_or("No monitor found at cursor position")?;
+        close_capture_windows(&app);
 
-        println!(
-            "[ocr] Capturing monitor: {}x{} at ({},{})",
-            monitor.width(),
-            monitor.height(),
-            monitor.x(),
-            monitor.y()
-        );
+        let mut capture_map = HashMap::new();
 
-        let image = monitor.capture_image().map_err(|e| e.to_string())?;
+        for (index, monitor) in monitors.into_iter().enumerate() {
+            println!(
+                "[ocr] Capturing monitor {}: {}x{} at ({},{})",
+                index,
+                monitor.width(),
+                monitor.height(),
+                monitor.x(),
+                monitor.y()
+            );
 
-        if let Ok(mut lock) = app.state::<CapturedImage>().0.lock() {
-            *lock = Some(image);
+            let image = monitor.capture_image().map_err(|e| e.to_string())?;
+            let monitor_id = index.to_string();
+            capture_map.insert(monitor_id.clone(), image);
+
+            let label = format!("{}{}", CAPTURE_WINDOW_PREFIX, monitor_id);
+            let url = format!("/?view=capture&monitor={}", monitor_id);
+            let window = ensure_capture_window(&app, &label, &url).map_err(|e| e.to_string())?;
+
+            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                x: monitor.x(),
+                y: monitor.y(),
+            }));
+            let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                width: monitor.width(),
+                height: monitor.height(),
+            }));
+
+            let _ = window.set_focus();
         }
 
-        // Open Capture Window
-        let window = ensure_capture_window(&app).map_err(|e| e.to_string())?;
-
-        // Position window to cover the monitor exactly (without using fullscreen mode to preserve transparency)
-        let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-            x: monitor.x(),
-            y: monitor.y(),
-        }));
-        let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-            width: monitor.width(),
-            height: monitor.height(),
-        }));
-
-        let _ = window.set_focus();
+        if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
+            *lock = capture_map;
+        }
     }
 
     Ok(())
@@ -867,28 +870,33 @@ async fn start_selection_ocr(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn finish_selection_ocr(
     app: AppHandle,
+    monitor_id: String,
     x: i32,
     y: i32,
     width: u32,
     height: u32,
 ) -> Result<String, String> {
     println!(
-        "[ocr] finish_selection_ocr: {},{} {}x{}",
-        x, y, width, height
+        "[ocr] finish_selection_ocr ({}): {},{} {}x{}",
+        monitor_id, x, y, width, height
     );
 
     let image = {
-        let state = app.state::<CapturedImage>();
+        let state = app.state::<CapturedImages>();
         let lock = state.0.lock().map_err(|_| "Lock failed")?;
-        lock.clone().ok_or("No captured image found")?
+        lock.get(&monitor_id)
+            .cloned()
+            .ok_or("No captured image found")?
     };
 
     // Crop image
     let sub_image = image::imageops::crop_imm(&image, x as u32, y as u32, width, height).to_image();
 
     // Close capture window
-    if let Some(window) = app.get_webview_window(CAPTURE_WINDOW_LABEL) {
-        let _ = window.close(); // Close completely to reset state? Or hide? Close is safer for fresh init.
+    close_capture_windows(&app);
+
+    if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
+        lock.clear();
     }
 
     #[cfg(windows)]
@@ -898,15 +906,36 @@ async fn finish_selection_ocr(
     return Err("OCR implemented for Windows only (macOS pending)".into());
 }
 
+#[tauri::command]
+fn cancel_selection_ocr(app: AppHandle) {
+    close_capture_windows(&app);
+    if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
+        lock.clear();
+    }
+}
+
 #[cfg(windows)]
 async fn ocr_windows(image: image::RgbaImage) -> Result<String, String> {
+    use image::GenericImageView;
+
     let engine = OcrEngine::TryCreateFromUserProfileLanguages().map_err(|e| e.to_string())?;
-    let width = image.width() as i32;
-    let height = image.height() as i32;
+    let mut dynamic = image::DynamicImage::ImageRgba8(image);
+
+    let (width, height) = dynamic.dimensions();
+    let scale = if width < 1200 || height < 800 { 2 } else { 1 };
+    if scale > 1 {
+        dynamic = dynamic.resize(width * scale, height * scale, image::imageops::Lanczos3);
+    }
+
+    dynamic = dynamic.grayscale().adjust_contrast(20.0).unsharpen(1.0, 1);
+
+    let processed = dynamic.to_rgba8();
+    let width = processed.width() as i32;
+    let height = processed.height() as i32;
 
     use windows::Storage::Streams::DataWriter;
     let writer = DataWriter::new().map_err(|e| e.to_string())?;
-    writer.WriteBytes(&image).map_err(|e| e.to_string())?;
+    writer.WriteBytes(&processed).map_err(|e| e.to_string())?;
     let buffer = writer.DetachBuffer().map_err(|e| e.to_string())?;
 
     let bitmap =
@@ -965,7 +994,8 @@ pub fn run() {
             quit_app,
             handover_to_main,
             start_selection_ocr,
-            finish_selection_ocr
+            finish_selection_ocr,
+            cancel_selection_ocr
         ])
         .setup(|app| {
             app.manage(ExitState::default());
@@ -973,7 +1003,7 @@ pub fn run() {
             app.manage(PendingText::default());
             app.manage(HandoverText::default());
             app.manage(LastCursorPos::default());
-            app.manage(CapturedImage::default());
+            app.manage(CapturedImages::default());
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
