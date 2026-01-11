@@ -3511,6 +3511,9 @@
             disabled={!isScrolledDown && !isTranslating && !inputQuery.trim()}
             onmouseenter={() => (isHoveringTranslate = true)}
             onmouseleave={() => (isHoveringTranslate = false)}
+            class:hidden={!isScrolledDown &&
+              !isTranslating &&
+              !inputQuery.trim()}
           >
             {#if isScrolledDown}
               <svg
@@ -3677,17 +3680,88 @@
                   {t(appLanguage, "emptyDescription")}
                 </p>
               </div>
-              <div class="empty-hints">
+              <div
+                class="empty-hints"
+                style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; max-width: 300px;"
+              >
                 <div class="empty-hint">
-                  <span class="hint-icon">⌨️</span>
+                  <span class="hint-icon">
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      ><rect x="2" y="4" width="20" height="16" rx="2" ry="2"
+                      ></rect><line x1="6" y1="8" x2="6" y2="8"></line><line
+                        x1="10"
+                        y1="8"
+                        x2="10"
+                        y2="8"
+                      ></line><line x1="14" y1="8" x2="14" y2="8"></line><line
+                        x1="18"
+                        y1="8"
+                        x2="18"
+                        y2="8"
+                      ></line><line x1="6" y1="12" x2="6" y2="12"></line><line
+                        x1="10"
+                        y1="12"
+                        x2="10"
+                        y2="12"
+                      ></line><line x1="14" y1="12" x2="14" y2="12"></line><line
+                        x1="18"
+                        y1="12"
+                        x2="18"
+                        y2="12"
+                      ></line><line x1="6" y1="16" x2="18" y2="16"></line></svg
+                    >
+                  </span>
                   <span>{t(appLanguage, "emptyHintType")}</span>
                 </div>
                 <div class="empty-hint">
-                  <span class="hint-icon">📋</span>
+                  <span class="hint-icon">
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      ><path
+                        d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
+                      ></path><rect
+                        x="8"
+                        y="2"
+                        width="8"
+                        height="4"
+                        rx="1"
+                        ry="1"
+                      ></rect></svg
+                    >
+                  </span>
                   <span>{t(appLanguage, "emptyHintPaste")}</span>
                 </div>
                 <div class="empty-hint">
-                  <span class="hint-icon">📷</span>
+                  <span class="hint-icon">
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      ><path
+                        d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"
+                      ></path><circle cx="12" cy="13" r="4"></circle></svg
+                    >
+                  </span>
                   <span>{t(appLanguage, "emptyHintOcr")}</span>
                 </div>
               </div>
