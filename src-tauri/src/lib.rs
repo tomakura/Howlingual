@@ -944,7 +944,7 @@ async fn ocr_windows(image: image::RgbaImage) -> Result<String, String> {
     let mut dynamic = image::DynamicImage::ImageRgba8(image);
 
     let (width, height) = dynamic.dimensions();
-    let scale = if width < 1200 || height < 800 { 2 } else { 1 };
+    let scale = if width < 1200 && height < 800 { 2 } else { 1 };
     if scale > 1 {
         dynamic = dynamic.resize(width * scale, height * scale, image::imageops::Lanczos3);
     }
