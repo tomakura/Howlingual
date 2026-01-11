@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { invoke } from "@tauri-apps/api/core";
+	import { getCurrentWindow } from "@tauri-apps/api/window";
 	import { fade } from "svelte/transition";
 
 	let isSelecting = $state(false);
@@ -8,6 +9,17 @@
 	let startY = $state(0);
 	let currentX = $state(0);
 	let currentY = $state(0);
+
+	const queryParams = new URLSearchParams(window.location.search);
+	const monitorId = queryParams.get("monitor") ?? "0";
+
+	// Constants for DPI scaling verification
+	const SCALING_TOLERANCE_PX = 10; // Allow 10px difference for window decorations/rounding
+
+	// Helper to get device pixel ratio with fallback
+	function getDevicePixelRatio(): number {
+		return window.devicePixelRatio || 1;
+	}
 
 	let selection = $derived.by(() => {
 		const x = Math.min(startX, currentX);
@@ -50,11 +62,32 @@
 		isProcessing = true;
 
 		try {
+			// DPI Scaling Explanation:
+			// - The capture window is sized in physical pixels (from monitor.width/height)
+			// - The webview inside reports dimensions in CSS pixels (physical / devicePixelRatio)
+			// - Mouse events (e.clientX/Y) are in CSS pixels
+			// - The captured screenshot is in physical pixels
+			// - Therefore, we must scale CSS pixel coordinates by devicePixelRatio
+			//   to match the physical pixel coordinates of the screenshot
+			//
+			// Example on 150% DPI (devicePixelRatio = 1.5):
+			// - Physical monitor: 1920x1080px
+			// - Webview reports: 1280x720px CSS (1920/1.5 x 1080/1.5)
+			// - Mouse at CSS (100, 100) → Physical (150, 150)
+			// - Screenshot is 1920x1080px, so we crop at physical (150, 150)
+			
+			const scale = getDevicePixelRatio();
+			console.log("[Capture] DPI scale:", scale);
+			console.log("[Capture] CSS coords:", selection.x, selection.y, selection.w, selection.h);
+			console.log("[Capture] Window size:", window.innerWidth, window.innerHeight);
+			console.log("[Capture] Physical coords:", Math.round(selection.x * scale), Math.round(selection.y * scale), Math.round(selection.w * scale), Math.round(selection.h * scale));
+			
 			const result = await invoke<string>("finish_selection_ocr", {
-				x: Math.round(selection.x),
-				y: Math.round(selection.y),
-				width: Math.round(selection.w),
-				height: Math.round(selection.h),
+				monitor_id: monitorId,
+				x: Math.round(selection.x * scale),
+				y: Math.round(selection.y * scale),
+				width: Math.round(selection.w * scale),
+				height: Math.round(selection.h * scale),
 			});
 
 			await invoke("handover_to_main", { text: result });
@@ -67,16 +100,20 @@
 		}
 	}
 
-	function handleKeyDown(e: KeyboardEvent) {
+	async function handleKeyDown(e: KeyboardEvent) {
 		console.log("[Capture] Keydown:", e.key);
 		if (e.key === "Escape") {
 			e.preventDefault();
 			e.stopPropagation();
 			e.stopImmediatePropagation();
 			console.log("[Capture] Closing window via Escape");
-			import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+			try {
+				await invoke("cancel_selection_ocr");
+			} catch (err) {
+				console.error("[Capture] Error canceling OCR:", err);
+			} finally {
 				getCurrentWindow().close();
-			});
+			}
 		}
 	}
 
@@ -84,6 +121,8 @@
 		// Ensure transparent background for this window
 		const originalHtmlBg = document.documentElement.style.background;
 		const originalBodyBg = document.body.style.background;
+		const originalHtmlBackdrop = document.documentElement.style.backdropFilter;
+		const originalBodyBackdrop = document.body.style.backdropFilter;
 
 		document.documentElement.style.setProperty(
 			"background",
@@ -95,6 +134,33 @@
 			"transparent",
 			"important",
 		);
+		document.documentElement.style.backdropFilter = "none";
+		document.body.style.backdropFilter = "none";
+
+		// Log DPI/scaling information for debugging
+		console.log("[Capture] Monitor ID:", monitorId);
+		console.log("[Capture] devicePixelRatio:", window.devicePixelRatio);
+		console.log("[Capture] Window inner size:", window.innerWidth, "x", window.innerHeight);
+		console.log("[Capture] Window outer size:", window.outerWidth, "x", window.outerHeight);
+		console.log("[Capture] Screen size:", window.screen.width, "x", window.screen.height);
+		
+		// Verify DPI scaling is working as expected
+		// The window should be sized to physical pixels, and the webview should scale to CSS pixels
+		// Expected: innerWidth ≈ outerWidth / devicePixelRatio (allowing for small differences)
+		const scale = getDevicePixelRatio();
+		const expectedInnerWidth = Math.round(window.outerWidth / scale);
+		const expectedInnerHeight = Math.round(window.outerHeight / scale);
+		const widthDiff = Math.abs(window.innerWidth - expectedInnerWidth);
+		const heightDiff = Math.abs(window.innerHeight - expectedInnerHeight);
+		
+		if (widthDiff > SCALING_TOLERANCE_PX || heightDiff > SCALING_TOLERANCE_PX) {
+			console.warn(
+				`[Capture] Warning: Window scaling may not be working as expected! ` +
+				`Expected CSS size: ${expectedInnerWidth} x ${expectedInnerHeight}, ` +
+				`Actual CSS size: ${window.innerWidth} x ${window.innerHeight}, ` +
+				`Difference: ${widthDiff} x ${heightDiff}`
+			);
+		}
 
 		// Focus for Keyboard Events
 		setTimeout(() => {
@@ -107,6 +173,8 @@
 		return () => {
 			document.documentElement.style.background = originalHtmlBg;
 			document.body.style.background = originalBodyBg;
+			document.documentElement.style.backdropFilter = originalHtmlBackdrop;
+			document.body.style.backdropFilter = originalBodyBackdrop;
 			window.removeEventListener("keydown", handleKeyDown, true);
 		};
 	});
@@ -170,14 +238,15 @@
 	.dim-bg {
 		position: absolute;
 		inset: 0;
-		background: rgba(0, 0, 0, 0); /* Fully transparent */
+		background: rgba(0, 0, 0, 0.55);
 	}
 
 	.selection-box {
 		position: absolute;
 		border: 1px solid rgba(255, 255, 255, 0.8);
 		/* Simple solid border, visually clean */
-		box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6); /* Darkens outside */
+		background: rgba(255, 255, 255, 0.08);
+		box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55); /* Darkens outside */
 		pointer-events: none;
 		display: flex;
 		justify-content: center;
