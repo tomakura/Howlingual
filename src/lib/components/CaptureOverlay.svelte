@@ -50,9 +50,11 @@
 		if (!isSelecting) return;
 		currentX = e.clientX;
 		currentY = e.clientY;
-		console.log(
-			`[Capture] Moving: ${selection.w}x${selection.h} (Selecting: ${isSelecting})`,
-		);
+		if (import.meta.env && import.meta.env.DEV) {
+			console.log(
+				`[Capture] Moving: ${selection.w}x${selection.h} (Selecting: ${isSelecting})`,
+			);
+		}
 	}
 
 	let isProcessing = $state(false);
@@ -107,7 +109,7 @@
 			);
 
 			const result = await invoke<string>("finish_selection_ocr", {
-				monitorId: monitorId,
+				monitor_id: monitorId,
 				x: Math.round(selection.x * scale),
 				y: Math.round(selection.y * scale),
 				width: Math.round(selection.w * scale),
@@ -245,11 +247,11 @@
 	onmouseup={handleMouseUp}
 	transition:fade={{ duration: 150 }}
 >
-	{#if (!isSelecting || (selection.w < 2 && selection.h < 2)) && !isProcessing}
+	{#if (!isSelecting || (selection.w < 2 || selection.h < 2)) && !isProcessing}
 		<div class="dim-bg" transition:fade={{ duration: 150 }}></div>
 	{/if}
 
-	{#if (isSelecting || isProcessing) && (selection.w >= 2 || selection.h >= 2)}
+	{#if (isSelecting || isProcessing) && (selection.w >= 2 && selection.h >= 2)}
 		<div
 			class="selection-box"
 			class:processing={isProcessing}

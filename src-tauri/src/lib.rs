@@ -840,6 +840,8 @@ async fn start_selection_ocr(app: AppHandle) -> Result<(), String> {
         }
 
         // Wait for windows to fully hide before capturing screenshots
+        // TODO: Consider using window visibility state checks or event-based mechanism
+        // for more reliable cross-platform behavior instead of hardcoded delay
         std::thread::sleep(Duration::from_millis(300));
 
         let monitors = Monitor::all().map_err(|e| e.to_string())?;
