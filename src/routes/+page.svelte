@@ -261,7 +261,7 @@
           defaultTargetLang = parsed.defaultTargetLang;
         if (parsed.theme) theme = parsed.theme;
         if (parsed.appLanguage) appLanguage = parsed.appLanguage;
-        if (parsed.customStyles) customStyles = parsed.customStyles;
+        // customStyles removed from settings to avoid conflict with dedicated storage
         if (parsed.allowRewrite !== undefined)
           allowRewrite = parsed.allowRewrite;
         if (parsed.quickShortcut) quickShortcut = parsed.quickShortcut;
@@ -276,6 +276,22 @@
         document.documentElement.setAttribute("data-theme", theme);
       } catch (e) {
         console.warn("Failed to parse saved settings", e);
+      }
+    }
+
+    // Load separated custom styles if available
+    const savedStyles = localStorage.getItem("howlingual_custom_styles");
+    if (savedStyles) {
+      try {
+        const parsedStyles = JSON.parse(savedStyles);
+        if (Array.isArray(parsedStyles)) {
+          console.log(
+            "[Settings] Loaded active custom styles from separate storage",
+          );
+          customStyles = parsedStyles;
+        }
+      } catch (e) {
+        console.warn("Failed to parse saved custom styles", e);
       }
     }
 
@@ -321,7 +337,9 @@
       import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
         const win = getCurrentWindow();
         win.listen("tauri://focus", async () => {
-          // Only reset if we are NOT currently running OCR or translating
+          // Disabled auto-reset on focus as per user feedback ("annoying")
+          // and to prevent race condition with text_captured event which focuses window
+          /*
           if (!isTranslating && !isWaitingForOCR && !isOpeningMain) {
             console.log("[QuickMode] Focus detected, resetting state.");
             inputQuery = "";
@@ -335,6 +353,7 @@
               resetTranslations: true,
             });
           }
+          */
         });
       });
     }
@@ -354,13 +373,7 @@
         async (event) => {
           const text = event.payload;
           if (text && text.trim()) {
-            inputQuery = text;
-            await tick();
-            await tick();
-            // Only auto-translate if autoRunQuick is enabled
-            if (autoRunQuick) {
-              startTranslation();
-            }
+            await handleHandover(text);
           }
         },
       );
@@ -369,13 +382,7 @@
       try {
         const pending = await invoke<string | null>("get_handover_text");
         if (pending && pending.trim()) {
-          inputQuery = pending;
-          await tick();
-          await tick();
-          // Only auto-translate if autoRunQuick is enabled
-          if (autoRunQuick) {
-            startTranslation();
-          }
+          await handleHandover(pending);
         }
       } catch (e) {
         console.warn("Failed to check handover text:", e);
@@ -579,8 +586,11 @@
       );
 
       // Only process if we initiated the OCR
-      if (!isWaitingForOCR) {
-        console.log("[event] Ignoring - not waiting for OCR");
+      // Process if we are waiting for OCR OR if we are in compact mode (shortcut trigger)
+      if (!isWaitingForOCR && !isCompactMode) {
+        console.log(
+          "[event] Ignoring - neither waiting for OCR nor Compact Mode",
+        );
         return;
       }
 
@@ -739,7 +749,7 @@
       defaultTargetLang: defaultTargetLang,
       theme: theme,
       appLanguage: appLanguage,
-      customStyles: customStyles,
+      // customStyles: customStyles, // Removed from general settings, saved separately
       allowRewrite: allowRewrite,
       quickShortcut: quickShortcut,
       autoRunQuick: autoRunQuick,
@@ -1065,6 +1075,41 @@
     } catch (error) {
       console.warn("Main window open failed:", error);
       isOpeningMain = false;
+    }
+  }
+
+  async function handleHandover(payload: string) {
+    try {
+      // Try to parse as JSON first (for full state handover)
+      const data = JSON.parse(payload);
+      if (typeof data === "object" && data !== null && "sourceText" in data) {
+        console.log("[Handover] Restoring full state");
+        inputQuery = data.sourceText || "";
+        // Map translations to ensure reactive updates if needed
+        translations = data.translations || [];
+        detailedExplanation = data.detailedExplanation || null;
+        showExplanation = !!detailedExplanation;
+
+        sourceLang = data.sourceLang || sourceLang;
+        targetLang = data.targetLang || targetLang;
+        detectedLang = data.detectedLang || "";
+
+        if (data.styleLevels) styleLevels = data.styleLevels;
+        if (data.techMetrics) techMetrics = data.techMetrics;
+        if (data.showTechInfo !== undefined) showTechInfo = data.showTechInfo;
+
+        // Restore translating state if it was interrupted
+        isTranslating = data.isTranslating || false;
+
+        await tick();
+        await autoResize();
+      } else {
+        // Valid JSON but not our state object? Treat as text.
+        await applyQuickText(typeof data === "string" ? data : payload);
+      }
+    } catch (e) {
+      // Not JSON, treat as raw text
+      await applyQuickText(payload);
     }
   }
 
@@ -1830,14 +1875,7 @@
       }
     }
 
-    const savedStyles = localStorage.getItem("howlingual_custom_styles");
-    if (savedStyles) {
-      try {
-        customStyles = JSON.parse(savedStyles);
-      } catch (e) {
-        console.error("Failed to load styles", e);
-      }
-    }
+    /* Duplicate customStyles loading removed - already handled in first onMount */
 
     /* Last result loading disabled by user request */
   });

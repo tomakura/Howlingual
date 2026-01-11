@@ -238,9 +238,22 @@ fn send_copy_shortcut() {
                 },
             },
         },
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_CONTROL,
+                    wScan: 0,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
     ];
     unsafe { SendInput(&release_inputs, std::mem::size_of::<INPUT>() as i32) };
-    std::thread::sleep(Duration::from_millis(50));
+    // Increased sleep to ensure modifiers are cleared
+    std::thread::sleep(Duration::from_millis(100));
 
     let copy_inputs = [
         INPUT {
@@ -422,9 +435,9 @@ fn capture_selected_text() -> Option<String> {
     #[cfg(all(not(windows), not(target_os = "macos")))]
     send_copy_shortcut();
 
-    // Poll for text - use shorter timeout for responsiveness
+    // Poll for text - use shorter timeout for responsiveness, but more retries
     let mut result = None;
-    let max_retries = 5; // 5 * 30ms = 150ms timeout (fast!)
+    let max_retries = 20; // 20 * 30ms = 600ms timeout
     let sleep_ms = 30;
 
     for i in 0..max_retries {
@@ -815,6 +828,11 @@ fn handover_to_main(app: AppHandle, text: String) {
         // Hide compact window first
         if let Some(compact) = app.get_webview_window(COMPACT_WINDOW_LABEL) {
             let _ = compact.hide();
+        }
+
+        // Also close capture windows to prevent loop/overlap
+        if let Err(e) = close_capture_windows(&app) {
+            println!("[handover] Warning: Failed to close capture windows: {}", e);
         }
 
         // Show main window
