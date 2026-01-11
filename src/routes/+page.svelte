@@ -1773,18 +1773,18 @@
 
     // Auto-scroll logic: detect if user scrolled up
     if (isTranslating) {
-      const isNearBottom = scrollHeight - scrollTop - clientHeight < 50;
-      // Use smaller threshold for compact mode (smaller scroll area)
-      const scrollUpThreshold = isCompactMode ? 3 : 10;
-      const scrollDownThreshold = isCompactMode ? 2 : 5;
-      const scrollDelta = scrollTop - lastScrollTop;
+      // Allow slight tolerance for "bottom"
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 30;
 
-      if (scrollDelta < -scrollUpThreshold && !isNearBottom) {
-        // User scrolled up significantly, disable auto-scroll
-        autoScrollEnabled = false;
-      } else if (isNearBottom && scrollDelta > scrollDownThreshold) {
-        // User explicitly scrolled down to bottom, re-enable
+      if (isNearBottom) {
+        // If user is at the bottom, force enable auto-scroll
         autoScrollEnabled = true;
+      } else {
+        // Only disable if user explicitly scrolls up away from bottom
+        const scrollDelta = scrollTop - lastScrollTop;
+        if (scrollDelta < -10) {
+          autoScrollEnabled = false;
+        }
       }
     }
     lastScrollTop = scrollTop;
