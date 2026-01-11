@@ -2611,12 +2611,18 @@
               <div
                 style="flex: 1; display: flex; align-items: center; gap: 6px; overflow: hidden; height: 100%;"
               >
-                {#each customStyles.slice(0, 3) as style (style.id)}
+                {#each customStyles.slice(0, 3) as style, i (style.id)}
                   <button
                     class="style-chip"
                     data-level={styleLevels[style.id] || 0}
                     onclick={() => cycleLevel(style.id)}
                     onpointerdown={(e) => handleDrag(style.id, e)}
+                    in:fly={{
+                      y: 10,
+                      duration: 250,
+                      delay: isWindowVisible ? i * 50 : 0,
+                      easing: quintOut,
+                    }}
                   >
                     <span
                       class="chip-fill"
@@ -3427,14 +3433,19 @@
             <div
               style="flex: 1; display: flex; align-items: center; gap: 8px; overflow: hidden; height: 100%; mask-image: linear-gradient(to right, black 90%, transparent 100%);"
             >
-              {#each visibleStyles as style (style.id)}
+              {#each visibleStyles as style, i (style.id)}
                 <button
                   class="style-chip"
                   data-level={styleLevels[style.id] || 0}
                   onclick={() => cycleLevel(style.id)}
                   onpointerdown={(e) => handleDrag(style.id, e)}
                   animate:flip={{ duration: 300, easing: quintOut }}
-                  in:receive={{ key: style.id }}
+                  in:fly={{
+                    y: 10,
+                    duration: 250,
+                    delay: isWindowVisible ? i * 50 : 0,
+                    easing: quintOut,
+                  }}
                   out:send={{ key: style.id }}
                 >
                   <span
