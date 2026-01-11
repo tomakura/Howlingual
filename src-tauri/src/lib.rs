@@ -886,7 +886,7 @@ async fn finish_selection_ocr(
         let lock = state.0.lock().map_err(|_| "Lock failed")?;
         lock.get(&monitor_id)
             .cloned()
-            .ok_or("No captured image found")?
+            .ok_or_else(|| format!("No captured image found for monitor {}", monitor_id))?
     };
 
     // Validate crop bounds before cropping to avoid panics in crop_imm.
