@@ -44,6 +44,12 @@
   let appLanguage = $state<"ja" | "en" | "zh" | "ko">("ja");
   let allowRewrite = $state(false);
   let selectedProvider = $state<"openai" | "gemini" | "anthropic">("openai");
+  // プロバイダごとの最後に選択したモデルを記憶
+  let lastSelectedModels = $state<Record<string, string>>({
+    openai: "gpt-5-mini",
+    gemini: "gemini-2.5-flash",
+    anthropic: "claude-sonnet-4.5",
+  });
   // Initialize mode synchronously from URL to prevent flash of wrong UI
   const initialParams = new URLSearchParams(window.location.search);
   const initialView = initialParams.get("view");
@@ -271,6 +277,11 @@
           autoStartEnabled = parsed.autoStartEnabled;
         if (parsed.startMinimized !== undefined)
           startMinimized = parsed.startMinimized;
+        if (parsed.lastSelectedModels)
+          lastSelectedModels = {
+            ...lastSelectedModels,
+            ...parsed.lastSelectedModels,
+          };
 
         // Apply theme on load
         document.documentElement.setAttribute("data-theme", theme);
@@ -302,7 +313,10 @@
         const parsedLevels = JSON.parse(savedStyleLevels);
         if (typeof parsedLevels === "object" && parsedLevels !== null) {
           styleLevels = normalizeStyleLevels(parsedLevels, customStyles);
-          console.log("[Settings] Loaded style levels from storage", styleLevels);
+          console.log(
+            "[Settings] Loaded style levels from storage",
+            styleLevels,
+          );
         }
       } catch (e) {
         console.warn("Failed to parse saved style levels", e);
@@ -782,6 +796,7 @@
       autoRunQuick: autoRunQuick,
       autoStartEnabled: autoStartEnabled,
       startMinimized: startMinimized,
+      lastSelectedModels: lastSelectedModels,
     };
     localStorage.setItem("howlingual_settings", JSON.stringify(settings));
 
@@ -858,47 +873,56 @@
     customStyles = getDefaultStyles(appLanguage);
     showResetConfirmation = false;
   }
-    // Auto-save style levels whenever they change (after initial load)
-    $effect(() => {
-      // Access both readiness flag and levels to make effect reactive
-      const ready = styleLevelsReady;
-      const _levels = styleLevels;
-      // Skip saving until initial onMount loading completes
-      if (!ready) return;
-      // Debounce writes to avoid excessive I/O
+  // Auto-save style levels whenever they change (after initial load)
+  $effect(() => {
+    // Access both readiness flag and levels to make effect reactive
+    const ready = styleLevelsReady;
+    const _levels = styleLevels;
+    // Skip saving until initial onMount loading completes
+    if (!ready) return;
+    // Debounce writes to avoid excessive I/O
+    if (styleLevelsSaveTimer !== null) {
+      clearTimeout(styleLevelsSaveTimer);
+      styleLevelsSaveTimer = null;
+    }
+    styleLevelsSaveTimer = window.setTimeout(() => {
+      persistStyleLevels();
+      console.log("[Settings] Auto-saved style levels");
+      styleLevelsSaveTimer = null;
+    }, 100);
+    return () => {
       if (styleLevelsSaveTimer !== null) {
         clearTimeout(styleLevelsSaveTimer);
         styleLevelsSaveTimer = null;
       }
-      styleLevelsSaveTimer = window.setTimeout(() => {
-        persistStyleLevels();
-        console.log("[Settings] Auto-saved style levels");
-        styleLevelsSaveTimer = null;
-      }, 100);
-      return () => {
-        if (styleLevelsSaveTimer !== null) {
-          clearTimeout(styleLevelsSaveTimer);
-          styleLevelsSaveTimer = null;
-        }
-      };
-    });
+    };
+  });
 
   function selectProvider(provider: "openai" | "gemini" | "anthropic") {
+    // 現在のモデルを現在のプロバイダに保存
+    lastSelectedModels[selectedProvider] = selectedModel;
+
     selectedProvider = provider;
 
-    // Check if current model belongs to this provider
-    const currentModelObj = availableModels.find(
-      (m) => m.value === selectedModel,
-    );
-    if (currentModelObj?.provider !== provider) {
-      // Switch to first available model for this provider
-      // Ideally we could store "last used model per provider", but for now default to first
-      const defaultForProvider = availableModels.find(
-        (m) => m.provider === provider,
+    // 保存されていたモデルを復元
+    if (lastSelectedModels[provider]) {
+      // 保存されたモデルがまだ利用可能か確認
+      const savedModelExists = availableModels.some(
+        (m) =>
+          m.value === lastSelectedModels[provider] && m.provider === provider,
       );
-      if (defaultForProvider) {
-        selectedModel = defaultForProvider.value as AiModel;
+      if (savedModelExists) {
+        selectedModel = lastSelectedModels[provider] as AiModel;
+        return;
       }
+    }
+
+    // フォールバック: プロバイダの最初のモデルを選択
+    const defaultForProvider = availableModels.find(
+      (m) => m.provider === provider,
+    );
+    if (defaultForProvider) {
+      selectedModel = defaultForProvider.value as AiModel;
     }
   }
 
@@ -2554,8 +2578,7 @@
                         >
                           <span
                             class="dropdown-item-fill"
-                            style="width: {(styleLevels[style.id] || 0) *
-                              50}%"
+                            style="width: {(styleLevels[style.id] || 0) * 50}%"
                           ></span>
                           <div class="dropdown-item-content">
                             <span>{style.name}</span>
@@ -3516,12 +3539,22 @@
 
         <!-- Translation Results -->
         <div class="output-area">
-          {#if !isTranslating && !inputQuery.trim() && translations.every(t => !t.text)}
+          {#if !isTranslating && !inputQuery.trim() && translations.every((t) => !t.text)}
             <!-- Empty State - No Input -->
             <div class="empty-state-container" in:fade={{ duration: 300 }}>
               <div class="empty-state-visual">
                 <div class="empty-icon-wrapper">
-                  <svg class="empty-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <svg
+                    class="empty-icon"
+                    width="48"
+                    height="48"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
                     <path d="m5 8 6 6" />
                     <path d="m4 14 6-6 2-3" />
                     <path d="M2 5h12" />
@@ -3533,29 +3566,34 @@
                 </div>
               </div>
               <div class="empty-state-content">
-                <h3 class="empty-title">{t(appLanguage, 'emptyTitle')}</h3>
-                <p class="empty-description">{t(appLanguage, 'emptyDescription')}</p>
+                <h3 class="empty-title">{t(appLanguage, "emptyTitle")}</h3>
+                <p class="empty-description">
+                  {t(appLanguage, "emptyDescription")}
+                </p>
               </div>
               <div class="empty-hints">
                 <div class="empty-hint">
                   <span class="hint-icon">⌨️</span>
-                  <span>{t(appLanguage, 'emptyHintType')}</span>
+                  <span>{t(appLanguage, "emptyHintType")}</span>
                 </div>
                 <div class="empty-hint">
                   <span class="hint-icon">📋</span>
-                  <span>{t(appLanguage, 'emptyHintPaste')}</span>
+                  <span>{t(appLanguage, "emptyHintPaste")}</span>
                 </div>
                 <div class="empty-hint">
                   <span class="hint-icon">📷</span>
-                  <span>{t(appLanguage, 'emptyHintOcr')}</span>
+                  <span>{t(appLanguage, "emptyHintOcr")}</span>
                 </div>
               </div>
             </div>
-          {:else if isTranslating && translations.every(t => !t.text)}
+          {:else if isTranslating && translations.every((t) => !t.text)}
             <!-- Loading State -->
             <div class="loading-state-container" in:fade={{ duration: 200 }}>
               {#each [1, 2, 3] as idx}
-                <div class="skeleton-card" style="animation-delay: {idx * 0.1}s">
+                <div
+                  class="skeleton-card"
+                  style="animation-delay: {idx * 0.1}s"
+                >
                   <div class="skeleton-line primary"></div>
                   <div class="skeleton-line secondary"></div>
                 </div>
@@ -3563,135 +3601,141 @@
             </div>
           {:else}
             {#each translations as item (item.id)}
-            <div class="candidate-card" out:fade={{ duration: 200 }}>
-              <div
-                class="card-inner-content"
-                class:content-fade={isTranslating && !item.text}
-              >
-                <p class="translated-text">{item.text}</p>
-                <div class="card-footer">
-                  {#if item.reason}
-                    <p class="reason">
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        style="flex-shrink: 0; margin-top: 2px;"
-                      >
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <line x1="12" y1="16" x2="12" y2="12"></line>
-                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                      </svg>
-                      <span>{item.reason}</span>
-                    </p>
-                  {/if}
-                  <div
-                    class="candidate-actions"
-                    class:hide={!item.text}
-                    style="gap: 4px;"
-                  >
-                    <!-- Speak Button -->
-                    <button
-                      class="icon-btn"
-                      class:active={isSpeakingId === item.id}
-                      class:animating={speakAnimating[item.id]}
-                      title={isSpeakingId === item.id
-                        ? t(appLanguage, "stop")
-                        : t(appLanguage, "speak")}
-                      onclick={() =>
-                        handleSpeak(item.id, item.text, targetLang)}
-                      onmouseenter={() => triggerSpeakAnim(item.id)}
-                    >
-                      {#if isSpeakingId === item.id}
+              <div class="candidate-card" out:fade={{ duration: 200 }}>
+                <div
+                  class="card-inner-content"
+                  class:content-fade={isTranslating && !item.text}
+                >
+                  <p class="translated-text">{item.text}</p>
+                  <div class="card-footer">
+                    {#if item.reason}
+                      <p class="reason">
                         <svg
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="currentColor"
-                          stroke="none"
-                        >
-                          <rect x="6" y="6" width="12" height="12" rx="1" />
-                        </svg>
-                      {:else}
-                        <svg
-                          class="speak-icon"
-                          width="16"
-                          height="16"
+                          width="14"
+                          height="14"
                           viewBox="0 0 24 24"
                           fill="none"
                           stroke="currentColor"
                           stroke-width="2"
-                          style="overflow: visible;"
-                        >
-                          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
-                          ></polygon>
-                          <path
-                            class="sound-wave wave-1"
-                            d="M15.54 8.46a5 5 0 0 1 0 7.07"
-                          ></path>
-                          <path
-                            class="sound-wave wave-2"
-                            d="M19.07 4.93a10 10 0 0 1 0 14.14"
-                          ></path>
-                          <path
-                            class="sound-wave wave-3"
-                            d="M22.07 1.93a14 14 0 0 1 0 20.14"
-                          ></path>
-                        </svg>
-                      {/if}
-                    </button>
-
-                    <!-- Copy Button -->
-                    <button
-                      class="icon-btn"
-                      class:animating={copyAnimating[item.id]}
-                      class:copied={copiedId === item.id}
-                      title={t(appLanguage, "copy")}
-                      onclick={() => handleCopy(item.id, item.text)}
-                      onmouseenter={() => triggerCopyAnim(item.id)}
-                    >
-                      {#if copiedId === item.id}
-                        <svg
-                          class="check-icon"
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2.5"
                           stroke-linecap="round"
                           stroke-linejoin="round"
+                          style="flex-shrink: 0; margin-top: 2px;"
                         >
-                          <polyline points="20 6 9 17 4 12"></polyline>
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="16" x2="12" y2="12"></line>
+                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
                         </svg>
-                      {:else}
-                        <svg
-                          class="copy-icon"
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                        >
-                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"
-                          ></rect>
-                          <path
-                            d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                          ></path>
-                        </svg>
-                      {/if}
-                    </button>
+                        <span>{item.reason}</span>
+                      </p>
+                    {/if}
+                    <div
+                      class="candidate-actions"
+                      class:hide={!item.text}
+                      style="gap: 4px;"
+                    >
+                      <!-- Speak Button -->
+                      <button
+                        class="icon-btn"
+                        class:active={isSpeakingId === item.id}
+                        class:animating={speakAnimating[item.id]}
+                        title={isSpeakingId === item.id
+                          ? t(appLanguage, "stop")
+                          : t(appLanguage, "speak")}
+                        onclick={() =>
+                          handleSpeak(item.id, item.text, targetLang)}
+                        onmouseenter={() => triggerSpeakAnim(item.id)}
+                      >
+                        {#if isSpeakingId === item.id}
+                          <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="currentColor"
+                            stroke="none"
+                          >
+                            <rect x="6" y="6" width="12" height="12" rx="1" />
+                          </svg>
+                        {:else}
+                          <svg
+                            class="speak-icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            style="overflow: visible;"
+                          >
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
+                            ></polygon>
+                            <path
+                              class="sound-wave wave-1"
+                              d="M15.54 8.46a5 5 0 0 1 0 7.07"
+                            ></path>
+                            <path
+                              class="sound-wave wave-2"
+                              d="M19.07 4.93a10 10 0 0 1 0 14.14"
+                            ></path>
+                            <path
+                              class="sound-wave wave-3"
+                              d="M22.07 1.93a14 14 0 0 1 0 20.14"
+                            ></path>
+                          </svg>
+                        {/if}
+                      </button>
+
+                      <!-- Copy Button -->
+                      <button
+                        class="icon-btn"
+                        class:animating={copyAnimating[item.id]}
+                        class:copied={copiedId === item.id}
+                        title={t(appLanguage, "copy")}
+                        onclick={() => handleCopy(item.id, item.text)}
+                        onmouseenter={() => triggerCopyAnim(item.id)}
+                      >
+                        {#if copiedId === item.id}
+                          <svg
+                            class="check-icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                          </svg>
+                        {:else}
+                          <svg
+                            class="copy-icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                          >
+                            <rect
+                              x="9"
+                              y="9"
+                              width="13"
+                              height="13"
+                              rx="2"
+                              ry="2"
+                            ></rect>
+                            <path
+                              d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                            ></path>
+                          </svg>
+                        {/if}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          {/each}
+            {/each}
           {/if}
 
           <!-- Explanation -->
@@ -5291,7 +5335,11 @@
     font-size: 26px;
     color: var(--text-main);
     letter-spacing: -0.02em;
-    background: linear-gradient(135deg, var(--text-main) 0%, var(--text-secondary) 100%);
+    background: linear-gradient(
+      135deg,
+      var(--text-main) 0%,
+      var(--text-secondary) 100%
+    );
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -5967,7 +6015,7 @@
   }
 
   .candidate-card::before {
-    content: '';
+    content: "";
     position: absolute;
     left: 0;
     top: 0;
@@ -6065,7 +6113,11 @@
     width: 96px;
     height: 96px;
     border-radius: 24px;
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(34, 211, 238, 0.1));
+    background: linear-gradient(
+      135deg,
+      rgba(99, 102, 241, 0.1),
+      rgba(34, 211, 238, 0.1)
+    );
     border: 1px solid var(--border-color);
   }
 
@@ -6078,14 +6130,23 @@
   .empty-icon-glow {
     position: absolute;
     inset: -20px;
-    background: radial-gradient(circle, var(--primary-glow) 0%, transparent 70%);
+    background: radial-gradient(
+      circle,
+      var(--primary-glow) 0%,
+      transparent 70%
+    );
     opacity: 0.5;
     animation: pulse 3s ease-in-out infinite;
   }
 
   @keyframes floatSoft {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-6px); }
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-6px);
+    }
   }
 
   .empty-state-content {
@@ -6140,7 +6201,11 @@
   }
 
   :global([data-theme="light"]) .empty-icon-wrapper {
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(8, 145, 178, 0.08));
+    background: linear-gradient(
+      135deg,
+      rgba(99, 102, 241, 0.08),
+      rgba(8, 145, 178, 0.08)
+    );
   }
 
   :global([data-theme="light"]) .empty-hint {
@@ -6190,8 +6255,13 @@
   }
 
   @keyframes skeletonPulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.7; }
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.7;
+    }
   }
 
   :global([data-theme="light"]) .skeleton-card {
