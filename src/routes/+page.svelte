@@ -101,7 +101,7 @@
   let visibleStyles = $derived(sortedStyles.slice(0, visibleStyleCount));
   let hiddenStyles = $derived(sortedStyles.slice(visibleStyleCount));
   let hasActiveHiddenStyles = $derived(
-    hiddenStyles.some((s) => (styleLevels[s.name] || 0) > 0),
+    hiddenStyles.some((s) => (styleLevels[s.id] || 0) > 0),
   );
 
   // Responsive style count
@@ -294,6 +294,30 @@
         console.warn("Failed to parse saved custom styles", e);
       }
     }
+
+    // Load style levels (文体の強弱設定)
+    const savedStyleLevels = localStorage.getItem("howlingual_style_levels");
+    if (savedStyleLevels) {
+      try {
+        const parsedLevels = JSON.parse(savedStyleLevels);
+        if (typeof parsedLevels === "object" && parsedLevels !== null) {
+          styleLevels = normalizeStyleLevels(parsedLevels, customStyles);
+          console.log("[Settings] Loaded style levels from storage", styleLevels);
+        }
+      } catch (e) {
+        console.warn("Failed to parse saved style levels", e);
+      }
+    }
+    // Mark style levels as ready to be saved thereafter
+    styleLevelsReady = true;
+
+    // Flush styleLevels on window close to avoid loss if debounce hasn't fired
+    handleBeforeUnloadRef = () => {
+      if (styleLevelsReady) {
+        persistStyleLevels();
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnloadRef);
 
     // Ensure shortcut is OS-specific for display
     const isMac = navigator.userAgent.includes("Mac");
@@ -666,7 +690,10 @@
 
         // Restore style levels
         if (payload.styleLevels) {
-          styleLevels = { ...styleLevels, ...payload.styleLevels };
+          styleLevels = normalizeStyleLevels(
+            { ...styleLevels, ...payload.styleLevels },
+            customStyles,
+          );
         }
 
         // Restore techMetrics
@@ -764,34 +791,63 @@
     // console.log("[Settings] Auto-saved");
   });
 
-  // Style levels: 0 = オフ, 1 = 弱, 2 = 強
-  let styleLevels: Record<string, number> = $state({
-    丁寧: 0,
-    ビジネス: 0,
-    カジュアル: 0,
-    キャッチー: 0,
-    子ども向け: 0,
-    メール: 0,
-    簡潔: 0,
-  });
+  // Style levels: 0 = オフ, 1 = 弱, 2 = 強（IDベースで管理）
+  const clampStyleLevel = (val: any) => {
+    const n = Number(val);
+    if (!Number.isFinite(n)) return 0;
+    if (n <= 0) return 0;
+    if (n >= 2) return 2;
+    return 1;
+  };
+
+  const normalizeStyleLevels = (
+    raw: any,
+    styles: CustomStyle[],
+  ): Record<string, number> => {
+    const result: Record<string, number> = {};
+    const nameToId = new Map(styles.map((s) => [s.name, s.id]));
+    styles.forEach((s) => {
+      result[s.id] = 0;
+    });
+
+    if (raw && typeof raw === "object") {
+      for (const [key, val] of Object.entries(raw)) {
+        const level = clampStyleLevel(val);
+        if (key in result) {
+          result[key] = level;
+          continue;
+        }
+        const id = nameToId.get(key);
+        if (id && id in result) {
+          result[id] = level;
+        }
+      }
+    }
+    return result;
+  };
+
+  let styleLevels: Record<string, number> = $state(
+    normalizeStyleLevels({}, customStyles),
+  );
+  // Prevent initial auto-save from overwriting loaded values
+  let styleLevelsReady = $state(false);
+  let styleLevelsSaveTimer: number | null = null;
+  let handleBeforeUnloadRef: (() => void) | null = null;
+  const persistStyleLevels = () => {
+    localStorage.setItem(
+      "howlingual_style_levels",
+      JSON.stringify(styleLevels),
+    );
+  };
   let compactStylesOpen = $state(false);
   let activeStyleCount = $derived(
     Object.values(styleLevels).filter((level) => level > 0).length,
   );
 
-  // Sync styleLevels with customStyles
+  // Sync styleLevels with customStyles (IDベースに正規化)
   $effect(() => {
-    const newStyles = customStyles.map((s) => s.name);
-    // Use untrack to prevent circular dependency on styleLevels
     const currentLevels = untrack(() => styleLevels);
-    const nextLevels: Record<string, number> = {};
-
-    newStyles.forEach((name) => {
-      // Preserve existing level if style exists, otherwise 0
-      nextLevels[name] = currentLevels[name] || 0;
-    });
-
-    styleLevels = nextLevels;
+    styleLevels = normalizeStyleLevels(currentLevels, customStyles);
   });
 
   function triggerResetStyles() {
@@ -802,6 +858,30 @@
     customStyles = getDefaultStyles(appLanguage);
     showResetConfirmation = false;
   }
+    // Auto-save style levels whenever they change (after initial load)
+    $effect(() => {
+      // Access both readiness flag and levels to make effect reactive
+      const ready = styleLevelsReady;
+      const _levels = styleLevels;
+      // Skip saving until initial onMount loading completes
+      if (!ready) return;
+      // Debounce writes to avoid excessive I/O
+      if (styleLevelsSaveTimer !== null) {
+        clearTimeout(styleLevelsSaveTimer);
+        styleLevelsSaveTimer = null;
+      }
+      styleLevelsSaveTimer = window.setTimeout(() => {
+        persistStyleLevels();
+        console.log("[Settings] Auto-saved style levels");
+        styleLevelsSaveTimer = null;
+      }, 100);
+      return () => {
+        if (styleLevelsSaveTimer !== null) {
+          clearTimeout(styleLevelsSaveTimer);
+          styleLevelsSaveTimer = null;
+        }
+      };
+    });
 
   function selectProvider(provider: "openai" | "gemini" | "anthropic") {
     selectedProvider = provider;
@@ -1045,7 +1125,7 @@
         detailedExplanation: detailedExplanation
           ? $state.snapshot(detailedExplanation)
           : null,
-        sourceLang: sourceLang,
+        sourceLang: isAutoDetect ? AUTO_DETECT_LABEL : sourceLang,
         detectedLang: detectedLang,
         targetLang: targetLang,
         styleLevels: $state.snapshot(styleLevels),
@@ -1258,10 +1338,12 @@
 
   let inputQuery = $state("");
 
+  const AUTO_DETECT_LABEL = "自動検出";
+
   // Language direction
   let isAutoDetect = $state(true);
   let detectedLang = $state("");
-  let sourceLang = $state("英語");
+  let sourceLang = $state(AUTO_DETECT_LABEL);
   let targetLang = $state("日本語");
   let showSourceLangMenu = $state(false);
   let showTargetLangMenu = $state(false);
@@ -1277,7 +1359,6 @@
   ];
 
   let isSparkling = $state(false);
-  const AUTO_DETECT_LABEL = "自動検出";
 
   function applySourceLangFromSync(lang: string, detected?: string) {
     if (lang === AUTO_DETECT_LABEL) {
@@ -1327,7 +1408,7 @@
     if (allowRewrite) return;
 
     // Determine actual source language
-    const actualSource = isAutoDetect ? detectedLang || "日本語" : sourceLang;
+    const actualSource = isAutoDetect ? detectedLang : sourceLang;
     if (!actualSource) return;
 
     if (actualSource === targetLang) {
@@ -1500,18 +1581,20 @@
 
   let isDragging = false;
 
-  function cycleLevel(style: string) {
+  function cycleLevel(styleId: string) {
     if (isDragging) return;
-    styleLevels[style] = (styleLevels[style] + 1) % 3;
-    console.log(`[UI] Style cycled: ${style} -> ${styleLevels[style]}`);
+    const nextLevel = ((styleLevels[styleId] || 0) + 1) % 3;
+    // Reassign to trigger reactivity
+    styleLevels = { ...styleLevels, [styleId]: nextLevel };
+    console.log(`[UI] Style cycled: ${styleId} -> ${nextLevel}`);
     scheduleSyncSharedState();
   }
 
-  function handleDrag(style: string, event: PointerEvent) {
+  function handleDrag(styleId: string, event: PointerEvent) {
     const target = event.currentTarget as HTMLElement;
     const rect = target.getBoundingClientRect();
     const startX = event.clientX;
-    const startLevel = styleLevels[style];
+    const startLevel = styleLevels[styleId] || 0;
     isDragging = false;
     let hasMoved = false;
 
@@ -1527,7 +1610,8 @@
       const width = rect.width;
       const levelChange = Math.round(deltaX / (width / 2));
       const newLevel = Math.max(0, Math.min(2, startLevel + levelChange));
-      styleLevels[style] = newLevel;
+      // Reassign to trigger reactivity during drag
+      styleLevels = { ...styleLevels, [styleId]: newLevel };
     };
 
     const onUp = () => {
@@ -2073,11 +2157,15 @@
 
     try {
       // Dispatch Command to Service
+      const styleMeta = Object.fromEntries(
+        customStyles.map((s) => [s.id, { name: s.name, prompt: s.prompt }]),
+      );
       await emit("start_translation_command", {
         text: inputQuery,
         sourceLang,
         targetLang,
         styles: styleLevels,
+        styleMeta,
         model: currentModel,
         explanationLang: getLanguageName(appLanguage),
         apiKeys: $state.snapshot(apiKeys),
@@ -2110,6 +2198,16 @@
     if (autoScrollRafId !== null) {
       cancelAnimationFrame(autoScrollRafId);
       autoScrollRafId = null;
+    }
+    if (styleLevelsSaveTimer !== null) {
+      clearTimeout(styleLevelsSaveTimer);
+      styleLevelsSaveTimer = null;
+    }
+    if (styleLevelsReady) {
+      persistStyleLevels();
+    }
+    if (handleBeforeUnloadRef) {
+      window.removeEventListener("beforeunload", handleBeforeUnloadRef);
     }
   });
 </script>
@@ -2417,13 +2515,13 @@
                 {#each customStyles.slice(0, 3) as style (style.id)}
                   <button
                     class="style-chip"
-                    data-level={styleLevels[style.name] || 0}
-                    onclick={() => cycleLevel(style.name)}
-                    onpointerdown={(e) => handleDrag(style.name, e)}
+                    data-level={styleLevels[style.id] || 0}
+                    onclick={() => cycleLevel(style.id)}
+                    onpointerdown={(e) => handleDrag(style.id, e)}
                   >
                     <span
                       class="chip-fill"
-                      style="width: {(styleLevels[style.name] || 0) * 50}%"
+                      style="width: {(styleLevels[style.id] || 0) * 50}%"
                     ></span>
                     <span class="chip-text">{style.name}</span>
                   </button>
@@ -2447,16 +2545,16 @@
                       {#each customStyles.slice(3) as style (style.id)}
                         <button
                           class="dropdown-item"
-                          data-level={styleLevels[style.name] || 0}
+                          data-level={styleLevels[style.id] || 0}
                           onclick={(e) => {
                             e.stopPropagation();
-                            cycleLevel(style.name);
+                            cycleLevel(style.id);
                           }}
-                          onpointerdown={(e) => handleDrag(style.name, e)}
+                          onpointerdown={(e) => handleDrag(style.id, e)}
                         >
                           <span
                             class="dropdown-item-fill"
-                            style="width: {(styleLevels[style.name] || 0) *
+                            style="width: {(styleLevels[style.id] || 0) *
                               50}%"
                           ></span>
                           <div class="dropdown-item-content">
@@ -3176,16 +3274,16 @@
               {#each visibleStyles as style (style.id)}
                 <button
                   class="style-chip"
-                  data-level={styleLevels[style.name] || 0}
-                  onclick={() => cycleLevel(style.name)}
-                  onpointerdown={(e) => handleDrag(style.name, e)}
+                  data-level={styleLevels[style.id] || 0}
+                  onclick={() => cycleLevel(style.id)}
+                  onpointerdown={(e) => handleDrag(style.id, e)}
                   animate:flip={{ duration: 300, easing: quintOut }}
                   in:receive={{ key: style.id }}
                   out:send={{ key: style.id }}
                 >
                   <span
                     class="chip-fill"
-                    style="width: {(styleLevels[style.name] || 0) * 50}%"
+                    style="width: {(styleLevels[style.id] || 0) * 50}%"
                   ></span>
                   <span class="chip-text">{style.name}</span>
                 </button>
@@ -3213,16 +3311,16 @@
                     {#each hiddenStyles as style (style.id)}
                       <button
                         class="dropdown-item"
-                        data-level={styleLevels[style.name] || 0}
-                        onclick={() => cycleLevel(style.name)}
-                        onpointerdown={(e) => handleDrag(style.name, e)}
+                        data-level={styleLevels[style.id] || 0}
+                        onclick={() => cycleLevel(style.id)}
+                        onpointerdown={(e) => handleDrag(style.id, e)}
                         animate:flip={{ duration: 300, easing: quintOut }}
                         in:receive={{ key: style.id }}
                         out:send={{ key: style.id }}
                       >
                         <span
                           class="dropdown-item-fill"
-                          style="width: {(styleLevels[style.name] || 0) * 50}%"
+                          style="width: {(styleLevels[style.id] || 0) * 50}%"
                         ></span>
                         <div class="dropdown-item-content">
                           <span>{style.name}</span>

@@ -93,21 +93,29 @@ function buildSystemPrompt(explanationLang: string = "日本語"): string {
 const SYSTEM_PROMPT = buildSystemPrompt("日本語");
 
 // Helper to construct user prompt
-function buildUserPrompt(text: string, sourceLang: string, targetLang: string, styles: Record<string, number>, stylePrompts: Record<string, string> = {}) {
+function buildUserPrompt(
+	text: string,
+	sourceLang: string,
+	targetLang: string,
+	styles: Record<string, number>,
+	styleMeta: Record<string, { name: string; prompt?: string }> = {},
+) {
 	const activeStyles = Object.entries(styles)
 		.filter(([_, level]) => level > 0)
-		.map(([style, level]) => {
-			const prompt = stylePrompts[style] ? ` (${stylePrompts[style]})` : "";
-			return `${style}${prompt} (強度: ${level === 2 ? "強" : "弱"})`;
+		.map(([styleId, level]) => {
+			const meta = styleMeta[styleId];
+			const label = meta?.name ?? styleId;
+			const prompt = meta?.prompt ? ` (${meta.prompt})` : "";
+			return `${label}${prompt} (強度: ${level === 2 ? "強" : "弱"})`;
 		})
 		.join(", ");
 
 	return `
-    [入力情報]
-    原文: "${text}"
-    翻訳元言語: ${sourceLang === "自動検出" ? "自動検出 (Auto-detect)" : sourceLang}
-    翻訳先言語: ${targetLang}
-    ${activeStyles ? `適用する文体・トーン: ${activeStyles}` : ""}
+	[入力情報]
+	原文: "${text}"
+	翻訳元言語: ${sourceLang === "自動検出" ? "自動検出 (Auto-detect)" : sourceLang}
+	翻訳先言語: ${targetLang}
+	${activeStyles ? `適用する文体・トーン: ${activeStyles}` : ""}
   `;
 }
 
@@ -266,10 +274,10 @@ export async function translateTextStream(
 	model: string,
 	onUpdate: (partial: Partial<AiResponse>, usage?: UsageMetadata) => void,
 	explanationLang: string = "日本語",
-	stylePrompts: Record<string, string> = {},
+	styleMeta: Record<string, { name: string; prompt?: string }> = {},
 	apiKeys: Record<string, string> = {}
 ): Promise<void> {
-	const userPrompt = buildUserPrompt(text, sourceLang, targetLang, styles, stylePrompts);
+	const userPrompt = buildUserPrompt(text, sourceLang, targetLang, styles, styleMeta);
 	const systemPrompt = buildSystemPrompt(explanationLang);
 
 	if (model.startsWith("gemini")) {
@@ -451,9 +459,10 @@ export async function translateText(
 	sourceLang: string,
 	targetLang: string,
 	styles: Record<string, number>,
-	model: AiModel = "gemini-1.5-flash"
+	model: AiModel = "gemini-1.5-flash",
+	styleMeta: Record<string, { name: string; prompt?: string }> = {}
 ): Promise<AiResponse> {
-	const userPrompt = buildUserPrompt(text, sourceLang, targetLang, styles);
+	const userPrompt = buildUserPrompt(text, sourceLang, targetLang, styles, styleMeta);
 
 	let response: AiResponse;
 

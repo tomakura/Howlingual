@@ -202,7 +202,7 @@
 					broadcastUpdate();
 				},
 				params.explanationLang,
-				params.stylePrompts, // pass stylePrompts if needed, logic in +page.svelte extracted it
+				params.styleMeta, // pass style metadata (id -> {name, prompt})
 				params.apiKeys,
 			);
 		} catch (e) {
