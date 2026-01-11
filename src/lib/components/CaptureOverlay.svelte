@@ -49,6 +49,7 @@
 	}
 
 	let isProcessing = $state(false);
+	let isCancelled = $state(false);
 
 	async function handleMouseUp() {
 		if (!isSelecting) return;
@@ -90,12 +91,19 @@
 				height: Math.round(selection.h * scale),
 			});
 
-			await invoke("handover_to_main", { text: result });
+			// Only send result if not cancelled by user
+			if (!isCancelled) {
+				await invoke("handover_to_main", { text: result });
+			}
 		} catch (e) {
 			console.error("[Capture] OCR Failed:", e);
-			await invoke("handover_to_main", { text: "Error: " + String(e) });
+			// Don't send error to main window if user cancelled
+			if (!isCancelled) {
+				// Only log the error, don't send to main window to avoid auto-translation
+				console.error("[Capture] OCR error will not be sent to main window:", String(e));
+			}
 		} finally {
-			// Window will likely be closed by backend, but ensure state reset if not
+			// Window will be closed by backend via finish_selection_ocr
 			isProcessing = false;
 		}
 	}
@@ -107,6 +115,10 @@
 			e.stopPropagation();
 			e.stopImmediatePropagation();
 			console.log("[Capture] Closing window via Escape");
+			
+			// Mark as cancelled to prevent error messages from being sent
+			isCancelled = true;
+			
 			try {
 				await invoke("cancel_selection_ocr");
 			} catch (err) {
@@ -226,6 +238,12 @@
 </div>
 
 <style>
+	:global(html),
+	:global(body) {
+		backdrop-filter: none !important;
+		-webkit-backdrop-filter: none !important;
+	}
+
 	.overlay {
 		position: fixed;
 		inset: 0;
@@ -233,12 +251,16 @@
 		z-index: 9999;
 		user-select: none;
 		font-family: "Inter", sans-serif;
+		backdrop-filter: none !important;
+		-webkit-backdrop-filter: none !important;
 	}
 
 	.dim-bg {
 		position: absolute;
 		inset: 0;
 		background: rgba(0, 0, 0, 0.55);
+		backdrop-filter: none !important;
+		-webkit-backdrop-filter: none !important;
 	}
 
 	.selection-box {
@@ -287,6 +309,8 @@
 	.hint-box {
 		background: rgba(0, 0, 0, 0.75);
 		/* backdrop-filter removed to prevent blur issues */
+		backdrop-filter: none !important;
+		-webkit-backdrop-filter: none !important;
 		padding: 12px 20px;
 		border-radius: 12px;
 		color: white;
