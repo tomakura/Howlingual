@@ -7966,4 +7966,16 @@
       }
     }
   }
+  /* Compact Mode Styles */
+  .compact-header .compact-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+  }
+
+  .compact-header .compact-name {
+    font-size: 13px;
+    font-weight: 600;
+    margin-left: 2px;
+  }
 </style>
