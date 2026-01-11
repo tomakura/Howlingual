@@ -131,6 +131,23 @@
 		console.log("[Capture] Window inner size:", window.innerWidth, "x", window.innerHeight);
 		console.log("[Capture] Window outer size:", window.outerWidth, "x", window.outerHeight);
 		console.log("[Capture] Screen size:", window.screen.width, "x", window.screen.height);
+		
+		// Verify DPI scaling is working as expected
+		// The window should be sized to physical pixels, and the webview should scale to CSS pixels
+		// Expected: innerWidth ≈ outerWidth / devicePixelRatio (allowing for small differences)
+		const expectedInnerWidth = window.outerWidth / window.devicePixelRatio;
+		const expectedInnerHeight = window.outerHeight / window.devicePixelRatio;
+		const widthDiff = Math.abs(window.innerWidth - expectedInnerWidth);
+		const heightDiff = Math.abs(window.innerHeight - expectedInnerHeight);
+		
+		if (widthDiff > 10 || heightDiff > 10) {
+			console.warn(
+				"[Capture] Warning: Window scaling may not be working as expected!",
+				"Expected CSS size:", expectedInnerWidth, "x", expectedInnerHeight,
+				"Actual CSS size:", window.innerWidth, "x", window.innerHeight,
+				"Difference:", widthDiff, "x", heightDiff
+			);
+		}
 
 		// Focus for Keyboard Events
 		setTimeout(() => {
