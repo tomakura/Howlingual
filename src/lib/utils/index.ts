@@ -159,9 +159,13 @@ export function safeJsonParse<T>(json: string): T | null {
 }
 
 /**
- * Deep clone an object using JSON serialization
+ * Deep clone an object using structuredClone (modern browsers) or JSON serialization (fallback)
  */
 export function deepClone<T>(obj: T): T {
+	if (typeof structuredClone === "function") {
+		return structuredClone(obj);
+	}
+	// Fallback for older environments (note: doesn't handle functions, undefined, symbols, dates correctly)
 	return JSON.parse(JSON.stringify(obj));
 }
 

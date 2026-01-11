@@ -1,6 +1,7 @@
 // Type definitions for Howlingual
 
 import type { AppLanguage } from "$lib/i18n";
+import type { AiModel as AiModelType } from "$lib/ai_service";
 
 // Re-export types from ai_service for backward compatibility
 export type {
@@ -41,7 +42,7 @@ export interface ApiKeys {
 }
 
 export interface AppSettings {
-	model: AiModel;
+	model: AiModelType;
 	apiKeys: ApiKeys;
 	defaultTargetLang: string;
 	theme: "dark" | "light";
