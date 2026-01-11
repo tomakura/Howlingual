@@ -2215,6 +2215,17 @@
     }
   }
 
+  let isHoveringTranslate = $state(false);
+
+  async function stopTranslation() {
+    isTranslating = false;
+    try {
+      await emit("stop_translation_command");
+    } catch (e) {
+      console.error("Failed to stop translation:", e);
+    }
+  }
+
   // Initial load (optional: remove if we want it empty by default)
   // Initial load: Start empty
   $effect(() => {
@@ -3481,12 +3492,25 @@
             class="action-btn translate-btn-animated"
             class:translate-mode={!isScrolledDown}
             class:scroll-mode={isScrolledDown}
-            class:loading={isTranslating}
+            class:loading={!isScrolledDown &&
+              isTranslating &&
+              !isHoveringTranslate}
+            class:stop-mode={!isScrolledDown &&
+              isTranslating &&
+              isHoveringTranslate}
             title={isScrolledDown
               ? t(appLanguage, "scrollToTop")
-              : t(appLanguage, "translate")}
-            onclick={isScrolledDown ? scrollToTop : startTranslation}
-            disabled={!isScrolledDown && (isTranslating || !inputQuery.trim())}
+              : isTranslating
+                ? t(appLanguage, "stopTranslation") || "翻訳を停止"
+                : t(appLanguage, "translate")}
+            onclick={isScrolledDown
+              ? scrollToTop
+              : isTranslating
+                ? stopTranslation
+                : startTranslation}
+            disabled={!isScrolledDown && !isTranslating && !inputQuery.trim()}
+            onmouseenter={() => (isHoveringTranslate = true)}
+            onmouseleave={() => (isHoveringTranslate = false)}
           >
             {#if isScrolledDown}
               <svg
@@ -3501,6 +3525,18 @@
                 stroke-linejoin="round"
               >
                 <path d="m18 15-6-6-6 6" />
+              </svg>
+            {:else if isTranslating && isHoveringTranslate}
+              <svg
+                class="btn-icon"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                stroke="currentColor"
+                stroke-width="0"
+              >
+                <rect x="6" y="6" width="12" height="12" rx="2" />
               </svg>
             {:else if isTranslating}
               <span class="loading-spinner"></span>
@@ -5898,8 +5934,19 @@
   .action-btn.translate-mode:disabled {
     background: rgba(99, 102, 241, 0.3);
     box-shadow: none;
-    cursor: not-allowed;
     transform: none;
+  }
+
+  /* Stop Mode (Red) */
+  .action-btn.stop-mode {
+    background: #ef4444;
+    color: #fff;
+    box-shadow: 0 4px 16px rgba(239, 68, 68, 0.25);
+  }
+
+  .action-btn.stop-mode:hover {
+    background: #dc2626;
+    box-shadow: 0 6px 24px rgba(239, 68, 68, 0.35);
   }
 
   /* Scroll-to-top mode (white) */

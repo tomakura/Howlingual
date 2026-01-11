@@ -85,6 +85,14 @@
 			await broadcastUpdate();
 		});
 
+		// Listen for stop request
+		await listen("stop_translation_command", async () => {
+			console.log("[Service] Stop command received");
+			isTranslating = false;
+			if (timerInterval) clearInterval(timerInterval);
+			await broadcastUpdate();
+		});
+
 		// Listen for state sync requests (when a window opens)
 		await listen("request_sync_state", async () => {
 			console.log("[Service] Sync requested");
@@ -145,6 +153,7 @@
 		const startTime = Date.now();
 		if (timerInterval) clearInterval(timerInterval);
 		timerInterval = setInterval(() => {
+			if (!isTranslating) return;
 			techMetrics.time = (Date.now() - startTime) / 1000;
 			if (techMetrics.firstTokenReceived) {
 				techMetrics.genTime = techMetrics.time - techMetrics.waitTime;
@@ -170,6 +179,7 @@
 				params.styles,
 				params.model,
 				(partial, usage) => {
+					if (!isTranslating) return;
 					if (!techMetrics.firstTokenReceived) {
 						techMetrics.firstTokenReceived = true;
 					}
