@@ -119,7 +119,7 @@
       const resizeObserver = new ResizeObserver((entries) => {
         for (const entry of entries) {
           const totalWidth = entry.contentRect.width;
-          const itemWidth = 90;
+          const itemWidth = 80; // 閾値調整: 1個分多く表示
           const buttonWidth = 50;
 
           const maxIfNoButton = Math.floor(totalWidth / itemWidth);
@@ -4624,8 +4624,8 @@
                     <div class="about-logo-wrapper">
                       <img
                         src={theme === "light"
-                          ? "icon-light.svg"
-                          : "icon-dark.svg"}
+                          ? "icon-full-light.svg"
+                          : "icon-full-dark.svg"}
                         alt="Howlingual Logo"
                         style="width: 100px; height: 100px; filter: drop-shadow(0 4px 12px rgba(0,0,0,0.2));"
                       />
@@ -5915,7 +5915,7 @@
     display: flex;
     align-items: center;
     padding: 6px 14px;
-    border-radius: 20px;
+    border-radius: 8px;
     font-size: 12px;
     font-weight: 500;
     border: 1px solid var(--border-color);
