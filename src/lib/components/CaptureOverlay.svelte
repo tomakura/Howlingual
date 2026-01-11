@@ -124,11 +124,9 @@
 			console.error("[Capture] OCR Failed:", e);
 			// Don't send error to main window if user cancelled
 			if (!isCancelled) {
-				// Error is logged above; not sent to main window to avoid auto-translation
+				// Error is logged above
 			}
 		} finally {
-			// Window will be closed by backend via finish_selection_ocr on success
-			// On error or cancellation, window should be closed by ESC handler or remain for retry
 			isProcessing = false;
 		}
 	}
