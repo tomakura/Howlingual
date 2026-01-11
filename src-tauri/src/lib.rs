@@ -570,11 +570,11 @@ fn close_capture_windows(app: &AppHandle) -> Result<(), String> {
             }
         }
     }
-    
+
     if !errors.is_empty() {
         return Err(errors.join("; "));
     }
-    
+
     Ok(())
 }
 
@@ -654,7 +654,7 @@ fn show_main_window(app: &AppHandle, cursor_pos: Option<(i32, i32)>) -> tauri::R
             // Center window on cursor
             let x = cursor_x - win_w / 2;
             let y = cursor_y - win_h / 2;
-            let (x, y) = clamp_window_to_monitor(x, y, win_w, win_h, mon_pos, mon_size);
+            let (x, y) = clamp_window_to_monitor(x, y, win_w, win_h, *mon_pos, *mon_size);
 
             let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
         }
@@ -725,7 +725,7 @@ fn show_compact_window(
             let x = cursor_x + 10;
             let y = cursor_y + 10;
             println!("[debug] Initial calc pos: ({}, {})", x, y);
-            let (x, y) = clamp_window_to_monitor(x, y, win_w, win_h, mon_pos, mon_size);
+            let (x, y) = clamp_window_to_monitor(x, y, win_w, win_h, *mon_pos, *mon_size);
 
             println!("[debug] Final pos: ({}, {})", x, y);
             let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
@@ -831,12 +831,18 @@ async fn start_selection_ocr(app: AppHandle) -> Result<(), String> {
         if let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) {
             let _ = main.hide();
         }
+        if let Some(compact) = app.get_webview_window(COMPACT_WINDOW_LABEL) {
+            let _ = compact.hide();
+        }
 
         let monitors = Monitor::all().map_err(|e| e.to_string())?;
 
         // Close any existing capture windows before creating new ones
         if let Err(e) = close_capture_windows(&app) {
-            println!("[ocr] Warning: Failed to close existing capture windows: {}", e);
+            println!(
+                "[ocr] Warning: Failed to close existing capture windows: {}",
+                e
+            );
         }
 
         let mut capture_map = HashMap::new();
@@ -863,7 +869,7 @@ async fn start_selection_ocr(app: AppHandle) -> Result<(), String> {
                 image.width(),
                 image.height()
             );
-            
+
             let monitor_id = index.to_string();
             capture_map.insert(monitor_id.clone(), image);
 
@@ -937,7 +943,7 @@ async fn finish_selection_ocr(
     // Image dimensions are in physical pixels (from screen capture)
     let image_width = image.width();
     let image_height = image.height();
-    
+
     println!(
         "[ocr] Image dimensions: {}x{}, selection: {},{} {}x{}",
         image_width, image_height, x, y, width, height
