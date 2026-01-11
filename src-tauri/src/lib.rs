@@ -949,7 +949,7 @@ async fn ocr_windows(image: image::RgbaImage) -> Result<String, String> {
         dynamic = dynamic.resize(width * scale, height * scale, image::imageops::Lanczos3);
     }
 
-    dynamic = dynamic.grayscale().adjust_contrast(20.0).unsharpen(1.0, 1);
+    dynamic = dynamic.grayscale().adjust_contrast(12.0).unsharpen(1.0, 1);
 
     let processed = dynamic.to_rgba8();
     let width = processed.width() as i32;
