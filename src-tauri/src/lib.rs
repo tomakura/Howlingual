@@ -561,12 +561,21 @@ fn ensure_capture_window(
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn close_capture_windows(app: &AppHandle) {
+fn close_capture_windows(app: &AppHandle) -> Result<(), String> {
+    let mut errors = Vec::new();
     for (label, window) in app.webview_windows() {
         if label == CAPTURE_WINDOW_LABEL || label.starts_with(CAPTURE_WINDOW_PREFIX) {
-            let _ = window.close();
+            if let Err(e) = window.close() {
+                errors.push(format!("Failed to close window '{}': {}", label, e));
+            }
         }
     }
+    
+    if !errors.is_empty() {
+        return Err(errors.join("; "));
+    }
+    
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -914,11 +923,15 @@ async fn finish_selection_ocr(
     // Crop image
     let sub_image = image::imageops::crop_imm(&image, x_u32, y_u32, width, height).to_image();
 
-    // Close capture window
-    close_capture_windows(&app);
-
-    if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
-        lock.clear();
+    // Close capture windows and clear state only if closure succeeds
+    if let Err(e) = close_capture_windows(&app) {
+        eprintln!("Warning: Failed to close some capture windows: {}", e);
+        // Continue anyway, but don't clear state if windows might still be active
+    } else {
+        // Only clear the state if all windows were successfully closed
+        if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
+            lock.clear();
+        }
     }
 
     #[cfg(windows)]
@@ -930,9 +943,15 @@ async fn finish_selection_ocr(
 
 #[tauri::command]
 fn cancel_selection_ocr(app: AppHandle) {
-    close_capture_windows(&app);
-    if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
-        lock.clear();
+    // Close capture windows and clear state only if closure succeeds
+    if let Err(e) = close_capture_windows(&app) {
+        eprintln!("Warning: Failed to close some capture windows: {}", e);
+        // Don't clear state if windows might still be active
+    } else {
+        // Only clear the state if all windows were successfully closed
+        if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
+            lock.clear();
+        }
     }
 }
 
