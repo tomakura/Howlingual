@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { invoke } from "@tauri-apps/api/core";
+	import { getCurrentWindow } from "@tauri-apps/api/window";
 	import { fade } from "svelte/transition";
 
 	let isSelecting = $state(false);
@@ -84,7 +85,6 @@
 			} catch (err) {
 				console.error("[Capture] Error canceling OCR:", err);
 			} finally {
-				const { getCurrentWindow } = await import("@tauri-apps/api/window");
 				getCurrentWindow().close();
 			}
 		}
