@@ -13,6 +13,14 @@
 	const queryParams = new URLSearchParams(window.location.search);
 	const monitorId = queryParams.get("monitor") ?? "0";
 
+	// Constants for DPI scaling verification
+	const SCALING_TOLERANCE_PX = 10; // Allow 10px difference for window decorations/rounding
+
+	// Helper to get device pixel ratio with fallback
+	function getDevicePixelRatio(): number {
+		return window.devicePixelRatio || 1;
+	}
+
 	let selection = $derived.by(() => {
 		const x = Math.min(startX, currentX);
 		const y = Math.min(startY, currentY);
@@ -54,7 +62,26 @@
 		isProcessing = true;
 
 		try {
-			const scale = window.devicePixelRatio || 1;
+			// DPI Scaling Explanation:
+			// - The capture window is sized in physical pixels (from monitor.width/height)
+			// - The webview inside reports dimensions in CSS pixels (physical / devicePixelRatio)
+			// - Mouse events (e.clientX/Y) are in CSS pixels
+			// - The captured screenshot is in physical pixels
+			// - Therefore, we must scale CSS pixel coordinates by devicePixelRatio
+			//   to match the physical pixel coordinates of the screenshot
+			//
+			// Example on 150% DPI (devicePixelRatio = 1.5):
+			// - Physical monitor: 1920x1080px
+			// - Webview reports: 1280x720px CSS (1920/1.5 x 1080/1.5)
+			// - Mouse at CSS (100, 100) → Physical (150, 150)
+			// - Screenshot is 1920x1080px, so we crop at physical (150, 150)
+			
+			const scale = getDevicePixelRatio();
+			console.log("[Capture] DPI scale:", scale);
+			console.log("[Capture] CSS coords:", selection.x, selection.y, selection.w, selection.h);
+			console.log("[Capture] Window size:", window.innerWidth, window.innerHeight);
+			console.log("[Capture] Physical coords:", Math.round(selection.x * scale), Math.round(selection.y * scale), Math.round(selection.w * scale), Math.round(selection.h * scale));
+			
 			const result = await invoke<string>("finish_selection_ocr", {
 				monitor_id: monitorId,
 				x: Math.round(selection.x * scale),
@@ -109,6 +136,31 @@
 		);
 		document.documentElement.style.backdropFilter = "none";
 		document.body.style.backdropFilter = "none";
+
+		// Log DPI/scaling information for debugging
+		console.log("[Capture] Monitor ID:", monitorId);
+		console.log("[Capture] devicePixelRatio:", window.devicePixelRatio);
+		console.log("[Capture] Window inner size:", window.innerWidth, "x", window.innerHeight);
+		console.log("[Capture] Window outer size:", window.outerWidth, "x", window.outerHeight);
+		console.log("[Capture] Screen size:", window.screen.width, "x", window.screen.height);
+		
+		// Verify DPI scaling is working as expected
+		// The window should be sized to physical pixels, and the webview should scale to CSS pixels
+		// Expected: innerWidth ≈ outerWidth / devicePixelRatio (allowing for small differences)
+		const scale = getDevicePixelRatio();
+		const expectedInnerWidth = Math.round(window.outerWidth / scale);
+		const expectedInnerHeight = Math.round(window.outerHeight / scale);
+		const widthDiff = Math.abs(window.innerWidth - expectedInnerWidth);
+		const heightDiff = Math.abs(window.innerHeight - expectedInnerHeight);
+		
+		if (widthDiff > SCALING_TOLERANCE_PX || heightDiff > SCALING_TOLERANCE_PX) {
+			console.warn(
+				`[Capture] Warning: Window scaling may not be working as expected! ` +
+				`Expected CSS size: ${expectedInnerWidth} x ${expectedInnerHeight}, ` +
+				`Actual CSS size: ${window.innerWidth} x ${window.innerHeight}, ` +
+				`Difference: ${widthDiff} x ${heightDiff}`
+			);
+		}
 
 		// Focus for Keyboard Events
 		setTimeout(() => {

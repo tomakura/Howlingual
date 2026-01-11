@@ -845,16 +845,25 @@ async fn start_selection_ocr(app: AppHandle) -> Result<(), String> {
         let cursor_pos = get_cursor_position();
 
         for (index, monitor) in monitors.into_iter().enumerate() {
+            let mon_width = monitor.width();
+            let mon_height = monitor.height();
             println!(
                 "[ocr] Capturing monitor {}: {}x{} at ({},{})",
                 index,
-                monitor.width(),
-                monitor.height(),
+                mon_width,
+                mon_height,
                 monitor.x(),
                 monitor.y()
             );
 
             let image = monitor.capture_image().map_err(|e| e.to_string())?;
+            println!(
+                "[ocr] Captured image dimensions for monitor {}: {}x{}",
+                index,
+                image.width(),
+                image.height()
+            );
+            
             let monitor_id = index.to_string();
             capture_map.insert(monitor_id.clone(), image);
 
@@ -862,13 +871,16 @@ async fn start_selection_ocr(app: AppHandle) -> Result<(), String> {
             let url = format!("/?view=capture&monitor={}", monitor_id);
             let window = ensure_capture_window(&app, &label, &url).map_err(|e| e.to_string())?;
 
+            // Set window to physical pixel dimensions
+            // Tauri will create a window of exact physical size
+            // The webview will be scaled internally based on system DPI
             let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
                 x: monitor.x(),
                 y: monitor.y(),
             }));
             let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                width: monitor.width(),
-                height: monitor.height(),
+                width: mon_width,
+                height: mon_height,
             }));
 
             // Focus strategy: focus the window on the monitor containing the cursor.
@@ -907,6 +919,8 @@ async fn finish_selection_ocr(
     width: u32,
     height: u32,
 ) -> Result<String, String> {
+    // Coordinates received here are in physical pixels
+    // Frontend scales CSS pixel coords by devicePixelRatio before sending
     println!(
         "[ocr] finish_selection_ocr ({}): {},{} {}x{}",
         monitor_id, x, y, width, height
@@ -920,8 +934,14 @@ async fn finish_selection_ocr(
     };
 
     // Validate crop bounds before cropping to avoid panics in crop_imm.
+    // Image dimensions are in physical pixels (from screen capture)
     let image_width = image.width();
     let image_height = image.height();
+    
+    println!(
+        "[ocr] Image dimensions: {}x{}, selection: {},{} {}x{}",
+        image_width, image_height, x, y, width, height
+    );
 
     if x < 0 || y < 0 {
         return Err("Selection out of bounds (negative coordinates)".into());
