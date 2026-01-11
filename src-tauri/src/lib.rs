@@ -883,9 +883,8 @@ async fn finish_selection_ocr(
 
     let image = {
         let state = app.state::<CapturedImages>();
-        let lock = state.0.lock().map_err(|_| "Lock failed")?;
-        lock.get(&monitor_id)
-            .cloned()
+        let mut lock = state.0.lock().map_err(|_| "Lock failed")?;
+        lock.remove(&monitor_id)
             .ok_or_else(|| format!("No captured image found for monitor {}", monitor_id))?
     };
 
