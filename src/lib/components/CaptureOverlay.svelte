@@ -72,17 +72,16 @@
 		}
 	}
 
-	function handleKeyDown(e: KeyboardEvent) {
+	async function handleKeyDown(e: KeyboardEvent) {
 		console.log("[Capture] Keydown:", e.key);
 		if (e.key === "Escape") {
 			e.preventDefault();
 			e.stopPropagation();
 			e.stopImmediatePropagation();
 			console.log("[Capture] Closing window via Escape");
-			invoke("cancel_selection_ocr");
-			import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-				getCurrentWindow().close();
-			});
+			await invoke("cancel_selection_ocr");
+			const { getCurrentWindow } = await import("@tauri-apps/api/window");
+			getCurrentWindow().close();
 		}
 	}
 
