@@ -93,6 +93,12 @@ interface Translations {
 	autoRunQuickDesc: string;
 	ocrHint: string;
 	ocrCancelHint: string;
+	// Empty state
+	emptyTitle: string;
+	emptyDescription: string;
+	emptyHintType: string;
+	emptyHintPaste: string;
+	emptyHintOcr: string;
 }
 
 const translations: Record<AppLanguage, Translations> = {
@@ -176,6 +182,11 @@ const translations: Record<AppLanguage, Translations> = {
 		autoRunQuickDesc: "ショートカット呼出時に自動で翻訳を開始します",
 		ocrHint: "翻訳する範囲を選択してください",
 		ocrCancelHint: "Escキーでキャンセル",
+		emptyTitle: "テキストを入力してください",
+		emptyDescription: "AIが複数の翻訳候補と詳しい解説を提供します",
+		emptyHintType: "テキストを直接入力",
+		emptyHintPaste: "クリップボードから貼り付け",
+		emptyHintOcr: "OCRで画面から読み取り",
 	},
 	en: {
 		settings: "Settings",
@@ -257,6 +268,11 @@ const translations: Record<AppLanguage, Translations> = {
 		autoRunQuickDesc: "Automatically start translation when shortcut is pressed",
 		ocrHint: "Select area to translate",
 		ocrCancelHint: "Press Esc to cancel",
+		emptyTitle: "Enter text to translate",
+		emptyDescription: "AI will provide multiple translation options with detailed explanations",
+		emptyHintType: "Type text directly",
+		emptyHintPaste: "Paste from clipboard",
+		emptyHintOcr: "OCR from screen",
 	},
 	zh: {
 		settings: "设置",
@@ -338,6 +354,11 @@ const translations: Record<AppLanguage, Translations> = {
 		autoRunQuickDesc: "按快捷键时自动开始翻译",
 		ocrHint: "请选择要翻译的区域",
 		ocrCancelHint: "按 Esc 取消",
+		emptyTitle: "请输入要翻译的文本",
+		emptyDescription: "AI将提供多种翻译选项并附详细说明",
+		emptyHintType: "直接输入文本",
+		emptyHintPaste: "从剪贴板粘贴",
+		emptyHintOcr: "通过OCR从屏幕读取",
 	},
 	ko: {
 		settings: "설정",
@@ -419,6 +440,11 @@ const translations: Record<AppLanguage, Translations> = {
 		autoRunQuickDesc: "단축키 호출 시 자동으로 번역을 시작합니다",
 		ocrHint: "번역할 영역을 선택하세요",
 		ocrCancelHint: "Esc를 눌러 취소",
+		emptyTitle: "번역할 텍스트를 입력하세요",
+		emptyDescription: "AI가 여러 번역 옵션과 자세한 설명을 제공합니다",
+		emptyHintType: "텍스트 직접 입력",
+		emptyHintPaste: "클립보드에서 붙여넣기",
+		emptyHintOcr: "OCR로 화면에서 읽기",
 	},
 };
 
