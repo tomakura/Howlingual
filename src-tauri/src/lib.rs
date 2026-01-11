@@ -829,6 +829,9 @@ async fn start_selection_ocr(app: AppHandle) -> Result<(), String> {
 
         let mut capture_map = HashMap::new();
 
+        // Get cursor position once to determine which monitor to focus
+        let cursor_pos = get_cursor_position();
+
         for (index, monitor) in monitors.into_iter().enumerate() {
             println!(
                 "[ocr] Capturing monitor {}: {}x{} at ({},{})",
@@ -856,7 +859,23 @@ async fn start_selection_ocr(app: AppHandle) -> Result<(), String> {
                 height: monitor.height(),
             }));
 
-            let _ = window.set_focus();
+            // Focus strategy: focus the window on the monitor containing the cursor.
+            // If cursor position is unavailable, focus the first monitor as a fallback.
+            let should_focus = if let Some((cursor_x, cursor_y)) = cursor_pos {
+                // Check if cursor is within this monitor's bounds
+                cursor_x >= monitor.x()
+                    && cursor_x < monitor.x() + monitor.width() as i32
+                    && cursor_y >= monitor.y()
+                    && cursor_y < monitor.y() + monitor.height() as i32
+            } else {
+                // Fallback: focus the first monitor if cursor position is unavailable
+                index == 0
+            };
+
+            if should_focus {
+                println!("[ocr] Focusing capture window on monitor {}", index);
+                let _ = window.set_focus();
+            }
         }
 
         if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
