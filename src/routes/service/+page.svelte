@@ -204,6 +204,7 @@
 				params.explanationLang,
 				params.styleMeta, // pass style metadata (id -> {name, prompt})
 				params.apiKeys,
+				params.candidateCount || 3,
 			);
 		} catch (e) {
 			console.error("[Service] Translation error:", e);

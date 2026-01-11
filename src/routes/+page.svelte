@@ -42,6 +42,7 @@
   let defaultTargetLang = $state("日本語");
   let theme = $state<"dark" | "light">("dark");
   let appLanguage = $state<"ja" | "en" | "zh" | "ko">("ja");
+  let translationCount = $state<1 | 2 | 3>(3); // 翻訳案の個数（1〜3）
   let allowRewrite = $state(false);
   let selectedProvider = $state<"openai" | "gemini" | "anthropic">("openai");
   // プロバイダごとの最後に選択したモデルを記憶
@@ -285,6 +286,11 @@
             ...lastSelectedModels,
             ...parsed.lastSelectedModels,
           };
+        if (
+          parsed.translationCount &&
+          [1, 2, 3].includes(parsed.translationCount)
+        )
+          translationCount = parsed.translationCount;
 
         // Apply theme on load
         document.documentElement.setAttribute("data-theme", theme);
@@ -800,6 +806,7 @@
       autoStartEnabled: autoStartEnabled,
       startMinimized: startMinimized,
       lastSelectedModels: lastSelectedModels,
+      translationCount: translationCount,
     };
     localStorage.setItem("howlingual_settings", JSON.stringify(settings));
 
@@ -4145,6 +4152,49 @@
                           transition: left 0.2s;"
                         ></div>
                       </button>
+                    </div>
+                  </div>
+
+                  <!-- Translation Count -->
+                  <div class="settings-section">
+                    <div class="settings-label">
+                      {t(appLanguage, "translationCount") || "翻訳案の個数"}
+                    </div>
+                    <div class="settings-card-row">
+                      <span
+                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                      >
+                        {t(appLanguage, "translationCountDesc") ||
+                          "1回の翻訳で生成する翻訳案の数"}
+                      </span>
+                      <div style="display: flex; gap: 4px;">
+                        {#each [1, 2, 3] as count}
+                          <button
+                            onclick={() =>
+                              (translationCount = count as 1 | 2 | 3)}
+                            style="
+                              width: 36px;
+                              height: 28px;
+                              background: {translationCount === count
+                              ? '#3b82f6'
+                              : 'rgba(255,255,255,0.1)'};
+                              border: 1px solid {translationCount === count
+                              ? '#3b82f6'
+                              : 'rgba(255,255,255,0.2)'};
+                              border-radius: 6px;
+                              color: {translationCount === count
+                              ? 'white'
+                              : 'var(--text-muted)'};
+                              font-size: 13px;
+                              font-weight: 500;
+                              cursor: pointer;
+                              transition: all 0.2s;
+                            "
+                          >
+                            {count}
+                          </button>
+                        {/each}
+                      </div>
                     </div>
                   </div>
 
