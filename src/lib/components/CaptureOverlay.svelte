@@ -109,7 +109,7 @@
 			);
 
 			const result = await invoke<string>("finish_selection_ocr", {
-				monitor_id: monitorId,
+				monitorId: monitorId,
 				x: Math.round(selection.x * scale),
 				y: Math.round(selection.y * scale),
 				width: Math.round(selection.w * scale),
@@ -138,10 +138,10 @@
 			e.stopPropagation();
 			e.stopImmediatePropagation();
 			console.log("[Capture] Closing window via Escape");
-			
+
 			// Mark as cancelled to prevent error messages from being sent
 			isCancelled = true;
-			
+
 			try {
 				await invoke("cancel_selection_ocr");
 			} catch (err) {
@@ -245,11 +245,11 @@
 	onmouseup={handleMouseUp}
 	transition:fade={{ duration: 150 }}
 >
-	{#if (!isSelecting || (selection.w < 2 || selection.h < 2)) && !isProcessing}
+	{#if (!isSelecting || selection.w < 2 || selection.h < 2) && !isProcessing}
 		<div class="dim-bg" transition:fade={{ duration: 150 }}></div>
 	{/if}
 
-	{#if (isSelecting || isProcessing) && (selection.w >= 2 && selection.h >= 2)}
+	{#if (isSelecting || isProcessing) && selection.w >= 2 && selection.h >= 2}
 		<div
 			class="selection-box"
 			class:processing={isProcessing}
