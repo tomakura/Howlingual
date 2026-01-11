@@ -2807,11 +2807,16 @@
         <div class="output-area compact-output">
           {#each translations as item (item.id)}
             <div class="candidate-card" out:fade={{ duration: 200 }}>
-              <div
-                class="card-inner-content"
-                class:content-fade={isTranslating && !item.text}
-              >
-                <p class="translated-text">{item.text}</p>
+              <div class="card-inner-content">
+                {#if isTranslating && !item.text}
+                  <div
+                    class="skeleton-line primary"
+                    style="margin-top: 8px;"
+                  ></div>
+                  <div class="skeleton-line secondary"></div>
+                {:else}
+                  <p class="translated-text">{item.text}</p>
+                {/if}
                 <div class="card-footer">
                   {#if item.reason}
                     <p class="reason">
@@ -3666,7 +3671,10 @@
               <span class="token-row">
                 <span class="tech-label">In:</span>
                 {#if isTranslating && !techMetrics.isReal}
-                  <span class="loading-dots-inline">...</span>
+                  <div
+                    class="skeleton-line"
+                    style="width: 40px; display: inline-block; vertical-align: middle;"
+                  ></div>
                 {:else}
                   {techMetrics.inputTokens}
                 {/if}
@@ -3674,7 +3682,10 @@
               <span class="token-row">
                 <span class="tech-label">Out:</span>
                 {#if isTranslating && !techMetrics.isReal}
-                  <span class="loading-dots-inline">...</span>
+                  <div
+                    class="skeleton-line"
+                    style="width: 40px; display: inline-block; vertical-align: middle;"
+                  ></div>
                 {:else}
                   {techMetrics.outputTokens}
                 {/if}
@@ -3850,11 +3861,16 @@
           {:else}
             {#each translations as item (item.id)}
               <div class="candidate-card" out:fade={{ duration: 200 }}>
-                <div
-                  class="card-inner-content"
-                  class:content-fade={isTranslating && !item.text}
-                >
-                  <p class="translated-text">{item.text}</p>
+                <div class="card-inner-content">
+                  {#if isTranslating && !item.text}
+                    <div
+                      class="skeleton-line primary"
+                      style="margin-top: 8px;"
+                    ></div>
+                    <div class="skeleton-line secondary"></div>
+                  {:else}
+                    <p class="translated-text">{item.text}</p>
+                  {/if}
                   <div class="card-footer">
                     {#if item.reason}
                       <p class="reason">
