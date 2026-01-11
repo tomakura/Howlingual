@@ -834,7 +834,10 @@ async fn start_selection_ocr(app: AppHandle) -> Result<(), String> {
 
         let monitors = Monitor::all().map_err(|e| e.to_string())?;
 
-        close_capture_windows(&app);
+        // Close any existing capture windows before creating new ones
+        if let Err(e) = close_capture_windows(&app) {
+            println!("[ocr] Warning: Failed to close existing capture windows: {}", e);
+        }
 
         let mut capture_map = HashMap::new();
 
@@ -925,7 +928,7 @@ async fn finish_selection_ocr(
 
     // Close capture windows and clear state only if closure succeeds
     if let Err(e) = close_capture_windows(&app) {
-        eprintln!("Warning: Failed to close some capture windows: {}", e);
+        println!("[ocr] Warning: Failed to close some capture windows: {}", e);
         // Continue anyway, but don't clear state if windows might still be active
     } else {
         // Only clear the state if all windows were successfully closed
@@ -945,7 +948,7 @@ async fn finish_selection_ocr(
 fn cancel_selection_ocr(app: AppHandle) {
     // Close capture windows and clear state only if closure succeeds
     if let Err(e) = close_capture_windows(&app) {
-        eprintln!("Warning: Failed to close some capture windows: {}", e);
+        println!("[ocr] Warning: Failed to close some capture windows: {}", e);
         // Don't clear state if windows might still be active
     } else {
         // Only clear the state if all windows were successfully closed
