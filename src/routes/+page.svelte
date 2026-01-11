@@ -3053,7 +3053,65 @@
     </header>
 
     <!-- Language Selector Row -->
-    <div class="header-actions-row">
+    <div
+      class="header-actions-row"
+      style="position: relative; display: flex; justify-content: center; align-items: center;"
+    >
+      <!-- Clipboard / Clear Button -->
+      <div style="position: absolute; left: 0; z-index: 10;">
+        {#if inputQuery.trim()}
+          <button
+            class="icon-btn"
+            onclick={() => (inputQuery = "")}
+            title={t(appLanguage, "clearText") || "テキストをクリア"}
+            style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); color: var(--text-color);"
+          >
+            <!-- Close Icon -->
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        {:else}
+          <button
+            class="icon-btn"
+            onclick={async () => {
+              try {
+                const text = await navigator.clipboard.readText();
+                if (text) inputQuery = text;
+              } catch (e) {
+                console.error("Failed to read clipboard:", e);
+              }
+            }}
+            title={t(appLanguage, "pasteFromClipboard") ||
+              "クリップボードから貼り付け"}
+            style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); color: var(--text-color);"
+          >
+            <!-- Clipboard Icon -->
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path
+                d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
+              ></path>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+            </svg>
+          </button>
+        {/if}
+      </div>
+
       <div
         class="lang-selector-group"
         style="display: flex; align-items: center; gap: 8px;"
