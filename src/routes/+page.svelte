@@ -65,9 +65,12 @@
   let startMinimized = $state(false);
 
   let historyAnimating = $state(false);
+  let historyAnimTimer: ReturnType<typeof setTimeout> | null = null;
   function triggerHistoryAnim() {
+    // 既存のタイマーをクリアして即座に再開可能に
+    if (historyAnimTimer) clearTimeout(historyAnimTimer);
     historyAnimating = true;
-    setTimeout(() => (historyAnimating = false), 1000);
+    historyAnimTimer = setTimeout(() => (historyAnimating = false), 400);
   }
 
   function detectLanguageSimple(text: string) {
@@ -1519,16 +1522,18 @@
 
   // Button animation states (to prevent animation interruption on hover end)
   let settingsAnimating = $state(false);
+  let settingsAnimTimer: ReturnType<typeof setTimeout> | null = null;
   let speakAnimating: Record<number, boolean> = $state({});
   let copyAnimating: Record<number, boolean> = $state({});
   let isSpeakingId: number | null = $state(null);
 
   function triggerSettingsAnim() {
-    if (settingsAnimating) return;
+    // 既存のタイマーをクリアして即座に再開可能に
+    if (settingsAnimTimer) clearTimeout(settingsAnimTimer);
     settingsAnimating = true;
-    setTimeout(() => {
+    settingsAnimTimer = setTimeout(() => {
       settingsAnimating = false;
-    }, 1000);
+    }, 400);
   }
 
   function handleSpeak(id: number, text: string, lang: string) {
@@ -7807,6 +7812,45 @@
     to {
       transform: rotate(360deg);
     }
+  }
+
+  /* History & Settings Button Animation */
+  .history-btn.animating svg {
+    animation: historyPulse 0.4s ease-out;
+  }
+
+  .settings-btn.animating svg {
+    animation: settingsSpin 0.4s ease-out;
+  }
+
+  @keyframes historyPulse {
+    0% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.15);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+
+  @keyframes settingsSpin {
+    0% {
+      transform: rotate(0deg);
+    }
+    100% {
+      transform: rotate(90deg);
+    }
+  }
+
+  /* Prevent logo from being dragged */
+  .about-logo-wrapper img,
+  img[alt*="Logo"],
+  img[alt*="logo"] {
+    -webkit-user-drag: none;
+    user-select: none;
+    pointer-events: none;
   }
 
   /* OCR Button Animation */
