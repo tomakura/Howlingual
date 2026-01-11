@@ -679,6 +679,7 @@ fn show_main_window(app: &AppHandle, cursor_pos: Option<(i32, i32)>) -> tauri::R
 
     window.show()?;
     window.set_focus()?;
+    let _ = app.emit("window_shown", "main");
     Ok(())
 }
 
@@ -755,6 +756,7 @@ fn show_compact_window(
 
     window.show()?;
     window.set_focus()?;
+    let _ = app.emit("window_shown", "compact");
 
     // Store text in PendingText state for frontend to retrieve
     if let Ok(mut pending) = app.state::<PendingText>().0.lock() {

@@ -99,6 +99,10 @@ interface Translations {
 	emptyHintType: string;
 	emptyHintPaste: string;
 	emptyHintOcr: string;
+	clearText: string;
+	pasteFromClipboard: string;
+	stopTranslation: string;
+	translationCountDesc: string;
 }
 
 const translations: Record<AppLanguage, Translations> = {
@@ -187,6 +191,10 @@ const translations: Record<AppLanguage, Translations> = {
 		emptyHintType: "テキストを直接入力",
 		emptyHintPaste: "クリップボードから貼り付け",
 		emptyHintOcr: "OCRで画面から読み取り",
+		clearText: "テキストをクリア",
+		pasteFromClipboard: "クリップボードから貼り付け",
+		stopTranslation: "翻訳を停止",
+		translationCountDesc: "一度に生成する翻訳案の数です",
 	},
 	en: {
 		settings: "Settings",
@@ -273,6 +281,10 @@ const translations: Record<AppLanguage, Translations> = {
 		emptyHintType: "Type text directly",
 		emptyHintPaste: "Paste from clipboard",
 		emptyHintOcr: "OCR from screen",
+		clearText: "Clear text",
+		pasteFromClipboard: "Paste from clipboard",
+		stopTranslation: "Stop translation",
+		translationCountDesc: "Number of translation candidates to generate at once",
 	},
 	zh: {
 		settings: "设置",
@@ -359,6 +371,10 @@ const translations: Record<AppLanguage, Translations> = {
 		emptyHintType: "直接输入文本",
 		emptyHintPaste: "从剪贴板粘贴",
 		emptyHintOcr: "通过OCR从屏幕读取",
+		clearText: "清空文本",
+		pasteFromClipboard: "从剪贴板粘贴",
+		stopTranslation: "停止翻译",
+		translationCountDesc: "一次生成的翻译候选数量",
 	},
 	ko: {
 		settings: "설정",
@@ -445,6 +461,10 @@ const translations: Record<AppLanguage, Translations> = {
 		emptyHintType: "텍스트 직접 입력",
 		emptyHintPaste: "클립보드에서 붙여넣기",
 		emptyHintOcr: "OCR로 화면에서 읽기",
+		clearText: "텍스트 지우기",
+		pasteFromClipboard: "클립보드에서 붙여넣기",
+		stopTranslation: "번역 중지",
+		translationCountDesc: "한 번에 생성할 번역 제안 수입니다",
 	},
 };
 

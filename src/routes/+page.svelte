@@ -4,6 +4,7 @@
   import { flip } from "svelte/animate";
   import { quintOut } from "svelte/easing";
   import { invoke } from "@tauri-apps/api/core";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { listen, emit, TauriEvent } from "@tauri-apps/api/event";
   import {
     enable as enableAutostart,
@@ -73,6 +74,57 @@
     historyAnimating = true;
     historyAnimTimer = setTimeout(() => (historyAnimating = false), 400);
   }
+
+  // ====== Window Fade Animation ======
+  let isWindowVisible = $state(false);
+
+  async function hideWindow() {
+    isWindowVisible = false;
+    setTimeout(async () => {
+      await getCurrentWindow().hide();
+    }, 250); // Match CSS transition duration
+  }
+
+  onMount(() => {
+    let unlistenShown: () => void;
+    let unlistenFocus: () => void;
+
+    (async () => {
+      // Listen for window_shown event from Rust
+      unlistenShown = await listen("window_shown", () => {
+        // Slight delay to ensure opacity:0 is applied first
+        setTimeout(() => {
+          isWindowVisible = true;
+        }, 50);
+      });
+
+      // Fallback: Show on focus if not visible
+      const win = getCurrentWindow();
+      unlistenFocus = await win.listen("tauri://focus", () => {
+        // If we get focus, make sure we are visible
+        // This handles cases where show() didn't emit window_shown or we missed it
+        if (!isWindowVisible) {
+          requestAnimationFrame(() => {
+            isWindowVisible = true;
+          });
+        }
+      });
+    })();
+
+    // Handle Escape key globally
+    const handleKeydown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        hideWindow();
+      }
+    };
+    window.addEventListener("keydown", handleKeydown);
+
+    return () => {
+      if (unlistenShown) unlistenShown();
+      if (unlistenFocus) unlistenFocus();
+      window.removeEventListener("keydown", handleKeydown);
+    };
+  });
 
   function detectLanguageSimple(text: string) {
     // ひらがな・カタカナがあれば確実に日本語
@@ -2264,7 +2316,7 @@
 {#if isCaptureMode}
   <CaptureOverlay {appLanguage} />
 {:else if isCompactMode}
-  <main class="compact-shell">
+  <main class="compact-shell" class:visible={isWindowVisible}>
     <header class="compact-header">
       <div class="compact-brand" data-tauri-drag-region>
         <img
@@ -3050,7 +3102,7 @@
     </div>
   </main>
 {:else}
-  <main class="container">
+  <main class="container" class:visible={isWindowVisible}>
     <!-- App Header -->
     <header class="app-header">
       <div class="header-left">
@@ -3418,7 +3470,10 @@
                         data-level={styleLevels[style.id] || 0}
                         onclick={() => cycleLevel(style.id)}
                         onpointerdown={(e) => handleDrag(style.id, e)}
-                        animate:flip={{ duration: 300, easing: quintOut }}
+                        animate:flip={{
+                          duration: 300,
+                          easing: quintOut,
+                        }}
                         in:receive={{ key: style.id }}
                         out:send={{ key: style.id }}
                       >
@@ -3675,7 +3730,9 @@
                 </div>
               </div>
               <div class="empty-state-content">
-                <h3 class="empty-title">{t(appLanguage, "emptyTitle")}</h3>
+                <h3 class="empty-title">
+                  {t(appLanguage, "emptyTitle")}
+                </h3>
                 <p class="empty-description">
                   {t(appLanguage, "emptyDescription")}
                 </p>
@@ -5206,6 +5263,12 @@
     height: 100vh;
     padding: 0;
     overflow: hidden;
+    opacity: 0;
+    transition: opacity 250ms ease-out;
+  }
+
+  .container.visible {
+    opacity: 1;
   }
 
   .compact-shell {
@@ -5220,6 +5283,12 @@
     background: var(--bg-color);
     position: relative;
     overflow: visible;
+    opacity: 0;
+    transition: opacity 250ms ease-out;
+  }
+
+  .compact-shell.visible {
+    opacity: 1;
   }
 
   .compact-shell::before {
