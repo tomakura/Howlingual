@@ -79,9 +79,14 @@
 			e.stopPropagation();
 			e.stopImmediatePropagation();
 			console.log("[Capture] Closing window via Escape");
-			await invoke("cancel_selection_ocr");
-			const { getCurrentWindow } = await import("@tauri-apps/api/window");
-			getCurrentWindow().close();
+			try {
+				await invoke("cancel_selection_ocr");
+			} catch (err) {
+				console.error("[Capture] Error canceling OCR:", err);
+			} finally {
+				const { getCurrentWindow } = await import("@tauri-apps/api/window");
+				getCurrentWindow().close();
+			}
 		}
 	}
 
