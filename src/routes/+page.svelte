@@ -340,9 +340,6 @@
     }
   });
 
-  // Quick Mode Reset on Focus
-  // We need to run this logic once on mount, but check viewParam
-
   // Service Integration
   onMount(() => {
     let unlisten: () => void;
@@ -1636,8 +1633,9 @@
   function autoScrollToBottom() {
     if (scrollContainerEl && autoScrollEnabled) {
       // Cancel any pending scroll to prevent stacking
-      if (autoScrollRafId) {
+      if (autoScrollRafId !== null) {
         cancelAnimationFrame(autoScrollRafId);
+        autoScrollRafId = null;
       }
       autoScrollRafId = requestAnimationFrame(() => {
         autoScrollRafId = null;
@@ -2070,6 +2068,10 @@
     if (scrollTimeout) {
       clearTimeout(scrollTimeout);
       scrollTimeout = null;
+    }
+    if (autoScrollRafId !== null) {
+      cancelAnimationFrame(autoScrollRafId);
+      autoScrollRafId = null;
     }
   });
 </script>
@@ -3225,7 +3227,7 @@
             class:hidden={isScrolledDown}
             onclick={startOCR}
             title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
-            style="width: 50px; margin-right: -5px; background: var(--bg-card); color: var(--text-color); border: 1px solid var(--border-color); position: relative; overflow: hidden; padding-left: 2px;"
+            style="width: 50px; background: var(--bg-card); color: var(--text-color); border: 1px solid var(--border-color); position: relative; overflow: hidden; padding-left: 2px;"
           >
             <svg
               width="24"
@@ -7360,32 +7362,34 @@
   }
 
   /* Translate Button Animation */
-  .translate-btn-animated:hover:not(:disabled) {
-    animation: translatePulse 2s infinite;
-  }
+  @media (prefers-reduced-motion: no-preference) {
+    .translate-btn-animated:hover:not(:disabled) {
+      animation: translatePulse 2s infinite;
+    }
 
-  .translate-btn-animated:hover:not(:disabled) svg {
-    animation: translateIconShake 0.5s ease-in-out infinite alternate;
-  }
+    .translate-btn-animated:hover:not(:disabled) svg {
+      animation: translateIconShake 0.5s ease-in-out infinite alternate;
+    }
 
-  @keyframes translateIconShake {
-    0% {
-      transform: scale(1);
+    @keyframes translateIconShake {
+      0% {
+        transform: scale(1);
+      }
+      100% {
+        transform: scale(1.15) rotate(2deg);
+      }
     }
-    100% {
-      transform: scale(1.15) rotate(5deg);
-    }
-  }
 
-  @keyframes translatePulse {
-    0% {
-      box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
-    }
-    70% {
-      box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
-    }
-    100% {
-      box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+    @keyframes translatePulse {
+      0% {
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
+      }
+      70% {
+        box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+      }
     }
   }
 </style>
