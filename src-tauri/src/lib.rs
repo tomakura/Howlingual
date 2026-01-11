@@ -554,6 +554,10 @@ fn ensure_capture_window(
         .transparent(true)
         .resizable(false)
         .decorations(false)
+        .shadow(false)
+        .maximizable(false)
+        .minimizable(false)
+        .closable(false)
         .always_on_top(true)
         .skip_taskbar(true)
         .visible(true)
@@ -835,6 +839,9 @@ async fn start_selection_ocr(app: AppHandle) -> Result<(), String> {
             let _ = compact.hide();
         }
 
+        // Wait for windows to fully hide before capturing screenshots
+        std::thread::sleep(Duration::from_millis(300));
+
         let monitors = Monitor::all().map_err(|e| e.to_string())?;
 
         // Close any existing capture windows before creating new ones
@@ -970,16 +977,8 @@ async fn finish_selection_ocr(
     // Crop image
     let sub_image = image::imageops::crop_imm(&image, x_u32, y_u32, width, height).to_image();
 
-    // Close capture windows and clear state only if closure succeeds
-    if let Err(e) = close_capture_windows(&app) {
-        println!("[ocr] Warning: Failed to close some capture windows: {}", e);
-        // Continue anyway, but don't clear state if windows might still be active
-    } else {
-        // Only clear the state if all windows were successfully closed
-        if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
-            lock.clear();
-        }
-    }
+    // Do not close windows here! We need them open to show the "Processing" spinner.
+    // The frontend will call cancel_selection_ocr (or close itself) after receiving the result.
 
     #[cfg(windows)]
     return ocr_windows(sub_image).await;
@@ -1036,7 +1035,17 @@ async fn ocr_windows(image: image::RgbaImage) -> Result<String, String> {
         .get() // Use blocking get() since await failed
         .map_err(|e| e.to_string())?;
 
-    let text = result.Text().map_err(|e| e.to_string())?.to_string();
+    // Iterate over lines to preserve newlines
+    let lines = result
+        .Lines()
+        .map_err(|e: windows::core::Error| e.to_string())?;
+    let mut text_parts = Vec::new();
+    for line in lines {
+        if let Ok(line_text) = line.Text() {
+            text_parts.push(line_text.to_string());
+        }
+    }
+    let text = text_parts.join("\n");
 
     // Remove spaces between Japanese characters (enhanced)
     let mut cleaned = String::with_capacity(text.len());
