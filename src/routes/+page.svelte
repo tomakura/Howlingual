@@ -57,6 +57,7 @@
   const initialView = initialParams.get("view");
   let isCompactMode = $state(initialView === "compact");
   let isCaptureMode = $state(initialView === "capture");
+  let isStackExpanded = $state(false); // Controls card stack in compact mode
   const DEFAULT_SHORTCUT = "CommandOrControl+Shift+H";
   let quickShortcut = $state(DEFAULT_SHORTCUT);
   let shortcutDraft = $state(DEFAULT_SHORTCUT);
@@ -77,6 +78,7 @@
 
   // ====== Window Fade Animation ======
   let isWindowVisible = $state(false);
+  let isWindows = $state(false);
 
   async function hideWindow() {
     isWindowVisible = false;
@@ -90,6 +92,11 @@
     let unlistenFocus: () => void;
 
     (async () => {
+      // Detect OS
+      if (typeof navigator !== "undefined") {
+        isWindows = navigator.userAgent.includes("Windows");
+      }
+
       // Listen for window_shown event from Rust
       unlistenShown = await listen("window_shown", () => {
         // Slight delay to ensure opacity:0 is applied first
@@ -1305,6 +1312,7 @@
       isReal: false,
       firstTokenReceived: false,
     };
+    isStackExpanded = false; // Reset stack state
 
     await tick();
 
@@ -2387,30 +2395,92 @@
     </header>
 
     <div class="compact-lang-row">
-      <button
-        class="icon-btn compact-ocr-btn"
+      <!-- Left Actions Group -->
+      <div
+        class="compact-left-actions"
         class:hidden={isScrolledDown}
-        onclick={startOCR}
-        title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
-        style="width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; position: absolute; left: 12px; color: var(--text-color);"
+        style="position: absolute; left: 12px; display: flex; gap: 8px; align-items: center;"
       >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
+        <!-- Paste / Clear Button -->
+        {#if inputQuery.trim()}
+          <button
+            class="icon-btn compact-action-btn"
+            onclick={() => (inputQuery = "")}
+            title={t(appLanguage, "clearText") || "テキストをクリア"}
+            style="width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; color: var(--text-color);"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        {:else}
+          <button
+            class="icon-btn compact-action-btn"
+            onclick={async () => {
+              try {
+                const text = await navigator.clipboard.readText();
+                if (text) inputQuery = text;
+              } catch (e) {
+                console.error("Failed to read clipboard:", e);
+              }
+            }}
+            title={t(appLanguage, "pasteFromClipboard") ||
+              "クリップボードから貼り付け"}
+            style="width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; color: var(--text-color);"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
+              ></path>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+            </svg>
+          </button>
+        {/if}
+
+        <!-- OCR Button -->
+        <button
+          class="icon-btn compact-ocr-btn"
+          onclick={startOCR}
+          title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
+          style="width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; color: var(--text-color);"
         >
-          <path d="M3 7V5a2 2 0 0 1 2-2h2" />
-          <path d="M17 3h2a2 2 0 0 1 2 2v2" />
-          <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
-          <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
-          <path d="M7 9h10v6H7z" />
-        </svg>
-      </button>
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M3 7V5a2 2 0 0 1 2-2h2" />
+            <path d="M17 3h2a2 2 0 0 1 2 2v2" />
+            <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+            <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+            <path d="M7 9h10v6H7z" />
+          </svg>
+        </button>
+      </div>
       <div class="lang-selector-group compact-lang-group">
         <div class="lang-selector">
           <button
@@ -2677,12 +2747,25 @@
             class="action-btn"
             class:translate-mode={!isScrolledDown}
             class:scroll-mode={isScrolledDown}
-            class:loading={isTranslating}
+            class:loading={!isScrolledDown &&
+              isTranslating &&
+              !isHoveringTranslate}
+            class:stop-mode={!isScrolledDown &&
+              isTranslating &&
+              isHoveringTranslate}
             title={isScrolledDown
               ? t(appLanguage, "scrollToTop")
-              : t(appLanguage, "translate")}
-            onclick={isScrolledDown ? scrollToTop : startTranslation}
-            disabled={!isScrolledDown && (isTranslating || !inputQuery.trim())}
+              : isTranslating
+                ? t(appLanguage, "stopTranslation") || "翻訳を停止"
+                : t(appLanguage, "translate")}
+            onclick={isScrolledDown
+              ? scrollToTop
+              : isTranslating
+                ? stopTranslation
+                : startTranslation}
+            disabled={!isScrolledDown && !isTranslating && !inputQuery.trim()}
+            onmouseenter={() => (isHoveringTranslate = true)}
+            onmouseleave={() => (isHoveringTranslate = false)}
           >
             {#if isScrolledDown}
               <svg
@@ -2697,6 +2780,18 @@
                 stroke-linejoin="round"
               >
                 <path d="m18 15-6-6-6 6" />
+              </svg>
+            {:else if isTranslating && isHoveringTranslate}
+              <svg
+                class="btn-icon"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                stroke="currentColor"
+                stroke-width="0"
+              >
+                <rect x="6" y="6" width="12" height="12" rx="2" />
               </svg>
             {:else if isTranslating}
               <span class="loading-spinner"></span>
@@ -2805,61 +2900,23 @@
 
         <!-- Translation Results -->
         <div class="output-area compact-output">
-          {#each translations as item (item.id)}
-            <div class="candidate-card" out:fade={{ duration: 200 }}>
-              <div class="card-inner-content">
-                {#if isTranslating && !item.text}
-                  <div
-                    class="skeleton-line primary"
-                    style="margin-top: 8px;"
-                  ></div>
-                  <div class="skeleton-line secondary"></div>
-                {:else}
-                  <p class="translated-text">{item.text}</p>
-                {/if}
-                <div class="card-footer">
-                  {#if item.reason}
-                    <p class="reason">
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        style="flex-shrink: 0; margin-top: 2px;"
-                      >
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <line x1="12" y1="16" x2="12" y2="12"></line>
-                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                      </svg>
-                      <span>{item.reason}</span>
-                    </p>
+          {#each translations as item, i (item.id)}
+            <!-- Show if expanded OR if it's the first item -->
+            {#if isCompactMode ? isStackExpanded || i === 0 : true}
+              <div class="candidate-card" out:fade={{ duration: 200 }}>
+                <div class="card-inner-content">
+                  {#if isTranslating && !item.text}
+                    <div
+                      class="skeleton-line primary"
+                      style="margin-top: 8px;"
+                    ></div>
+                    <div class="skeleton-line secondary"></div>
+                  {:else}
+                    <p class="translated-text">{item.text}</p>
                   {/if}
-                  <div class="candidate-actions" class:hide={!item.text}>
-                    <button
-                      class="icon-btn replace-btn"
-                      class:replaced={replacedId === item.id}
-                      title={t(appLanguage, "replaceSelection")}
-                      onclick={() => handleReplace(item.id, item.text)}
-                    >
-                      {#if replacedId === item.id}
-                        <svg
-                          class="check-icon"
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2.5"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                        >
-                          <polyline points="20 6 9 17 4 12"></polyline>
-                        </svg>
-                      {:else}
+                  <div class="card-footer">
+                    {#if item.reason}
+                      <p class="reason">
                         <svg
                           width="14"
                           height="14"
@@ -2869,158 +2926,233 @@
                           stroke-width="2"
                           stroke-linecap="round"
                           stroke-linejoin="round"
+                          style="flex-shrink: 0; margin-top: 2px;"
                         >
-                          <path d="M16 3l5 5-11 11H5v-5L16 3z"></path>
-                          <path d="M15 5l4 4"></path>
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="16" x2="12" y2="12"></line>
+                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
                         </svg>
-                      {/if}
-                    </button>
-                    <div class="action-menu">
+                        <span>{item.reason}</span>
+                      </p>
+                    {/if}
+                    <div class="candidate-actions" class:hide={!item.text}>
                       <button
-                        class="icon-btn action-menu-trigger"
-                        title={t(appLanguage, "moreActions")}
-                        aria-expanded={actionMenuOpenId === item.id}
-                        onclick={() => toggleActionMenu(item.id)}
+                        class="icon-btn replace-btn"
+                        class:replaced={replacedId === item.id}
+                        title={t(appLanguage, "replaceSelection")}
+                        onclick={() => handleReplace(item.id, item.text)}
                       >
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                        >
-                          <circle cx="12" cy="6" r="1.5"></circle>
-                          <circle cx="12" cy="12" r="1.5"></circle>
-                          <circle cx="12" cy="18" r="1.5"></circle>
-                        </svg>
+                        {#if replacedId === item.id}
+                          <svg
+                            class="check-icon"
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                          </svg>
+                        {:else}
+                          <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <path d="M16 3l5 5-11 11H5v-5L16 3z"></path>
+                            <path d="M15 5l4 4"></path>
+                          </svg>
+                        {/if}
                       </button>
-                      {#if actionMenuOpenId === item.id}
-                        <div
-                          class="action-menu-dropdown glass"
-                          transition:fade={{ duration: 120 }}
+                      <div class="action-menu">
+                        <button
+                          class="icon-btn action-menu-trigger"
+                          title={t(appLanguage, "moreActions")}
+                          aria-expanded={actionMenuOpenId === item.id}
+                          onclick={() => toggleActionMenu(item.id)}
                         >
-                          <button
-                            class="action-menu-item copy-item"
-                            class:animating={copyAnimating[item.id]}
-                            class:copied={copiedId === item.id}
-                            onclick={() => handleCopy(item.id, item.text)}
-                            onmouseenter={() => triggerCopyAnim(item.id)}
+                          <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
                           >
-                            <span class="action-menu-icon">
-                              {#if copiedId === item.id}
-                                <svg
-                                  class="check-icon"
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2.5"
-                                  stroke-linecap="round"
-                                  stroke-linejoin="round"
-                                >
-                                  <polyline points="20 6 9 17 4 12"></polyline>
-                                </svg>
-                              {:else}
-                                <svg
-                                  class="copy-icon"
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2"
-                                >
-                                  <rect
-                                    x="9"
-                                    y="9"
-                                    width="13"
-                                    height="13"
-                                    rx="2"
-                                    ry="2"
-                                  ></rect>
-                                  <path
-                                    d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                                  ></path>
-                                </svg>
-                              {/if}
-                            </span>
-                            <span>{t(appLanguage, "copy")}</span>
-                          </button>
-                          <button
-                            class="action-menu-item speak-item"
-                            class:active={isSpeakingId === item.id}
-                            class:animating={speakAnimating[item.id]}
-                            onclick={() =>
-                              handleSpeak(item.id, item.text, targetLang)}
-                            onmouseenter={() => triggerSpeakAnim(item.id)}
+                            <circle cx="12" cy="6" r="1.5"></circle>
+                            <circle cx="12" cy="12" r="1.5"></circle>
+                            <circle cx="12" cy="18" r="1.5"></circle>
+                          </svg>
+                        </button>
+                        {#if actionMenuOpenId === item.id}
+                          <div
+                            class="action-menu-dropdown glass"
+                            transition:fade={{ duration: 120 }}
                           >
-                            <span class="action-menu-icon">
-                              {#if isSpeakingId === item.id}
-                                <svg
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="currentColor"
-                                  stroke="none"
-                                >
-                                  <rect
-                                    x="6"
-                                    y="6"
-                                    width="12"
-                                    height="12"
-                                    rx="1"
-                                  />
-                                </svg>
-                              {:else}
-                                <svg
-                                  class="speak-icon"
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2"
-                                  style="overflow: visible;"
-                                >
-                                  <polygon
-                                    points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
-                                  ></polygon>
-                                  <path
-                                    class="sound-wave wave-1"
-                                    d="M15.54 8.46a5 5 0 0 1 0 7.07"
-                                  ></path>
-                                  <path
-                                    class="sound-wave wave-2"
-                                    d="M19.07 4.93a10 10 0 0 1 0 14.14"
-                                  ></path>
-                                  <path
-                                    class="sound-wave wave-3"
-                                    d="M22.07 1.93a14 14 0 0 1 0 20.14"
-                                  ></path>
-                                </svg>
-                              {/if}
-                            </span>
-                            <span>
-                              {isSpeakingId === item.id
-                                ? t(appLanguage, "stop")
-                                : t(appLanguage, "speak")}
-                            </span>
-                          </button>
-                        </div>
-                      {/if}
+                            <button
+                              class="action-menu-item copy-item"
+                              class:animating={copyAnimating[item.id]}
+                              class:copied={copiedId === item.id}
+                              onclick={() => handleCopy(item.id, item.text)}
+                              onmouseenter={() => triggerCopyAnim(item.id)}
+                            >
+                              <span class="action-menu-icon">
+                                {#if copiedId === item.id}
+                                  <svg
+                                    class="check-icon"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.5"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                  >
+                                    <polyline points="20 6 9 17 4 12"
+                                    ></polyline>
+                                  </svg>
+                                {:else}
+                                  <svg
+                                    class="copy-icon"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                  >
+                                    <rect
+                                      x="9"
+                                      y="9"
+                                      width="13"
+                                      height="13"
+                                      rx="2"
+                                      ry="2"
+                                    ></rect>
+                                    <path
+                                      d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                                    ></path>
+                                  </svg>
+                                {/if}
+                              </span>
+                              <span>{t(appLanguage, "copy")}</span>
+                            </button>
+                            <button
+                              class="action-menu-item speak-item"
+                              class:active={isSpeakingId === item.id}
+                              class:animating={speakAnimating[item.id]}
+                              onclick={() =>
+                                handleSpeak(item.id, item.text, targetLang)}
+                              onmouseenter={() => triggerSpeakAnim(item.id)}
+                            >
+                              <span class="action-menu-icon">
+                                {#if isSpeakingId === item.id}
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="currentColor"
+                                    stroke="none"
+                                  >
+                                    <rect
+                                      x="6"
+                                      y="6"
+                                      width="12"
+                                      height="12"
+                                      rx="1"
+                                    />
+                                  </svg>
+                                {:else}
+                                  <svg
+                                    class="speak-icon"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    style="overflow: visible;"
+                                  >
+                                    <polygon
+                                      points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
+                                    ></polygon>
+                                    <path
+                                      class="sound-wave wave-1"
+                                      d="M15.54 8.46a5 5 0 0 1 0 7.07"
+                                    ></path>
+                                    <path
+                                      class="sound-wave wave-2"
+                                      d="M19.07 4.93a10 10 0 0 1 0 14.14"
+                                    ></path>
+                                    <path
+                                      class="sound-wave wave-3"
+                                      d="M22.07 1.93a14 14 0 0 1 0 20.14"
+                                    ></path>
+                                  </svg>
+                                {/if}
+                              </span>
+                              <span>
+                                {isSpeakingId === item.id
+                                  ? t(appLanguage, "stop")
+                                  : t(appLanguage, "speak")}
+                              </span>
+                            </button>
+                          </div>
+                        {/if}
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
-            </div>
+            {/if}
           {/each}
 
+          <!-- Stack Indicator -->
+          {#if isCompactMode && !isStackExpanded && (translations.filter((t) => t.text).length > 1 || (detailedExplanation && detailedExplanation.points && detailedExplanation.points.length > 0))}
+            <button
+              class="stack-indicator"
+              onclick={() => (isStackExpanded = true)}
+              title={t(appLanguage, "showMore") || "もっと見る"}
+            >
+              <div class="stack-layer layer-1"></div>
+              <div class="stack-layer layer-2"></div>
+              <span class="stack-text">
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  ><polyline points="6 9 12 15 18 9"></polyline></svg
+                >
+                {translations.filter((t) => t.text).length -
+                  1 +
+                  (detailedExplanation &&
+                  detailedExplanation.points &&
+                  detailedExplanation.points.length > 0
+                    ? 1
+                    : 0)}
+                {t(appLanguage, "moreItems") || "件"}
+              </span>
+            </button>
+          {/if}
+
           <!-- Explanation -->
-          {#if detailedExplanation && detailedExplanation.points && detailedExplanation.points.length > 0}
+          {#if (!isCompactMode || isStackExpanded) && detailedExplanation && detailedExplanation.points && detailedExplanation.points.length > 0}
             <div class="explanation-card" transition:fade={{ duration: 200 }}>
               <h3>
                 <svg
@@ -3115,7 +3247,8 @@
 {:else}
   <main class="container" class:visible={isWindowVisible}>
     <!-- App Header -->
-    <header class="app-header">
+    <!-- App Header -->
+    <header class="app-header" data-tauri-drag-region>
       <div class="header-left">
         <img
           src={theme === "light" ? "/icon-light.svg" : "/icon-dark.svg"}
@@ -3124,6 +3257,79 @@
         />
         <h1 class="app-title">Howlingual</h1>
       </div>
+
+      {#if isWindows}
+        <div class="header-right" onpointerdown={(e) => e.stopPropagation()}>
+          <div class="window-controls">
+            <button
+              class="win-btn minimize"
+              onclick={() => getCurrentWindow().minimize()}
+              title="Minimize"
+            >
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="opacity: 0; transition: opacity 0.2s; color: rgba(0,0,0,0.5);"
+                ><line x1="5" y1="12" x2="19" y2="12"></line></svg
+              >
+            </button>
+            <button
+              class="win-btn maximize"
+              onclick={() => getCurrentWindow().toggleMaximize()}
+              title="Maximize"
+            >
+              <svg
+                width="8"
+                height="8"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="opacity: 0; transition: opacity 0.2s; color: rgba(0,0,0,0.5);"
+                ><polyline points="15 3 21 3 21 9"></polyline><polyline
+                  points="9 21 3 21 3 15"
+                ></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line
+                  x1="3"
+                  y1="21"
+                  x2="10"
+                  y2="14"
+                ></line></svg
+              >
+            </button>
+            <button
+              class="win-btn close"
+              onclick={() => hideWindow()}
+              title="Close"
+            >
+              <svg
+                width="8"
+                height="8"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="opacity: 0; transition: opacity 0.2s; color: rgba(0,0,0,0.5);"
+                ><line x1="18" y1="6" x2="6" y2="18"></line><line
+                  x1="6"
+                  y1="6"
+                  x2="18"
+                  y2="18"
+                ></line></svg
+              >
+            </button>
+          </div>
+        </div>
+      {/if}
     </header>
 
     <!-- Language Selector Row -->
@@ -7245,11 +7451,20 @@
     0% {
       transform: scale(1);
     }
-    40% {
+    15% {
+      transform: scale(0.6) rotate(-10deg);
+    }
+    45% {
       transform: scale(1.6) rotate(15deg);
     }
+    65% {
+      transform: scale(1.2) rotate(-8deg);
+    }
+    85% {
+      transform: scale(1.1) rotate(4deg);
+    }
     100% {
-      transform: scale(1);
+      transform: scale(1) rotate(0);
     }
   }
 
@@ -7285,7 +7500,13 @@
   }
 
   .save-favorite-btn.animating .save-star-icon {
-    animation: starPop 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    animation: starPop 0.75s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    filter: drop-shadow(0 0 6px rgba(253, 216, 53, 0.6));
+  }
+  .save-favorite-btn.animating {
+    background: rgba(255, 235, 59, 0.15);
+    border-color: rgba(255, 235, 59, 0.4);
+    box-shadow: 0 0 15px rgba(255, 235, 59, 0.2);
   }
 
   .save-label {
@@ -8243,14 +8464,152 @@
   }
   /* Compact Mode Styles */
   .compact-header .compact-icon {
-    width: 20px;
-    height: 20px;
-    border-radius: 5px;
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    transform: translateY(0);
   }
 
   .compact-header .compact-name {
-    font-size: 13px;
-    font-weight: 600;
-    margin-left: 2px;
+    font-size: 11px;
+    font-weight: 500;
+    margin-left: 6px;
+    opacity: 0.8;
+  }
+  /* Custom Window Controls */
+  .app-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    padding-right: 16px;
+    height: 100%;
+  }
+
+  .window-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .win-btn {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.1s;
+    overflow: hidden;
+  }
+
+  .win-btn:hover svg {
+    opacity: 1 !important;
+  }
+
+  .win-btn.close {
+    background: #ff5f56;
+    border: 1px solid #e0443e;
+  }
+  .win-btn.minimize {
+    background: #ffbd2e;
+    border: 1px solid #dea123;
+  }
+  .win-btn.maximize {
+    background: #27c93f;
+    border: 1px solid #1aab29;
+  }
+
+  .win-btn:active {
+    filter: brightness(0.9);
+  }
+
+  /* Card Stack UI */
+  .stack-indicator {
+    width: 100%;
+    margin-top: -8px; /* Slight overlap */
+    padding: 12px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 5;
+  }
+
+  .stack-layer {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    height: 10px;
+    border-radius: 0 0 8px 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-top: none;
+    transition: all 0.2s ease;
+  }
+
+  .stack-layer.layer-1 {
+    width: 96%;
+    bottom: 6px;
+    z-index: 2;
+  }
+
+  .stack-layer.layer-2 {
+    width: 92%;
+    bottom: 0px;
+    z-index: 1;
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .stack-indicator:hover .stack-layer.layer-1 {
+    bottom: 4px;
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .stack-indicator:hover .stack-layer.layer-2 {
+    bottom: -2px;
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .stack-text {
+    position: relative;
+    z-index: 3;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: rgba(30, 30, 40, 0.8);
+    padding: 2px 8px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    backdrop-filter: blur(4px);
+  }
+
+  .collapse-btn {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 4px 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    transition: all 0.2s;
+  }
+  .collapse-btn:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-main);
   }
 </style>

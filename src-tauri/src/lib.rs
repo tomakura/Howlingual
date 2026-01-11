@@ -253,7 +253,7 @@ fn send_copy_shortcut() {
     ];
     unsafe { SendInput(&release_inputs, std::mem::size_of::<INPUT>() as i32) };
     // Increased sleep to ensure modifiers are cleared
-    std::thread::sleep(Duration::from_millis(100));
+    std::thread::sleep(Duration::from_millis(50));
 
     let copy_inputs = [
         INPUT {
@@ -309,7 +309,7 @@ fn send_copy_shortcut() {
     println!("[copy] SendInput result: {}", result);
 
     // Wait a bit for the copy to complete
-    std::thread::sleep(Duration::from_millis(150));
+    std::thread::sleep(Duration::from_millis(50));
 }
 
 // Windows: Use SendInput API for keyboard simulation (Paste)
@@ -437,8 +437,8 @@ fn capture_selected_text() -> Option<String> {
 
     // Poll for text - use shorter timeout for responsiveness, but more retries
     let mut result = None;
-    let max_retries = 20; // 20 * 30ms = 600ms timeout
-    let sleep_ms = 30;
+    let max_retries = 10; // 10 * 20ms = 200ms timeout
+    let sleep_ms = 20;
 
     for i in 0..max_retries {
         std::thread::sleep(Duration::from_millis(sleep_ms));
@@ -630,15 +630,42 @@ fn show_main_window(app: &AppHandle, cursor_pos: Option<(i32, i32)>) -> tauri::R
     let window = if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         window
     } else {
-        tauri::WebviewWindowBuilder::new(
+        let mut builder = tauri::WebviewWindowBuilder::new(
             app,
             MAIN_WINDOW_LABEL,
             tauri::WebviewUrl::App("/?view=main".into()),
-        )
-        .title("Howlingual")
-        .inner_size(800.0, 600.0)
-        .min_inner_size(600.0, 400.0)
-        .build()?
+        );
+
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder
+                .title("Howlingual")
+                .inner_size(800.0, 600.0)
+                .min_inner_size(600.0, 400.0)
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .transparent(true);
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            builder = builder
+                .title("Howlingual")
+                .inner_size(800.0, 600.0)
+                .min_inner_size(600.0, 400.0)
+                .decorations(false)
+                .transparent(true)
+                .shadow(true);
+        }
+
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        {
+            builder = builder
+                .title("Howlingual")
+                .inner_size(800.0, 600.0)
+                .min_inner_size(600.0, 400.0);
+        }
+
+        builder.build()?
     };
 
     // Position window near cursor if available
@@ -1036,7 +1063,7 @@ async fn ocr_windows(image: image::RgbaImage) -> Result<String, String> {
         dynamic = dynamic.resize(width * scale, height * scale, image::imageops::Lanczos3);
     }
 
-    dynamic = dynamic.grayscale().adjust_contrast(12.0).unsharpen(1.0, 1);
+    dynamic = dynamic.grayscale().adjust_contrast(1.2);
 
     let processed = dynamic.to_rgba8();
     let width = processed.width() as i32;

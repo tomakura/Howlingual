@@ -103,6 +103,9 @@ interface Translations {
 	pasteFromClipboard: string;
 	stopTranslation: string;
 	translationCountDesc: string;
+	showMore: string;
+	moreItems: string;
+	showLess: string;
 }
 
 const translations: Record<AppLanguage, Translations> = {
@@ -195,6 +198,9 @@ const translations: Record<AppLanguage, Translations> = {
 		pasteFromClipboard: "クリップボードから貼り付け",
 		stopTranslation: "翻訳を停止",
 		translationCountDesc: "一度に生成する翻訳案の数です",
+		showMore: "もっと見る",
+		moreItems: "件",
+		showLess: "折りたたむ",
 	},
 	en: {
 		settings: "Settings",
@@ -285,6 +291,9 @@ const translations: Record<AppLanguage, Translations> = {
 		pasteFromClipboard: "Paste from clipboard",
 		stopTranslation: "Stop translation",
 		translationCountDesc: "Number of translation candidates to generate at once",
+		showMore: "Show more",
+		moreItems: "items",
+		showLess: "Show less",
 	},
 	zh: {
 		settings: "设置",
@@ -375,6 +384,9 @@ const translations: Record<AppLanguage, Translations> = {
 		pasteFromClipboard: "从剪贴板粘贴",
 		stopTranslation: "停止翻译",
 		translationCountDesc: "一次生成的翻译候选数量",
+		showMore: "更多",
+		moreItems: "项",
+		showLess: "收起",
 	},
 	ko: {
 		settings: "설정",
@@ -465,6 +477,9 @@ const translations: Record<AppLanguage, Translations> = {
 		pasteFromClipboard: "클립보드에서 붙여넣기",
 		stopTranslation: "번역 중지",
 		translationCountDesc: "한 번에 생성할 번역 제안 수입니다",
+		showMore: "더 보기",
+		moreItems: "개",
+		showLess: "접기",
 	},
 };
 
