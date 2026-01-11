@@ -3418,7 +3418,53 @@
 
         <!-- Translation Results -->
         <div class="output-area">
-          {#each translations as item (item.id)}
+          {#if !isTranslating && !inputQuery.trim() && translations.every(t => !t.text)}
+            <!-- Empty State - No Input -->
+            <div class="empty-state-container" in:fade={{ duration: 300 }}>
+              <div class="empty-state-visual">
+                <div class="empty-icon-wrapper">
+                  <svg class="empty-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m5 8 6 6" />
+                    <path d="m4 14 6-6 2-3" />
+                    <path d="M2 5h12" />
+                    <path d="M7 2h1" />
+                    <path d="m22 22-5-10-5 10" />
+                    <path d="M14 18h6" />
+                  </svg>
+                  <div class="empty-icon-glow"></div>
+                </div>
+              </div>
+              <div class="empty-state-content">
+                <h3 class="empty-title">{appLanguage === 'ja' ? 'テキストを入力してください' : appLanguage === 'en' ? 'Enter text to translate' : appLanguage === 'zh' ? '请输入要翻译的文本' : '번역할 텍스트를 입력하세요'}</h3>
+                <p class="empty-description">{appLanguage === 'ja' ? 'AIが複数の翻訳候補と詳しい解説を提供します' : appLanguage === 'en' ? 'AI will provide multiple translation options with detailed explanations' : appLanguage === 'zh' ? 'AI将提供多种翻译选项并附详细说明' : 'AI가 여러 번역 옵션과 자세한 설명을 제공합니다'}</p>
+              </div>
+              <div class="empty-hints">
+                <div class="empty-hint">
+                  <span class="hint-icon">⌨️</span>
+                  <span>{appLanguage === 'ja' ? 'テキストを直接入力' : appLanguage === 'en' ? 'Type text directly' : appLanguage === 'zh' ? '直接输入文本' : '텍스트 직접 입력'}</span>
+                </div>
+                <div class="empty-hint">
+                  <span class="hint-icon">📋</span>
+                  <span>{appLanguage === 'ja' ? 'クリップボードから貼り付け' : appLanguage === 'en' ? 'Paste from clipboard' : appLanguage === 'zh' ? '从剪贴板粘贴' : '클립보드에서 붙여넣기'}</span>
+                </div>
+                <div class="empty-hint">
+                  <span class="hint-icon">📷</span>
+                  <span>{appLanguage === 'ja' ? 'OCRで画面から読み取り' : appLanguage === 'en' ? 'OCR from screen' : appLanguage === 'zh' ? '通过OCR从屏幕读取' : 'OCR로 화면에서 읽기'}</span>
+                </div>
+              </div>
+            </div>
+          {:else if isTranslating && translations.every(t => !t.text)}
+            <!-- Loading State -->
+            <div class="loading-state-container" in:fade={{ duration: 200 }}>
+              {#each [1, 2, 3] as idx}
+                <div class="skeleton-card" style="animation-delay: {idx * 0.1}s">
+                  <div class="skeleton-line primary"></div>
+                  <div class="skeleton-line secondary"></div>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            {#each translations as item (item.id)}
             <div class="candidate-card" out:fade={{ duration: 200 }}>
               <div
                 class="card-inner-content"
@@ -3548,6 +3594,7 @@
               </div>
             </div>
           {/each}
+          {/if}
 
           <!-- Explanation -->
           {#if detailedExplanation && detailedExplanation.points && detailedExplanation.points.length > 0}
@@ -5141,11 +5188,15 @@
   }
 
   .app-title {
-    font-family: "Jost", sans-serif;
-    font-weight: 700;
-    font-size: 28px;
+    font-family: "Jost", var(--font-display), sans-serif;
+    font-weight: 600;
+    font-size: 26px;
     color: var(--text-main);
-    letter-spacing: 0.5px;
+    letter-spacing: -0.02em;
+    background: linear-gradient(135deg, var(--text-main) 0%, var(--text-secondary) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
   }
 
   .header-right {
@@ -5550,36 +5601,46 @@
 
   /* Action Button (base) */
   .action-btn {
-    width: 44px;
-    height: 44px;
+    width: 46px;
+    height: 46px;
     border: none;
-    border-radius: 12px;
+    border-radius: 14px;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     flex-shrink: 0;
     transition:
-      transform 0.2s var(--easing),
-      background 0.3s var(--easing);
+      transform 0.25s var(--easing-bounce),
+      background 0.3s var(--easing),
+      box-shadow 0.3s var(--easing);
   }
 
   .action-btn:hover {
-    transform: scale(1.05);
+    transform: scale(1.06);
   }
 
   .action-btn:active {
-    transform: scale(0.94);
+    transform: scale(0.95);
   }
 
   /* Translate mode (accent color) */
   .action-btn.translate-mode {
     background: var(--primary-color);
     color: #fff;
+    box-shadow: 0 4px 16px rgba(99, 102, 241, 0.25);
   }
 
   .action-btn.translate-mode:hover {
     background: var(--primary-hover);
+    box-shadow: 0 6px 24px rgba(99, 102, 241, 0.35);
+  }
+
+  .action-btn.translate-mode:disabled {
+    background: rgba(99, 102, 241, 0.3);
+    box-shadow: none;
+    cursor: not-allowed;
+    transform: none;
   }
 
   /* Scroll-to-top mode (white) */
@@ -5702,34 +5763,41 @@
     position: relative;
     display: flex;
     align-items: center;
-    padding: 5px 12px;
-    border-radius: 8px;
-    font-size: 11px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    background: rgba(255, 255, 255, 0.04);
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.03);
     cursor: pointer;
     overflow: hidden;
-    transition: border-color 0.2s;
+    transition: all 0.25s var(--easing);
     user-select: none;
     touch-action: none;
     white-space: nowrap;
   }
 
-  /* Staggered animation handled via inline styles in loop */
-
-  @keyframes chipPop {
-    0% {
-      transform: scale(0.8);
-      opacity: 0;
-    }
-    100% {
-      transform: scale(1);
-      opacity: 1;
-    }
+  .style-chip:hover {
+    border-color: var(--border-color-strong);
+    background: rgba(255, 255, 255, 0.06);
+    transform: translateY(-1px);
   }
 
-  .style-chip:hover {
-    border-color: rgba(255, 255, 255, 0.2);
+  .style-chip:active {
+    transform: translateY(0) scale(0.98);
+  }
+
+  .style-chip[data-level="1"],
+  .style-chip[data-level="2"] {
+    border-color: rgba(99, 102, 241, 0.3);
+    background: rgba(99, 102, 241, 0.08);
+    box-shadow: 0 0 12px rgba(99, 102, 241, 0.1);
+  }
+
+  .style-chip[data-level="2"] {
+    border-color: rgba(99, 102, 241, 0.5);
+    background: rgba(99, 102, 241, 0.15);
+    box-shadow: 0 0 16px rgba(99, 102, 241, 0.15);
   }
 
   .chip-fill {
@@ -5738,21 +5806,19 @@
     top: 0;
     height: 100%;
     background: var(--primary-color);
-    opacity: 0.15;
+    opacity: 0;
     transition:
-      width 0.2s cubic-bezier(0.2, 0, 0.2, 1),
-      background-color 0.2s;
-    border-radius: 8px 0 0 8px;
+      width 0.25s var(--easing),
+      opacity 0.25s var(--easing);
+    border-radius: 20px 0 0 20px;
   }
 
   .style-chip[data-level="1"] .chip-fill {
-    background: var(--primary-color);
-    opacity: 0.2;
+    opacity: 0.15;
   }
 
   .style-chip[data-level="2"] .chip-fill {
-    background: var(--primary-color);
-    opacity: 0.4;
+    opacity: 0.25;
   }
 
   .add-chip.has-active {
@@ -5787,25 +5853,47 @@
 
   /* Translation Cards */
   .candidate-card {
-    padding: 12px 12px;
-    border-radius: var(--radius-sm);
-    /* Base background */
+    padding: 16px 18px;
+    border-radius: var(--radius-md);
     background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    transition:
-      background 0.2s,
-      border-color 0.2s;
+    border: 1px solid var(--border-color);
+    transition: all 0.3s var(--easing);
     flex-shrink: 0;
     min-height: 80px;
     display: flex;
     flex-direction: column;
     justify-content: center;
-    animation: popIn 0.5s var(--easing) backwards;
+    animation: slideInUp 0.4s var(--easing-smooth) backwards;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .candidate-card::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--primary-color);
+    opacity: 0;
+    transition: opacity 0.3s var(--easing);
+  }
+
+  .candidate-card:hover::before {
+    opacity: 1;
+  }
+
+  .candidate-card:hover {
+    border-color: var(--border-color-strong);
+    background: rgba(255, 255, 255, 0.06);
+    transform: translateX(2px);
+    box-shadow: var(--shadow-md);
   }
 
   .card-inner-content {
     width: 100%;
-    transition: opacity 0.5s ease;
+    transition: opacity 0.4s var(--easing);
   }
 
   .card-inner-content.content-fade {
@@ -5816,43 +5904,214 @@
     display: none;
   }
 
-  /* Staggered backgrounds: Darken sequentially (More visible difference) */
+  /* Staggered backgrounds and animation delays */
   .candidate-card:nth-child(1) {
-    background: rgba(255, 255, 255, 0.12); /* Lightest (top) */
+    background: rgba(255, 255, 255, 0.08);
+    animation-delay: 0s;
   }
   .candidate-card:nth-child(2) {
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.05);
+    animation-delay: 0.08s;
   }
   .candidate-card:nth-child(3) {
-    background: rgba(255, 255, 255, 0.04);
+    background: rgba(255, 255, 255, 0.03);
+    animation-delay: 0.16s;
   }
   .candidate-card:nth-child(n + 4) {
-    background: rgba(255, 255, 255, 0.02); /* Darkest */
+    background: rgba(255, 255, 255, 0.02);
+    animation-delay: 0.24s;
   }
 
   /* Light mode - use darker backgrounds */
   :global([data-theme="light"]) .candidate-card:nth-child(1) {
-    background: rgba(0, 0, 0, 0.03);
+    background: rgba(0, 0, 0, 0.02);
   }
   :global([data-theme="light"]) .candidate-card:nth-child(2) {
-    background: rgba(0, 0, 0, 0.05);
+    background: rgba(0, 0, 0, 0.04);
   }
   :global([data-theme="light"]) .candidate-card:nth-child(3) {
-    background: rgba(0, 0, 0, 0.07);
+    background: rgba(0, 0, 0, 0.05);
   }
   :global([data-theme="light"]) .candidate-card:nth-child(n + 4) {
-    background: rgba(0, 0, 0, 0.09);
+    background: rgba(0, 0, 0, 0.06);
   }
   :global([data-theme="light"]) .candidate-card {
-    border-color: rgba(0, 0, 0, 0.08);
+    border-color: rgba(0, 0, 0, 0.06);
   }
   :global([data-theme="light"]) .candidate-card:hover {
-    border-color: rgba(0, 0, 0, 0.15);
+    border-color: rgba(0, 0, 0, 0.12);
+    background: rgba(0, 0, 0, 0.04);
   }
 
   .candidate-card:hover {
-    /* No background change on hover as requested */
-    border-color: rgba(255, 255, 255, 0.12);
+    border-color: var(--border-color-strong);
+  }
+
+  /* Empty State Styles */
+  .empty-state-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 24px;
+    text-align: center;
+    gap: 24px;
+    animation: fadeInScale 0.4s var(--easing-smooth);
+  }
+
+  .empty-state-visual {
+    position: relative;
+  }
+
+  .empty-icon-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 96px;
+    height: 96px;
+    border-radius: 24px;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(34, 211, 238, 0.1));
+    border: 1px solid var(--border-color);
+  }
+
+  .empty-icon {
+    color: var(--primary-color);
+    opacity: 0.8;
+    animation: floatSoft 4s ease-in-out infinite;
+  }
+
+  .empty-icon-glow {
+    position: absolute;
+    inset: -20px;
+    background: radial-gradient(circle, var(--primary-glow) 0%, transparent 70%);
+    opacity: 0.5;
+    animation: pulse 3s ease-in-out infinite;
+  }
+
+  @keyframes floatSoft {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+  }
+
+  .empty-state-content {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .empty-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-main);
+    margin: 0;
+    letter-spacing: -0.02em;
+  }
+
+  .empty-description {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin: 0;
+    max-width: 320px;
+    line-height: 1.5;
+  }
+
+  .empty-hints {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .empty-hint {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 8px 16px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color);
+    transition: all 0.2s var(--easing);
+  }
+
+  .empty-hint:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--border-color-strong);
+  }
+
+  .hint-icon {
+    font-size: 16px;
+  }
+
+  :global([data-theme="light"]) .empty-icon-wrapper {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(8, 145, 178, 0.08));
+  }
+
+  :global([data-theme="light"]) .empty-hint {
+    background: rgba(0, 0, 0, 0.02);
+  }
+
+  :global([data-theme="light"]) .empty-hint:hover {
+    background: rgba(0, 0, 0, 0.04);
+  }
+
+  /* Loading Skeleton State */
+  .loading-state-container {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .skeleton-card {
+    padding: 16px;
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-color);
+    animation: skeletonPulse 1.5s ease-in-out infinite;
+  }
+
+  .skeleton-line {
+    height: 14px;
+    border-radius: 4px;
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.04) 25%,
+      rgba(255, 255, 255, 0.08) 50%,
+      rgba(255, 255, 255, 0.04) 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s ease-in-out infinite;
+  }
+
+  .skeleton-line.primary {
+    width: 80%;
+    margin-bottom: 12px;
+  }
+
+  .skeleton-line.secondary {
+    width: 60%;
+    opacity: 0.6;
+  }
+
+  @keyframes skeletonPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+
+  :global([data-theme="light"]) .skeleton-card {
+    background: rgba(0, 0, 0, 0.03);
+  }
+
+  :global([data-theme="light"]) .skeleton-line {
+    background: linear-gradient(
+      90deg,
+      rgba(0, 0, 0, 0.04) 25%,
+      rgba(0, 0, 0, 0.08) 50%,
+      rgba(0, 0, 0, 0.04) 75%
+    );
+    background-size: 200% 100%;
   }
 
   .translated-text {
@@ -7086,15 +7345,25 @@
 
   /* Style chips */
   :global([data-theme="light"]) .style-chip {
-    border-color: rgba(0, 0, 0, 0.1);
-    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.08);
+    background: rgba(0, 0, 0, 0.02);
   }
   :global([data-theme="light"]) .style-chip:hover {
-    border-color: rgba(0, 0, 0, 0.2);
+    border-color: rgba(0, 0, 0, 0.15);
+    background: rgba(0, 0, 0, 0.04);
+  }
+  :global([data-theme="light"]) .style-chip[data-level="1"],
+  :global([data-theme="light"]) .style-chip[data-level="2"] {
+    border-color: rgba(99, 102, 241, 0.25);
+    background: rgba(99, 102, 241, 0.06);
+  }
+  :global([data-theme="light"]) .style-chip[data-level="2"] {
+    border-color: rgba(99, 102, 241, 0.4);
+    background: rgba(99, 102, 241, 0.12);
   }
   :global([data-theme="light"]) .style-chip.add-chip.active {
-    background: rgba(0, 0, 0, 0.08);
-    border-color: rgba(0, 0, 0, 0.15);
+    background: rgba(0, 0, 0, 0.06);
+    border-color: rgba(0, 0, 0, 0.12);
   }
 
   /* Language menu */
