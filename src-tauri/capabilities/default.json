@@ -6,7 +6,8 @@
     "main",
     "compact",
     "service",
-    "capture"
+    "capture",
+    "capture-*"
   ],
   "permissions": [
     "core:default",

@@ -48,6 +48,8 @@ windows = { version = "0.58.0", features = [
     "Graphics_Imaging",
     "Storage_Streams",
     "Win32_System_WinRT",
+    "Foundation",
+    "Foundation_Collections",
 ] }
 
 
