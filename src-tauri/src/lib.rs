@@ -889,8 +889,30 @@ async fn finish_selection_ocr(
             .ok_or("No captured image found")?
     };
 
+    // Validate crop bounds before cropping to avoid panics in crop_imm.
+    let image_width = image.width();
+    let image_height = image.height();
+
+    if x < 0 || y < 0 {
+        return Err("Selection out of bounds (negative coordinates)".into());
+    }
+
+    let x_u32 = x as u32;
+    let y_u32 = y as u32;
+
+    if x_u32 >= image_width || y_u32 >= image_height {
+        return Err("Selection out of bounds (start point outside image)".into());
+    }
+
+    let max_width = image_width.saturating_sub(x_u32);
+    let max_height = image_height.saturating_sub(y_u32);
+
+    if width == 0 || height == 0 || width > max_width || height > max_height {
+        return Err("Selection out of bounds (invalid width/height)".into());
+    }
+
     // Crop image
-    let sub_image = image::imageops::crop_imm(&image, x as u32, y as u32, width, height).to_image();
+    let sub_image = image::imageops::crop_imm(&image, x_u32, y_u32, width, height).to_image();
 
     // Close capture window
     close_capture_windows(&app);
