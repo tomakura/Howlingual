@@ -1,0 +1,39 @@
+    Checking tauri-apphowlingual v0.1.0 (C:\Users\Flow\Antigravity\Howlingual\src-tauri)
+error[E0599]: no method named `lines` found for struct `OcrResult` in the current scope
+    --> src\lib.rs:1043:24
+     |
+1043 |     let lines = result.lines().map_err(|e| e.to_string())?;
+     |                        ^^^^^
+     |
+help: there is a method `Lines` with a similar name
+     |
+1043 -     let lines = result.lines().map_err(|e| e.to_string())?;
+1043 +     let lines = result.Lines().map_err(|e| e.to_string())?;
+     |
+
+error[E0282]: type annotations needed
+    --> src\lib.rs:1043:41
+     |
+1043 |     let lines = result.lines().map_err(|e| e.to_string())?;
+     |                                         ^  - type must be known at this point
+     |
+help: consider giving this closure parameter an explicit type
+     |
+1043 |     let lines = result.lines().map_err(|e: /* Type */| e.to_string())?;
+     |                                          ++++++++++++
+
+error[E0282]: type annotations needed
+    --> src\lib.rs:1046:32
+     |
+1046 |         if let Ok(line_text) = line.text() {
+     |                                ^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> src\lib.rs:1047:29
+     |
+1047 |             text_parts.push(line_text.to_string());
+     |                             ^^^^^^^^^ cannot infer type
+
+Some errors have detailed explanations: E0282, E0599.
+For more information about an error, try `rustc --explain E0282`.
+error: could not compile `tauri-apphowlingual` (lib) due to 4 previous errors

@@ -1,8 +1,12 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { invoke } from "@tauri-apps/api/core";
+	import { emit } from "@tauri-apps/api/event";
 	import { getCurrentWindow } from "@tauri-apps/api/window";
 	import { fade } from "svelte/transition";
+	import { t, type AppLanguage } from "$lib/i18n";
+
+	let { appLanguage = "ja" }: { appLanguage?: AppLanguage } = $props();
 
 	let isSelecting = $state(false);
 	let startX = $state(0);
@@ -46,6 +50,9 @@
 		if (!isSelecting) return;
 		currentX = e.clientX;
 		currentY = e.clientY;
+		console.log(
+			`[Capture] Moving: ${selection.w}x${selection.h} (Selecting: ${isSelecting})`,
+		);
 	}
 
 	let isProcessing = $state(false);
@@ -75,27 +82,47 @@
 			// - Webview reports: 1280x720px CSS (1920/1.5 x 1080/1.5)
 			// - Mouse at CSS (100, 100) → Physical (150, 150)
 			// - Screenshot is 1920x1080px, so we crop at physical (150, 150)
-			
+
 			const scale = getDevicePixelRatio();
 			console.log("[Capture] DPI scale:", scale);
-			console.log("[Capture] CSS coords:", selection.x, selection.y, selection.w, selection.h);
-			console.log("[Capture] Window size:", window.innerWidth, window.innerHeight);
-			console.log("[Capture] Physical coords:", Math.round(selection.x * scale), Math.round(selection.y * scale), Math.round(selection.w * scale), Math.round(selection.h * scale));
-			
+			console.log(
+				"[Capture] CSS coords:",
+				selection.x,
+				selection.y,
+				selection.w,
+				selection.h,
+			);
+			console.log(
+				"[Capture] Window size:",
+				window.innerWidth,
+				window.innerHeight,
+			);
+			console.log(
+				"[Capture] Physical coords:",
+				Math.round(selection.x * scale),
+				Math.round(selection.y * scale),
+				Math.round(selection.w * scale),
+				Math.round(selection.h * scale),
+			);
+
 			const result = await invoke<string>("finish_selection_ocr", {
-				monitor_id: monitorId,
+				monitorId: monitorId,
 				x: Math.round(selection.x * scale),
 				y: Math.round(selection.y * scale),
 				width: Math.round(selection.w * scale),
 				height: Math.round(selection.h * scale),
 			});
 
-			await invoke("handover_to_main", { text: result });
+			console.log("[Capture] OCR Result:", result?.length, "chars");
+			await emit("text_captured", result);
+
+			// Now close the windows and clean up
+			await invoke("cancel_selection_ocr");
 		} catch (e) {
 			console.error("[Capture] OCR Failed:", e);
 			await invoke("handover_to_main", { text: "Error: " + String(e) });
+			await invoke("cancel_selection_ocr");
 		} finally {
-			// Window will likely be closed by backend, but ensure state reset if not
 			isProcessing = false;
 		}
 	}
@@ -121,7 +148,8 @@
 		// Ensure transparent background for this window
 		const originalHtmlBg = document.documentElement.style.background;
 		const originalBodyBg = document.body.style.background;
-		const originalHtmlBackdrop = document.documentElement.style.backdropFilter;
+		const originalHtmlBackdrop =
+			document.documentElement.style.backdropFilter;
 		const originalBodyBackdrop = document.body.style.backdropFilter;
 
 		document.documentElement.style.setProperty(
@@ -140,10 +168,25 @@
 		// Log DPI/scaling information for debugging
 		console.log("[Capture] Monitor ID:", monitorId);
 		console.log("[Capture] devicePixelRatio:", window.devicePixelRatio);
-		console.log("[Capture] Window inner size:", window.innerWidth, "x", window.innerHeight);
-		console.log("[Capture] Window outer size:", window.outerWidth, "x", window.outerHeight);
-		console.log("[Capture] Screen size:", window.screen.width, "x", window.screen.height);
-		
+		console.log(
+			"[Capture] Window inner size:",
+			window.innerWidth,
+			"x",
+			window.innerHeight,
+		);
+		console.log(
+			"[Capture] Window outer size:",
+			window.outerWidth,
+			"x",
+			window.outerHeight,
+		);
+		console.log(
+			"[Capture] Screen size:",
+			window.screen.width,
+			"x",
+			window.screen.height,
+		);
+
 		// Verify DPI scaling is working as expected
 		// The window should be sized to physical pixels, and the webview should scale to CSS pixels
 		// Expected: innerWidth ≈ outerWidth / devicePixelRatio (allowing for small differences)
@@ -152,13 +195,16 @@
 		const expectedInnerHeight = Math.round(window.outerHeight / scale);
 		const widthDiff = Math.abs(window.innerWidth - expectedInnerWidth);
 		const heightDiff = Math.abs(window.innerHeight - expectedInnerHeight);
-		
-		if (widthDiff > SCALING_TOLERANCE_PX || heightDiff > SCALING_TOLERANCE_PX) {
+
+		if (
+			widthDiff > SCALING_TOLERANCE_PX ||
+			heightDiff > SCALING_TOLERANCE_PX
+		) {
 			console.warn(
 				`[Capture] Warning: Window scaling may not be working as expected! ` +
-				`Expected CSS size: ${expectedInnerWidth} x ${expectedInnerHeight}, ` +
-				`Actual CSS size: ${window.innerWidth} x ${window.innerHeight}, ` +
-				`Difference: ${widthDiff} x ${heightDiff}`
+					`Expected CSS size: ${expectedInnerWidth} x ${expectedInnerHeight}, ` +
+					`Actual CSS size: ${window.innerWidth} x ${window.innerHeight}, ` +
+					`Difference: ${widthDiff} x ${heightDiff}`,
 			);
 		}
 
@@ -173,7 +219,8 @@
 		return () => {
 			document.documentElement.style.background = originalHtmlBg;
 			document.body.style.background = originalBodyBg;
-			document.documentElement.style.backdropFilter = originalHtmlBackdrop;
+			document.documentElement.style.backdropFilter =
+				originalHtmlBackdrop;
 			document.body.style.backdropFilter = originalBodyBackdrop;
 			window.removeEventListener("keydown", handleKeyDown, true);
 		};
@@ -190,12 +237,15 @@
 	onmouseup={handleMouseUp}
 	transition:fade={{ duration: 150 }}
 >
-	<div class="dim-bg"></div>
+	{#if (!isSelecting || (selection.w < 2 && selection.h < 2)) && !isProcessing}
+		<div class="dim-bg" transition:fade={{ duration: 150 }}></div>
+	{/if}
 
-	{#if isSelecting || (selection.w > 0 && selection.h > 0)}
+	{#if (isSelecting || isProcessing) && (selection.w >= 2 || selection.h >= 2)}
 		<div
 			class="selection-box"
 			class:processing={isProcessing}
+			class:starting={selection.w < 2 || selection.h < 2}
 			style:left="{selection.x}px"
 			style:top="{selection.y}px"
 			style:width="{selection.w}px"
@@ -206,7 +256,7 @@
 					<div class="spinner"></div>
 					<span>Reading text...</span>
 				</div>
-			{:else}
+			{:else if selection.w > 20 && selection.h > 20}
 				<div class="size-label">
 					{Math.round(selection.w)} x {Math.round(selection.h)}
 				</div>
@@ -214,13 +264,13 @@
 		</div>
 	{/if}
 
-	{#if !isSelecting && selection.w === 0 && !isProcessing}
+	{#if !isSelecting && !isProcessing}
 		<div class="hint-container" transition:fade>
 			<div class="hint-box">
 				<div class="mouse-icon"></div>
-				<span>Select area to translate</span>
+				<span>{t(appLanguage, "ocrHint")}</span>
 			</div>
-			<div class="cancel-hint">Press <kbd>Esc</kbd> to cancel</div>
+			<div class="cancel-hint">{t(appLanguage, "ocrCancelHint")}</div>
 		</div>
 	{/if}
 </div>
@@ -253,9 +303,15 @@
 		align-items: center;
 	}
 
+	.selection-box.starting {
+		border: none;
+		background: transparent;
+	}
+
 	.selection-box.processing {
 		border-color: var(--primary-color, #4facfe);
 		background: rgba(0, 0, 0, 0.2);
+		box-shadow: none;
 	}
 
 	/* Fixed style block */
@@ -301,14 +357,6 @@
 	.cancel-hint {
 		color: rgba(255, 255, 255, 0.7);
 		font-size: 13px;
-	}
-
-	kbd {
-		background: rgba(255, 255, 255, 0.2);
-		padding: 2px 6px;
-		border-radius: 4px;
-		font-family: inherit;
-		color: white;
 	}
 
 	/* Loading */

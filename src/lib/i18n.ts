@@ -91,6 +91,8 @@ interface Translations {
 	saveToFavorites: string;
 	autoRunQuick: string;
 	autoRunQuickDesc: string;
+	ocrHint: string;
+	ocrCancelHint: string;
 }
 
 const translations: Record<AppLanguage, Translations> = {
@@ -172,6 +174,8 @@ const translations: Record<AppLanguage, Translations> = {
 		saveToFavorites: "保存",
 		autoRunQuick: "クイック翻訳の自動実行",
 		autoRunQuickDesc: "ショートカット呼出時に自動で翻訳を開始します",
+		ocrHint: "翻訳する範囲を選択してください",
+		ocrCancelHint: "Escキーでキャンセル",
 	},
 	en: {
 		settings: "Settings",
@@ -251,6 +255,8 @@ const translations: Record<AppLanguage, Translations> = {
 		saveToFavorites: "Save",
 		autoRunQuick: "Auto-run Quick Translate",
 		autoRunQuickDesc: "Automatically start translation when shortcut is pressed",
+		ocrHint: "Select area to translate",
+		ocrCancelHint: "Press Esc to cancel",
 	},
 	zh: {
 		settings: "设置",
@@ -330,6 +336,8 @@ const translations: Record<AppLanguage, Translations> = {
 		saveToFavorites: "保存",
 		autoRunQuick: "快速翻译自动执行",
 		autoRunQuickDesc: "按快捷键时自动开始翻译",
+		ocrHint: "请选择要翻译的区域",
+		ocrCancelHint: "按 Esc 取消",
 	},
 	ko: {
 		settings: "설정",
@@ -409,6 +417,8 @@ const translations: Record<AppLanguage, Translations> = {
 		saveToFavorites: "저장",
 		autoRunQuick: "빠른 번역 자동 실행",
 		autoRunQuickDesc: "단축키 호출 시 자동으로 번역을 시작합니다",
+		ocrHint: "번역할 영역을 선택하세요",
+		ocrCancelHint: "Esc를 눌러 취소",
 	},
 };
 

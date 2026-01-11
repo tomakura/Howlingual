@@ -65,8 +65,15 @@
   }
 
   function detectLanguageSimple(text: string) {
-    const hasJapanese = /[\u3040-\u30ff\u4e00-\u9faf]/.test(text);
-    return hasJapanese ? "日本語" : "英語";
+    // ひらがな・カタカナがあれば確実に日本語
+    const hasHiraganaKatakana = /[\u3040-\u30ff]/.test(text);
+    if (hasHiraganaKatakana) return "日本語";
+
+    // 漢字のみの場合は日本語として扱う（簡易判定）
+    const hasKanji = /[\u4e00-\u9faf]/.test(text);
+    if (hasKanji) return "日本語";
+
+    return "英語";
   }
 
   // Custom Styles
@@ -233,6 +240,7 @@
   }
 
   let isOpeningMain = $state(false);
+  let isWaitingForOCR = $state(false);
 
   // Load settings on mount
   onMount(() => {
@@ -308,7 +316,32 @@
         }
       })();
     }
+    // Quick Mode Reset on Focus
+    if (viewParam === "compact") {
+      import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+        const win = getCurrentWindow();
+        win.listen("tauri://focus", async () => {
+          // Only reset if we are NOT currently running OCR or translating
+          if (!isTranslating && !isWaitingForOCR && !isOpeningMain) {
+            console.log("[QuickMode] Focus detected, resetting state.");
+            inputQuery = "";
+            translations = translations.map((t) => ({
+              ...t,
+              text: "",
+              reason: "",
+            }));
+            await emit("sync_input_command", {
+              text: "",
+              resetTranslations: true,
+            });
+          }
+        });
+      });
+    }
   });
+
+  // Quick Mode Reset on Focus
+  // We need to run this logic once on mount, but check viewParam
 
   // Service Integration
   onMount(() => {
@@ -327,7 +360,10 @@
             inputQuery = text;
             await tick();
             await tick();
-            startTranslation();
+            // Only auto-translate if autoRunQuick is enabled
+            if (autoRunQuick) {
+              startTranslation();
+            }
           }
         },
       );
@@ -339,7 +375,10 @@
           inputQuery = pending;
           await tick();
           await tick();
-          startTranslation();
+          // Only auto-translate if autoRunQuick is enabled
+          if (autoRunQuick) {
+            startTranslation();
+          }
         }
       } catch (e) {
         console.warn("Failed to check handover text:", e);
@@ -420,13 +459,16 @@
         if (!isAutoDetect || inputQuery.trim().length >= 5) {
           if (p.sourceLang) {
             if (isAutoDetect && p.sourceLang !== AUTO_DETECT_LABEL) {
-              detectedLang = p.detectedLang || p.sourceLang;
+              const incoming = p.detectedLang || p.sourceLang;
+              const localDetect = detectLanguageSimple(inputQuery);
+              detectedLang = localDetect === "日本語" ? "日本語" : incoming;
               isDetecting = false;
             } else {
               applySourceLangFromSync(p.sourceLang, p.detectedLang);
             }
           } else if (p.detectedLang && isAutoDetect) {
-            detectedLang = p.detectedLang;
+            const localDetect = detectLanguageSimple(inputQuery);
+            detectedLang = localDetect === "日本語" ? "日本語" : p.detectedLang;
             isDetecting = false;
           }
         }
@@ -539,19 +581,9 @@
         event.payload.length,
       );
 
-      // Check if THIS window is the compact window (check at event time, not registration time)
-      let isThisCompactWindow = false;
-      try {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
-        const currentWindow = getCurrentWindow();
-        isThisCompactWindow = currentWindow.label === "compact";
-      } catch {
-        // Fallback to URL check
-        isThisCompactWindow = window.location.search.includes("view=compact");
-      }
-
-      if (!isThisCompactWindow) {
-        console.log("[event] Ignoring - not compact window");
+      // Only process if we initiated the OCR
+      if (!isWaitingForOCR) {
+        console.log("[event] Ignoring - not waiting for OCR");
         return;
       }
 
@@ -560,8 +592,20 @@
         event.payload.length,
         "chars",
       );
+
+      // Ensure window is visible and focused
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const currentWindow = getCurrentWindow();
+        await currentWindow.show();
+        await currentWindow.setFocus();
+      } catch (e) {
+        console.warn("Failed to show window", e);
+      }
+
       hasReceivedText = true;
       isOpeningMain = false; // Reset flag so we can capture again
+      isWaitingForOCR = false; // Reset waiting flag
 
       // Force UI update with new text
       syncShowTechInfoFromStorage();
@@ -967,6 +1011,7 @@
   async function startOCR() {
     try {
       console.log("[UI] Starting OCR selection...");
+      isWaitingForOCR = true;
       await invoke("start_selection_ocr");
     } catch (e) {
       console.error("[UI] OCR trigger failed:", e);
@@ -1586,11 +1631,22 @@
     isAtBottom = scrollHeight - scrollTop - clientHeight < 20;
   }
 
+  // Debounced auto-scroll to prevent erratic behavior
+  let autoScrollRafId: number | null = null;
   function autoScrollToBottom() {
     if (scrollContainerEl && autoScrollEnabled) {
-      scrollContainerEl.scrollTo({
-        top: scrollContainerEl.scrollHeight,
-        behavior: "smooth",
+      // Cancel any pending scroll to prevent stacking
+      if (autoScrollRafId) {
+        cancelAnimationFrame(autoScrollRafId);
+      }
+      autoScrollRafId = requestAnimationFrame(() => {
+        autoScrollRafId = null;
+        if (scrollContainerEl && autoScrollEnabled) {
+          scrollContainerEl.scrollTo({
+            top: scrollContainerEl.scrollHeight,
+            behavior: "smooth",
+          });
+        }
       });
     }
   }
@@ -2021,7 +2077,7 @@
 <svelte:window onkeydown={handleWindowKeydown} onresize={checkBottomPosition} />
 
 {#if isCaptureMode}
-  <CaptureOverlay />
+  <CaptureOverlay {appLanguage} />
 {:else if isCompactMode}
   <main class="compact-shell">
     <header class="compact-header">
@@ -2094,30 +2150,31 @@
     </header>
 
     <div class="compact-lang-row">
-      <div class="lang-selector-group compact-lang-group">
-        <button
-          class="icon-btn compact-ocr-btn"
-          onclick={startOCR}
-          title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
-          style="width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; margin-right: 8px; color: var(--text-color);"
+      <button
+        class="icon-btn compact-ocr-btn"
+        class:hidden={isScrolledDown}
+        onclick={startOCR}
+        title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
+        style="width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; position: absolute; left: 12px; color: var(--text-color);"
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
         >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M3 7V5a2 2 0 0 1 2-2h2" />
-            <path d="M17 3h2a2 2 0 0 1 2 2v2" />
-            <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
-            <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
-            <path d="M7 9h10v6H7z" />
-          </svg>
-        </button>
+          <path d="M3 7V5a2 2 0 0 1 2-2h2" />
+          <path d="M17 3h2a2 2 0 0 1 2 2v2" />
+          <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+          <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+          <path d="M7 9h10v6H7z" />
+        </svg>
+      </button>
+      <div class="lang-selector-group compact-lang-group">
         <div class="lang-selector">
           <button
             class="lang-btn"
@@ -2819,28 +2876,86 @@
           class="app-icon"
         />
         <h1 class="app-title">Howlingual</h1>
+      </div>
+    </header>
 
-        <!-- Language Direction Header -->
-        <div
-          class="lang-selector-group"
-          style="display: flex; align-items: center; gap: 8px; margin-left: 24px;"
-        >
-          <div class="lang-selector">
-            <button
-              class="lang-btn"
-              class:open={showSourceLangMenu}
-              disabled={isTranslating}
-              onclick={(e) => {
-                e.stopPropagation();
-                showSourceLangMenu = !showSourceLangMenu;
-                showTargetLangMenu = false;
-              }}
+    <!-- Language Selector Row -->
+    <div class="header-actions-row">
+      <div
+        class="lang-selector-group"
+        style="display: flex; align-items: center; gap: 8px;"
+      >
+        <div class="lang-selector">
+          <button
+            class="lang-btn"
+            class:open={showSourceLangMenu}
+            disabled={isTranslating}
+            onclick={(e) => {
+              e.stopPropagation();
+              showSourceLangMenu = !showSourceLangMenu;
+              showTargetLangMenu = false;
+            }}
+          >
+            {#if isAutoDetect}
+              <svg
+                class="sparkle-icon"
+                class:is-active={isSparkling}
+                class:is-detecting={isDetecting}
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <path
+                  class="star-1"
+                  d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
+                ></path>
+                <path
+                  class="star-2"
+                  d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
+                ></path>
+                <path
+                  class="star-3"
+                  d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
+                ></path>
+              </svg>
+            {/if}
+            {#if isAutoDetect && detectedLang}
+              {detectedLang} - {t(appLanguage, "detected")}
+            {:else if isAutoDetect && isDetecting}
+              <span class="detecting-label">
+                {t(appLanguage, "detecting")}
+              </span>
+            {:else if isAutoDetect}
+              {t(appLanguage, "autoDetect")}
+            {:else}
+              {sourceLang}
+            {/if}
+            <svg
+              class="chevron-icon"
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
             >
-              {#if isAutoDetect}
+              <path d="M6 9l6 6 6-6"></path>
+            </svg>
+          </button>
+          {#if showSourceLangMenu}
+            <div
+              class="lang-menu"
+              in:fly={{ y: -5, duration: 200 }}
+              out:fade={{ duration: 150 }}
+            >
+              <button
+                class="lang-option auto-detect {isAutoDetect ? 'active' : ''}"
+                onclick={() => selectSourceLang(null)}
+              >
                 <svg
                   class="sparkle-icon"
                   class:is-active={isSparkling}
-                  class:is-detecting={isDetecting}
                   width="16"
                   height="16"
                   viewBox="0 0 24 24"
@@ -2859,179 +2974,124 @@
                     d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
                   ></path>
                 </svg>
-              {/if}
-              {#if isAutoDetect && detectedLang}
-                {detectedLang} - {t(appLanguage, "detected")}
-              {:else if isAutoDetect && isDetecting}
-                <span class="detecting-label">
-                  {t(appLanguage, "detecting")}
-                </span>
-              {:else if isAutoDetect}
-                {t(appLanguage, "autoDetect")}
-              {:else}
-                {sourceLang}
-              {/if}
-              <svg
-                class="chevron-icon"
-                width="10"
-                height="10"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <path d="M6 9l6 6 6-6"></path>
-              </svg>
-            </button>
-            {#if showSourceLangMenu}
-              <div
-                class="lang-menu"
-                in:fly={{ y: -5, duration: 200 }}
-                out:fade={{ duration: 150 }}
-              >
+                自動検出
+              </button>
+              <div class="menu-divider"></div>
+              {#each languages as lang}
                 <button
-                  class="lang-option auto-detect {isAutoDetect ? 'active' : ''}"
-                  onclick={() => selectSourceLang(null)}
+                  class="lang-option {!isAutoDetect && lang === sourceLang
+                    ? 'active'
+                    : ''}"
+                  onclick={() => selectSourceLang(lang)}>{lang}</button
                 >
-                  <svg
-                    class="sparkle-icon"
-                    class:is-active={isSparkling}
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="currentColor"
-                  >
-                    <path
-                      class="star-1"
-                      d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
-                    ></path>
-                    <path
-                      class="star-2"
-                      d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
-                    ></path>
-                    <path
-                      class="star-3"
-                      d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
-                    ></path>
-                  </svg>
-                  自動検出
-                </button>
-                <div class="menu-divider"></div>
-                {#each languages as lang}
-                  <button
-                    class="lang-option {!isAutoDetect && lang === sourceLang
-                      ? 'active'
-                      : ''}"
-                    onclick={() => selectSourceLang(lang)}>{lang}</button
-                  >
-                {/each}
-              </div>
-            {/if}
-          </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
 
-          <svg
-            class="arrow-icon"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
+        <svg
+          class="arrow-icon"
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path d="M5 12h14M12 5l7 7-7 7"></path>
+        </svg>
+
+        <div class="lang-selector">
+          <button
+            class="lang-btn"
+            class:open={showTargetLangMenu}
+            disabled={isTranslating}
+            onclick={(e) => {
+              e.stopPropagation();
+              showTargetLangMenu = !showTargetLangMenu;
+              showSourceLangMenu = false;
+            }}
           >
-            <path d="M5 12h14M12 5l7 7-7 7"></path>
-          </svg>
-
-          <div class="lang-selector">
-            <button
-              class="lang-btn"
-              class:open={showTargetLangMenu}
-              disabled={isTranslating}
-              onclick={(e) => {
-                e.stopPropagation();
-                showTargetLangMenu = !showTargetLangMenu;
-                showSourceLangMenu = false;
-              }}
+            {targetLang}
+            <svg
+              class="chevron-icon"
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
             >
-              {targetLang}
-              <svg
-                class="chevron-icon"
-                width="10"
-                height="10"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <path d="M6 9l6 6 6-6"></path>
-              </svg>
-            </button>
-            {#if showTargetLangMenu}
-              <div
-                class="lang-menu"
-                in:fly={{ y: -5, duration: 200 }}
-                out:fade={{ duration: 150 }}
-              >
-                {#each languages as lang}
-                  <button
-                    class="lang-option {lang === targetLang ? 'active' : ''}"
-                    onclick={() => selectTargetLang(lang)}>{lang}</button
-                  >
-                {/each}
-              </div>
-            {/if}
-          </div>
+              <path d="M6 9l6 6 6-6"></path>
+            </svg>
+          </button>
+          {#if showTargetLangMenu}
+            <div
+              class="lang-menu"
+              in:fly={{ y: -5, duration: 200 }}
+              out:fade={{ duration: 150 }}
+            >
+              {#each languages as lang}
+                <button
+                  class="lang-option {lang === targetLang ? 'active' : ''}"
+                  onclick={() => selectTargetLang(lang)}>{lang}</button
+                >
+              {/each}
+            </div>
+          {/if}
         </div>
       </div>
+    </div>
 
-      <div class="header-right">
-        <button
-          class="icon-btn header-btn history-btn"
-          class:animating={historyAnimating}
-          title={t(appLanguage, "history")}
-          onclick={() => (showHistory = true)}
-          onmouseenter={triggerHistoryAnim}
+    <!-- Header Right Actions -->
+    <div class="header-right-standalone">
+      <button
+        class="icon-btn header-btn history-btn"
+        class:animating={historyAnimating}
+        title={t(appLanguage, "history")}
+        onclick={() => (showHistory = true)}
+        onmouseenter={triggerHistoryAnim}
+      >
+        <svg
+          class="history-icon"
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
         >
-          <svg
-            class="history-icon"
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <circle cx="12" cy="12" r="10"></circle>
-            <polyline class="clock-hands" points="12 6 12 12 16 14"></polyline>
-          </svg>
-        </button>
-        <button
-          class="icon-btn header-btn settings-btn"
-          class:animating={settingsAnimating}
-          title={t(appLanguage, "settings")}
-          onclick={openSettings}
-          onmouseenter={triggerSettingsAnim}
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline class="clock-hands" points="12 6 12 12 16 14"></polyline>
+        </svg>
+      </button>
+      <button
+        class="icon-btn header-btn settings-btn"
+        class:animating={settingsAnimating}
+        title={t(appLanguage, "settings")}
+        onclick={openSettings}
+        onmouseenter={triggerSettingsAnim}
+      >
+        <svg
+          class="settings-icon"
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
         >
-          <svg
-            class="settings-icon"
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <circle cx="12" cy="12" r="3"></circle>
-            <path
-              d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
-            ></path>
-          </svg>
-        </button>
-      </div>
-    </header>
+          <circle cx="12" cy="12" r="3"></circle>
+          <path
+            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
+          ></path>
+        </svg>
+      </button>
+    </div>
 
     <!-- Unified Scroll Container -->
     <div class="scroll-wrapper" class:at-bottom={isAtBottom}>
@@ -3161,10 +3221,11 @@
 
           <!-- OCR Button (Main) -->
           <button
-            class="action-btn ocr-main-btn"
+            class="action-btn ocr-main-btn ocr-btn-animated"
+            class:hidden={isScrolledDown}
             onclick={startOCR}
             title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
-            style="width: 50px; margin-right: 12px; background: var(--bg-card); color: var(--text-color); border: 1px solid var(--border-color);"
+            style="width: 50px; margin-right: -5px; background: var(--bg-card); color: var(--text-color); border: 1px solid var(--border-color); position: relative; overflow: hidden; padding-left: 2px;"
           >
             <svg
               width="24"
@@ -3186,7 +3247,7 @@
 
           <!-- Single action button that morphs -->
           <button
-            class="action-btn"
+            class="action-btn translate-btn-animated"
             class:translate-mode={!isScrolledDown}
             class:scroll-mode={isScrolledDown}
             class:loading={isTranslating}
@@ -4800,20 +4861,29 @@
   .compact-lang-row {
     display: flex;
     justify-content: center;
+    align-items: center;
     margin-bottom: 4px;
     position: relative;
     z-index: 2500;
+    padding: 0 12px;
+    width: 100%;
+    box-sizing: border-box;
+    height: 32px; /* Ensure height for absolute positioning context */
   }
 
   .compact-lang-group {
     display: flex;
     align-items: center;
     gap: 8px;
+    max-width: 100%;
+    flex-shrink: 1;
   }
 
   .compact-shell .lang-btn {
-    padding: 6px 10px;
-    font-size: 12px;
+    padding: 4px 6px;
+    font-size: 11px;
+    flex-shrink: 1;
+    min-width: 0;
   }
 
   .scroll-wrapper.compact-scroll-wrapper {
@@ -5011,11 +5081,11 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0 20px;
-    height: 56px;
+    padding: 0 10px;
+    height: 45px;
     flex-shrink: 0;
-    margin-top: 4px;
-    margin-bottom: 4px;
+    margin-top: 10px;
+    margin-bottom: 0px;
     position: relative;
     z-index: 200; /* Ensure dropdowns stay above main content */
   }
@@ -5024,7 +5094,9 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    width: fit-content;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
     transform: translateY(-2px); /* Shift up slightly */
   }
 
@@ -5042,6 +5114,28 @@
     gap: 4px;
     justify-content: flex-end;
     width: fit-content;
+  }
+
+  /* Language Selector Row - below header */
+  .header-actions-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    padding: 0px 20px 10px 20px;
+    position: relative;
+    z-index: 200;
+  }
+
+  /* Header Right Standalone - positioned to the right */
+  .header-right-standalone {
+    position: absolute;
+    top: 15px;
+    right: 10px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    z-index: 250;
   }
 
   .header-btn {
@@ -5109,6 +5203,8 @@
 
   .lang-selector {
     position: relative;
+    flex-shrink: 1;
+    min-width: 0;
   }
 
   .lang-btn {
@@ -5121,9 +5217,13 @@
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    padding: 4px 8px;
+    padding: 8px 8px;
     border-radius: 4px;
     transition: all 0.2s var(--easing);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
   }
   .lang-btn:hover {
     background: rgba(255, 255, 255, 0.1);
@@ -6408,6 +6508,7 @@
 
   .history-item-main {
     flex: 1;
+    min-width: 0;
     cursor: pointer;
     overflow: hidden;
     background: none;
@@ -7223,6 +7324,68 @@
     }
     to {
       transform: rotate(360deg);
+    }
+  }
+
+  /* OCR Button Animation */
+  .ocr-btn-animated {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .ocr-btn-animated:hover::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 2px;
+    height: 100%;
+    background: #22d3ee50;
+    box-shadow: 0 0 10px #22d3ee;
+    animation: ocrScan 0.5s ease-out forwards;
+  }
+
+  @keyframes ocrScan {
+    0% {
+      left: 0;
+      opacity: 1;
+    }
+    99% {
+      opacity: 1;
+    }
+    100% {
+      left: 120%;
+      opacity: 0;
+    }
+  }
+
+  /* Translate Button Animation */
+  .translate-btn-animated:hover:not(:disabled) {
+    animation: translatePulse 2s infinite;
+  }
+
+  .translate-btn-animated:hover:not(:disabled) svg {
+    animation: translateIconShake 0.5s ease-in-out infinite alternate;
+  }
+
+  @keyframes translateIconShake {
+    0% {
+      transform: scale(1);
+    }
+    100% {
+      transform: scale(1.15) rotate(5deg);
+    }
+  }
+
+  @keyframes translatePulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
+    }
+    70% {
+      box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
     }
   }
 </style>
