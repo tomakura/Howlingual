@@ -138,18 +138,18 @@
 		// Verify DPI scaling is working as expected
 		// The window should be sized to physical pixels, and the webview should scale to CSS pixels
 		// Expected: innerWidth ≈ outerWidth / devicePixelRatio (allowing for small differences)
-		const dpr = window.devicePixelRatio || 1;
-		const expectedInnerWidth = window.outerWidth / dpr;
-		const expectedInnerHeight = window.outerHeight / dpr;
+		const devicePixelRatio = window.devicePixelRatio || 1;
+		const expectedInnerWidth = window.outerWidth / devicePixelRatio;
+		const expectedInnerHeight = window.outerHeight / devicePixelRatio;
 		const widthDiff = Math.abs(window.innerWidth - expectedInnerWidth);
 		const heightDiff = Math.abs(window.innerHeight - expectedInnerHeight);
 		
 		if (widthDiff > SCALING_TOLERANCE_PX || heightDiff > SCALING_TOLERANCE_PX) {
 			console.warn(
-				"[Capture] Warning: Window scaling may not be working as expected!",
-				"Expected CSS size:", expectedInnerWidth, "x", expectedInnerHeight,
-				"Actual CSS size:", window.innerWidth, "x", window.innerHeight,
-				"Difference:", widthDiff, "x", heightDiff
+				`[Capture] Warning: Window scaling may not be working as expected! ` +
+				`Expected CSS size: ${expectedInnerWidth} x ${expectedInnerHeight}, ` +
+				`Actual CSS size: ${window.innerWidth} x ${window.innerHeight}, ` +
+				`Difference: ${widthDiff} x ${heightDiff}`
 			);
 		}
 
