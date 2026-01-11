@@ -15,6 +15,11 @@
 	// Constants for DPI scaling verification
 	const SCALING_TOLERANCE_PX = 10; // Allow 10px difference for window decorations/rounding
 
+	// Helper to get device pixel ratio with fallback
+	function getDevicePixelRatio(): number {
+		return window.devicePixelRatio || 1;
+	}
+
 	let selection = $derived.by(() => {
 		const x = Math.min(startX, currentX);
 		const y = Math.min(startY, currentY);
@@ -70,7 +75,7 @@
 			// - Mouse at CSS (100, 100) → Physical (150, 150)
 			// - Screenshot is 1920x1080px, so we crop at physical (150, 150)
 			
-			const scale = window.devicePixelRatio || 1;
+			const scale = getDevicePixelRatio();
 			console.log("[Capture] DPI scale:", scale);
 			console.log("[Capture] CSS coords:", selection.x, selection.y, selection.w, selection.h);
 			console.log("[Capture] Window size:", window.innerWidth, window.innerHeight);
@@ -138,9 +143,9 @@
 		// Verify DPI scaling is working as expected
 		// The window should be sized to physical pixels, and the webview should scale to CSS pixels
 		// Expected: innerWidth ≈ outerWidth / devicePixelRatio (allowing for small differences)
-		const scale = window.devicePixelRatio || 1;
-		const expectedInnerWidth = window.outerWidth / scale;
-		const expectedInnerHeight = window.outerHeight / scale;
+		const scale = getDevicePixelRatio();
+		const expectedInnerWidth = Math.round(window.outerWidth / scale);
+		const expectedInnerHeight = Math.round(window.outerHeight / scale);
 		const widthDiff = Math.abs(window.innerWidth - expectedInnerWidth);
 		const heightDiff = Math.abs(window.innerHeight - expectedInnerHeight);
 		
