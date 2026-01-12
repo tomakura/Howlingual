@@ -1,0 +1,64 @@
+    Checking tauri-apphowlingual v0.1.0 (C:\Users\Flow\Antigravity\Howlingual\src-tauri)
+warning: unused imports: `Graphics::Imaging::BitmapPixelFormat` and `Media::Ocr::OcrEngine`
+  --> src\lib.rs:22:15
+   |
+22 | use windows::{Graphics::Imaging::BitmapPixelFormat, Media::Ocr::OcrEngine};
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0277]: the trait bound `&ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>: OwnedTensorArrayData<_>` is not satisfied
+   --> src\ocr_engine.rs:151:58
+    |
+151 |         let input_value = ort::value::Tensor::from_array(&input_tensor)?;
+    |                           ------------------------------ ^^^^^^^^^^^^^ the trait `OwnedTensorArrayData<_>` is not implemented for `&ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>`
+    |                           |
+    |                           required by a bound introduced by this call
+    |
+    = help: the following other types implement trait `OwnedTensorArrayData<I>`:
+              (D, Box<[T]>)
+              (D, Vec<T>)
+              ndarray::ArrayBase<ndarray::data_repr::OwnedRepr<T>, D>
+note: required by a bound in `ort::value::impl_tensor::create::<impl ort::value::Value<TensorValueType<T>>>::from_array`
+   --> C:\Users\Flow\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ort-2.0.0-rc.11\src\value\impl_tensor\create.rs:140:32
+    |
+140 |     pub fn from_array(input: impl OwnedTensorArrayData<T>) -> Result<Tensor<T>> {
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `ort::value::impl_tensor::create::<impl Value<TensorValueType<T>>>::from_array`
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+   --> src\ocr_engine.rs:152:44
+    |
+152 |         let outputs = self.det_session.run(ort::inputs!["x" => input_value]?)?;
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` operator cannot be applied to type `Vec<(Cow<'_, str>, SessionInputValue<'_>)>`
+    |
+    = help: the trait `Try` is not implemented for `Vec<(Cow<'_, str>, SessionInputValue<'_>)>`
+
+error[E0277]: the trait bound `&ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>: OwnedTensorArrayData<_>` is not satisfied
+   --> src\ocr_engine.rs:244:58
+    |
+244 |         let input_value = ort::value::Tensor::from_array(&input_tensor)?;
+    |                           ------------------------------ ^^^^^^^^^^^^^ the trait `OwnedTensorArrayData<_>` is not implemented for `&ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>`
+    |                           |
+    |                           required by a bound introduced by this call
+    |
+    = help: the following other types implement trait `OwnedTensorArrayData<I>`:
+              (D, Box<[T]>)
+              (D, Vec<T>)
+              ndarray::ArrayBase<ndarray::data_repr::OwnedRepr<T>, D>
+note: required by a bound in `ort::value::impl_tensor::create::<impl ort::value::Value<TensorValueType<T>>>::from_array`
+   --> C:\Users\Flow\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ort-2.0.0-rc.11\src\value\impl_tensor\create.rs:140:32
+    |
+140 |     pub fn from_array(input: impl OwnedTensorArrayData<T>) -> Result<Tensor<T>> {
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `ort::value::impl_tensor::create::<impl Value<TensorValueType<T>>>::from_array`
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+   --> src\ocr_engine.rs:245:44
+    |
+245 |         let outputs = self.rec_session.run(ort::inputs!["x" => input_value]?)?;
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` operator cannot be applied to type `Vec<(Cow<'_, str>, SessionInputValue<'_>)>`
+    |
+    = help: the trait `Try` is not implemented for `Vec<(Cow<'_, str>, SessionInputValue<'_>)>`
+
+For more information about this error, try `rustc --explain E0277`.
+warning: `tauri-apphowlingual` (lib) generated 1 warning
+error: could not compile `tauri-apphowlingual` (lib) due to 4 previous errors; 1 warning emitted

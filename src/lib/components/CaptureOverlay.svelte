@@ -118,7 +118,7 @@
 
 			// Only send result if not cancelled by user
 			if (!isCancelled) {
-				await invoke("handover_to_main", { text: result });
+				await invoke("complete_ocr_flow", { text: result });
 			}
 		} catch (e) {
 			console.error("[Capture] OCR Failed:", e);

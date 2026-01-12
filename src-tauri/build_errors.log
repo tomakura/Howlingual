@@ -1,0 +1,98 @@
+    Checking tauri-apphowlingual v0.1.0 (C:\Users\Flow\Antigravity\Howlingual\src-tauri)
+warning: unused imports: `BitmapPixelFormat`, `Media::Ocr::OcrEngine`, and `SoftwareBitmap`
+  --> src\lib.rs:23:25
+   |
+23 |     Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap},
+   |                         ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+24 |     Media::Ocr::OcrEngine,
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0277]: the trait bound `SessionInputValue<'_>: From<ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>>` is not satisfied
+   --> src\ocr_engine.rs:175:44
+    |
+175 |         let outputs = self.det_session.run(ort::inputs!["x" => input_tensor]?)?;
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `From<ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>>` is not implemented for `SessionInputValue<'_>`
+    |
+    = help: the following other types implement trait `From<T>`:
+              `SessionInputValue<'_>` implements `From<&ort::value::Value<T>>`
+              `SessionInputValue<'_>` implements `From<ValueRef<'_, T>>`
+              `SessionInputValue<'_>` implements `From<ValueRefMut<'_, T>>`
+              `SessionInputValue<'_>` implements `From<ort::value::Value<T>>`
+    = note: this error originates in the macro `ort::inputs` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+   --> src\ocr_engine.rs:175:44
+    |
+175 |         let outputs = self.det_session.run(ort::inputs!["x" => input_tensor]?)?;
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` operator cannot be applied to type `Vec<(Cow<'_, str>, SessionInputValue<'_>)>`
+    |
+    = help: the trait `Try` is not implemented for `Vec<(Cow<'_, str>, SessionInputValue<'_>)>`
+
+error[E0599]: no method named `shape` found for tuple `(&ort::tensor::Shape, &[f32])` in the current scope
+   --> src\ocr_engine.rs:179:35
+    |
+179 |         let shape = output_tensor.shape();
+    |                                   ^^^^^ method not found in `(&ort::tensor::Shape, &[f32])`
+
+error[E0599]: no method named `as_slice` found for tuple `(&ort::tensor::Shape, &[f32])` in the current scope
+   --> src\ocr_engine.rs:185:34
+    |
+185 |         let data = output_tensor.as_slice().unwrap();
+    |                                  ^^^^^^^^ method not found in `(&ort::tensor::Shape, &[f32])`
+
+error[E0277]: the trait bound `SessionInputValue<'_>: From<ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>>` is not satisfied
+   --> src\ocr_engine.rs:281:44
+    |
+281 |         let outputs = self.rec_session.run(ort::inputs!["x" => input_tensor]?)?;
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `From<ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>>` is not implemented for `SessionInputValue<'_>`
+    |
+    = help: the following other types implement trait `From<T>`:
+              `SessionInputValue<'_>` implements `From<&ort::value::Value<T>>`
+              `SessionInputValue<'_>` implements `From<ValueRef<'_, T>>`
+              `SessionInputValue<'_>` implements `From<ValueRefMut<'_, T>>`
+              `SessionInputValue<'_>` implements `From<ort::value::Value<T>>`
+    = note: this error originates in the macro `ort::inputs` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+   --> src\ocr_engine.rs:281:44
+    |
+281 |         let outputs = self.rec_session.run(ort::inputs!["x" => input_tensor]?)?;
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` operator cannot be applied to type `Vec<(Cow<'_, str>, SessionInputValue<'_>)>`
+    |
+    = help: the trait `Try` is not implemented for `Vec<(Cow<'_, str>, SessionInputValue<'_>)>`
+
+error[E0599]: no method named `shape` found for tuple `(&ort::tensor::Shape, &[f32])` in the current scope
+   --> src\ocr_engine.rs:285:28
+    |
+285 |         let shape = output.shape(); // [1, Time, Class]
+    |                            ^^^^^ method not found in `(&ort::tensor::Shape, &[f32])`
+
+error[E0599]: no method named `as_slice` found for tuple `(&ort::tensor::Shape, &[f32])` in the current scope
+   --> src\ocr_engine.rs:289:27
+    |
+289 |         let data = output.as_slice().unwrap();
+    |                           ^^^^^^^^ method not found in `(&ort::tensor::Shape, &[f32])`
+
+error[E0282]: type annotations needed for `(_, _)`
+   --> src\ocr_engine.rs:303:26
+    |
+303 |                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+    |                          ^^^^^^          - type must be known at this point
+    |
+help: consider giving this closure parameter an explicit type, where the placeholders `_` are specified
+    |
+303 |                 .max_by(|(_, a): (_, _), (_, b)| a.partial_cmp(b).unwrap())
+    |                                ++++++++
+
+error[E0271]: type mismatch resolving `<Vec<String> as Index<usize>>::Output == str`
+   --> src\ocr_engine.rs:308:36
+    |
+308 |                     text.push_str(&self.keys[max_idx]);
+    |                                    ^^^^^^^^^^^^^^^^^^ expected `str`, found `String`
+
+Some errors have detailed explanations: E0271, E0277, E0282, E0599.
+For more information about an error, try `rustc --explain E0271`.
+warning: `tauri-apphowlingual` (lib) generated 1 warning
+error: could not compile `tauri-apphowlingual` (lib) due to 10 previous errors; 1 warning emitted

@@ -1,0 +1,43 @@
+    Checking tauri-apphowlingual v0.1.0 (C:\Users\Flow\Antigravity\Howlingual\src-tauri)
+error[E0596]: cannot borrow `self.det_session` as mutable, as it is behind a `&` reference
+   --> src\ocr_engine.rs:153:23
+    |
+153 |         let outputs = self.det_session.run(ort::inputs!["x" => input_value])?;
+    |                       ^^^^^^^^^^^^^^^^ `self` is a `&` reference, so the data it refers to cannot be borrowed as mutable
+    |
+help: consider changing this to be a mutable reference
+    |
+124 |         &mut self,
+    |          +++
+
+warning: value assigned to `resize_w` is never read
+   --> src\ocr_engine.rs:130:28
+    |
+130 |         let mut resize_w = w;
+    |                            ^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `resize_h` is never read
+   --> src\ocr_engine.rs:131:28
+    |
+131 |         let mut resize_h = h;
+    |                            ^
+    |
+    = help: maybe it is overwritten before being read?
+
+error[E0596]: cannot borrow `self.rec_session` as mutable, as it is behind a `&` reference
+   --> src\ocr_engine.rs:246:23
+    |
+246 |         let outputs = self.rec_session.run(ort::inputs!["x" => input_value])?;
+    |                       ^^^^^^^^^^^^^^^^ `self` is a `&` reference, so the data it refers to cannot be borrowed as mutable
+    |
+help: consider changing this to be a mutable reference
+    |
+231 |     fn recognize_line(&mut self, img: &DynamicImage) -> Result<String, Box<dyn std::error::Error>> {
+    |                        +++
+
+For more information about this error, try `rustc --explain E0596`.
+warning: `tauri-apphowlingual` (lib) generated 2 warnings
+error: could not compile `tauri-apphowlingual` (lib) due to 2 previous errors; 2 warnings emitted

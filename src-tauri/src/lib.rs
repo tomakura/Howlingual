@@ -18,11 +18,8 @@ use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use xcap::Monitor;
 
-#[cfg(windows)]
-use windows::{
-    Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap},
-    Media::Ocr::OcrEngine,
-};
+mod ocr_engine;
+use ocr_engine::PaddleOcr;
 
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -86,6 +83,28 @@ struct CapturedImages(Mutex<HashMap<String, image::RgbaImage>>);
 impl Default for CapturedImages {
     fn default() -> Self {
         Self(Mutex::new(HashMap::new()))
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum WindowOrigin {
+    Main,
+    Compact,
+}
+
+struct OcrOriginState(Mutex<WindowOrigin>);
+
+impl Default for OcrOriginState {
+    fn default() -> Self {
+        Self(Mutex::new(WindowOrigin::Main))
+    }
+}
+
+struct PaddleOcrState(Mutex<Option<PaddleOcr>>);
+
+impl Default for PaddleOcrState {
+    fn default() -> Self {
+        Self(Mutex::new(None))
     }
 }
 
@@ -874,8 +893,18 @@ fn handover_to_main(app: AppHandle, text: String) {
 }
 
 #[tauri::command]
-async fn start_selection_ocr(app: AppHandle) -> Result<(), String> {
-    println!("[ocr] start_selection_ocr called");
+async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(), String> {
+    println!("[ocr] start_selection_ocr called, origin: {:?}", origin);
+
+    // Default to Main if not specific
+    let origin_enum = match origin.as_deref() {
+        Some("compact") => WindowOrigin::Compact,
+        _ => WindowOrigin::Main,
+    };
+
+    if let Ok(mut state) = app.state::<OcrOriginState>().0.lock() {
+        *state = origin_enum;
+    }
 
     #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     {
@@ -1030,10 +1059,51 @@ async fn finish_selection_ocr(
     // The frontend will call cancel_selection_ocr (or close itself) after receiving the result.
 
     #[cfg(windows)]
-    return ocr_windows(sub_image).await;
+    return ocr_windows(app, sub_image).await;
 
     #[cfg(not(windows))]
     return Err("OCR implemented for Windows only (macOS pending)".into());
+}
+
+#[tauri::command]
+fn complete_ocr_flow(app: AppHandle, text: String) -> Result<(), String> {
+    println!(
+        "[ocr] complete_ocr_flow called with text length: {}",
+        text.len()
+    );
+
+    // Close capture windows first to clean up
+    if let Err(e) = close_capture_windows(&app) {
+        println!("[ocr] Warning: Failed to close capture windows: {}", e);
+    }
+
+    // Determine where to go back to based on origin state
+    let origin = {
+        let state = app.state::<OcrOriginState>();
+        state.0.lock().map(|g| *g).unwrap_or(WindowOrigin::Main)
+    };
+
+    println!("[ocr] completing flow, returning to: {:?}", origin);
+
+    match origin {
+        WindowOrigin::Main => {
+            // Re-use logic to show main window and pass data
+            handover_to_main(app, text);
+            Ok(())
+        }
+        WindowOrigin::Compact => {
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                let cursor_pos = app.state::<LastCursorPos>().0.lock().ok().and_then(|g| *g);
+                show_compact_window(&app, Some(text), cursor_pos).map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            {
+                Err("Compact mode not supported on mobile".into())
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -1051,91 +1121,22 @@ fn cancel_selection_ocr(app: AppHandle) {
 }
 
 #[cfg(windows)]
-async fn ocr_windows(image: image::RgbaImage) -> Result<String, String> {
-    use windows::Globalization::Language;
-    use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
-    use windows::Media::Ocr::OcrEngine;
-    use windows::Storage::Streams::DataWriter;
+async fn ocr_windows(app: AppHandle, image: image::RgbaImage) -> Result<String, String> {
+    use image::DynamicImage;
 
-    // 画像処理を最小限にする（リサイズ・グレースケール・コントラスト調整を削除）
-    // 生の画像データを使用するほうが、現代の高解像度ディスプレイやOCRエンジンにとっては有利な場合が多い
-    let width = image.width() as i32;
-    let height = image.height() as i32;
-    let processed_bytes = image.into_raw();
+    // Use PaddleOCR via ONNX
+    let state = app.state::<PaddleOcrState>();
+    let mut engine = state.0.lock().map_err(|_| "Failed to lock OCR engine")?;
 
-    // OCRエンジンの作成（日本語優先）
-    let engine = (|| {
-        // 1. まず日本語 ("ja-JP") で作成を試みる
-        if let Ok(lang) = Language::CreateLanguage(&windows::core::HSTRING::from("ja-JP")) {
-            if let Ok(engine) = OcrEngine::TryCreateFromLanguage(&lang) {
-                return Ok(engine);
-            }
-        }
-
-        // 2. 次に英語 ("en-US") で作成を試みる
-        if let Ok(lang) = Language::CreateLanguage(&windows::core::HSTRING::from("en-US")) {
-            if let Ok(engine) = OcrEngine::TryCreateFromLanguage(&lang) {
-                return Ok(engine);
-            }
-        }
-
-        // 3. 最後にユーザーのプロファイル言語で作成を試みる（フォールバック）
-        OcrEngine::TryCreateFromUserProfileLanguages()
-    })()
-    .map_err(|e| format!("Failed to create OCR engine: {}", e))?;
-
-    // SoftwareBitmapを作成
-    let writer = DataWriter::new().map_err(|e| e.to_string())?;
-    writer
-        .WriteBytes(&processed_bytes)
-        .map_err(|e| e.to_string())?;
-    let buffer = writer.DetachBuffer().map_err(|e| e.to_string())?;
-
-    let bitmap =
-        SoftwareBitmap::CreateCopyFromBuffer(&buffer, BitmapPixelFormat::Rgba8, width, height)
-            .map_err(|e| e.to_string())?;
-
-    // OCR実行
-    let result = engine
-        .RecognizeAsync(&bitmap)
-        .map_err(|e| e.to_string())?
-        .get() // awaitの代わりにblocking getを使用
-        .map_err(|e| e.to_string())?;
-
-    // 結果の結合
-    let lines = result
-        .Lines()
-        .map_err(|e: windows::core::Error| e.to_string())?;
-    let mut text_parts = Vec::new();
-    for line in lines {
-        if let Ok(line_text) = line.Text() {
-            text_parts.push(line_text.to_string());
-        }
-    }
-    let text = text_parts.join("\n");
-
-    // 日本語のスペース除去処理（変更なし）
-    let mut cleaned = String::with_capacity(text.len());
-    let chars: Vec<char> = text.chars().collect();
-    for i in 0..chars.len() {
-        let c = chars[i];
-        if c.is_whitespace() {
-            // Check if surrounded by non-latin (likely CJK)
-            let prev = if i > 0 { chars[i - 1] } else { 'a' };
-            let next = if i + 1 < chars.len() {
-                chars[i + 1]
-            } else {
-                'a'
-            };
-
-            if (prev as u32) > 0x2000 && (next as u32) > 0x2000 {
-                continue;
-            }
-        }
-        cleaned.push(c);
+    if let Some(engine) = engine.as_mut() {
+        println!("[ocr] Running PaddleOCR...");
+        let dyn_img = DynamicImage::ImageRgba8(image);
+        return engine.recognize(&dyn_img).map_err(|e| e.to_string());
     }
 
-    Ok(cleaned)
+    // Fallback or error if engine is not initialized
+    println!("[ocr] PaddleOCR not initialized, fallback unavailable.");
+    Err("OCR engine not initialized (check logs)".into())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1159,7 +1160,8 @@ pub fn run() {
             handover_to_main,
             start_selection_ocr,
             finish_selection_ocr,
-            cancel_selection_ocr
+            cancel_selection_ocr,
+            complete_ocr_flow
         ])
         .setup(|app| {
             app.manage(ExitState::default());
@@ -1168,9 +1170,57 @@ pub fn run() {
             app.manage(HandoverText::default());
             app.manage(LastCursorPos::default());
             app.manage(CapturedImages::default());
+            app.manage(OcrOriginState::default());
+            app.manage(PaddleOcrState::default());
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
+                // Init OCR Engine (Windows only for now via Paddle)
+                // Assuming Mac will use Vision framework via different logic
+                let resource_path = app
+                    .path()
+                    .resolve("resources", tauri::path::BaseDirectory::Resource)
+                    .unwrap_or_else(|_| std::path::PathBuf::from("resources"));
+
+                // Fallback for dev environment where resources might be in src-tauri/resources
+                // or just "resources" relative to CWD.
+                let mut final_res_path = resource_path.clone();
+                if !final_res_path.exists() {
+                    let dev_res = std::path::PathBuf::from("resources");
+                    if dev_res.exists() {
+                        final_res_path = dev_res;
+                        println!("[ocr] Using dev resources path: {:?}", final_res_path);
+                    }
+                } else {
+                    println!("[ocr] Using resolved resources path: {:?}", final_res_path);
+                }
+
+                #[cfg(windows)]
+                if final_res_path.exists() {
+                    let det_model = final_res_path.join("ch_PP-OCRv4_det_infer.onnx");
+                    let rec_model = final_res_path.join("japan_PP-OCRv3_rec_infer.onnx");
+                    let keys = final_res_path.join("japan_dict.txt");
+
+                    if det_model.exists() && rec_model.exists() && keys.exists() {
+                        println!("[ocr] Initializing PaddleOCR...");
+                        match PaddleOcr::new(&det_model, &rec_model, &keys) {
+                            Ok(engine) => {
+                                if let Ok(mut state) = app.state::<PaddleOcrState>().0.lock() {
+                                    *state = Some(engine);
+                                }
+                                println!("[ocr] PaddleOCR initialized successfully.");
+                            }
+                            Err(e) => {
+                                println!("[ocr] Failed to initialize PaddleOCR: {}", e);
+                            }
+                        }
+                    } else {
+                        println!("[ocr] Missing model files in {:?}", final_res_path);
+                    }
+                } else {
+                    println!("[ocr] Resources directory not found.");
+                }
+
                 let shortcut_state = app.state::<ShortcutConfig>();
                 ensure_compact_window(&app.handle())?;
                 setup_tray(&app.handle())?;
