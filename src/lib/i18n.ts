@@ -50,10 +50,13 @@ interface Translations {
 	anthropicApiKey: string;
 	translationCount: string;
 	defaultTargetLang: string;
+	defaultTargetLangDesc: string;
 	theme: string;
+	themeDesc: string;
 	themeDark: string;
 	themeLight: string;
 	appLanguage: string;
+	appLanguageDesc: string;
 	save: string;
 	close: string;
 	back: string;
@@ -72,6 +75,7 @@ interface Translations {
 	startMinimizedDesc: string;
 	quickShortcut: string;
 	quickShortcutHint: string;
+	quickShortcutDesc: string;
 	applyShortcut: string;
 	shortcutInvalid: string;
 
@@ -107,6 +111,7 @@ interface Translations {
 	moreItems: string;
 	showLess: string;
 	ocrEngine: string;
+	ocrEngineDesc: string;
 	ocrHighAccuracy: string;
 	ocrHighAccuracyDesc: string;
 	ocrFast: string;
@@ -132,6 +137,7 @@ const translations: Record<AppLanguage, Translations> = {
 		moreActions: "その他の操作",
 		startOCR: "画面から文字を読み取る",
 		ocrEngine: "OCRエンジン",
+		ocrEngineDesc: "精度と速度のバランスを選びます。",
 		ocrHighAccuracy: "PaddleOCR (高精度)",
 		ocrHighAccuracyDesc: "精度を最優先します。少し時間がかかる場合があります。",
 		ocrFast: "Windows標準 (高速)",
@@ -158,10 +164,13 @@ const translations: Record<AppLanguage, Translations> = {
 		anthropicApiKey: "Anthropic API Key",
 		translationCount: "翻訳案の数",
 		defaultTargetLang: "デフォルト翻訳先言語",
+		defaultTargetLangDesc: "自動検出やクイック翻訳の既定先になります。",
 		theme: "テーマ",
+		themeDesc: "ダーク/ライトを即時に切り替えます。",
 		themeDark: "ダーク",
 		themeLight: "ライト",
 		appLanguage: "アプリ言語",
+		appLanguageDesc: "UIと言語設定に合わせて文体名も切り替わります。",
 		save: "保存",
 		close: "閉じる",
 		back: "戻る",
@@ -180,6 +189,7 @@ const translations: Record<AppLanguage, Translations> = {
 		startMinimizedDesc: "起動時にメイン画面を最小化して開始します",
 		quickShortcut: "クイック起動ショートカット",
 		quickShortcutHint: "例: CommandOrControl+Shift+H",
+		quickShortcutDesc: "どのアプリからでもクイック翻訳を呼び出します。",
 		applyShortcut: "適用",
 		shortcutInvalid: "ショートカットが無効です",
 		polite: "丁寧",
@@ -230,6 +240,7 @@ const translations: Record<AppLanguage, Translations> = {
 		moreActions: "More actions",
 		startOCR: "Extract Text (OCR)",
 		ocrEngine: "OCR Engine",
+		ocrEngineDesc: "Choose the best balance between speed and accuracy.",
 		ocrHighAccuracy: "PaddleOCR (High Accuracy)",
 		ocrHighAccuracyDesc: "Prioritizes accuracy. May take slightly longer.",
 		ocrFast: "Windows Standard (Fast)",
@@ -256,10 +267,13 @@ const translations: Record<AppLanguage, Translations> = {
 		anthropicApiKey: "Anthropic API Key",
 		translationCount: "Number of translations",
 		defaultTargetLang: "Default target language",
+		defaultTargetLangDesc: "Used for auto-detect and quick translation results.",
 		theme: "Theme",
+		themeDesc: "Switch between dark and light instantly.",
 		themeDark: "Dark",
 		themeLight: "Light",
 		appLanguage: "App Language",
+		appLanguageDesc: "Also updates default style names and prompts.",
 		save: "Save",
 		close: "Close",
 		back: "Back",
@@ -278,6 +292,7 @@ const translations: Record<AppLanguage, Translations> = {
 		startMinimizedDesc: "Minimize the main window on launch.",
 		quickShortcut: "Quick Shortcut",
 		quickShortcutHint: "Example: CommandOrControl+Shift+H",
+		quickShortcutDesc: "Invoke quick translation from any app.",
 		applyShortcut: "Apply",
 		shortcutInvalid: "Invalid shortcut",
 		polite: "Polite",
@@ -328,6 +343,7 @@ const translations: Record<AppLanguage, Translations> = {
 		moreActions: "更多操作",
 		startOCR: "屏幕文字识别 (OCR)",
 		ocrEngine: "OCR引擎",
+		ocrEngineDesc: "在速度与准确度之间选择平衡。",
 		ocrHighAccuracy: "PaddleOCR (高精度)",
 		ocrHighAccuracyDesc: "优先考虑准确性。可能需要稍长时间。",
 		ocrFast: "Windows标准 (快速)",
@@ -354,10 +370,13 @@ const translations: Record<AppLanguage, Translations> = {
 		anthropicApiKey: "Anthropic API Key",
 		translationCount: "翻译方案数量",
 		defaultTargetLang: "默认目标语言",
+		defaultTargetLangDesc: "用于自动检测和快速翻译的默认目标语言。",
 		theme: "主题",
+		themeDesc: "立即切换深色/浅色主题。",
 		themeDark: "深色",
 		themeLight: "浅色",
 		appLanguage: "应用语言",
+		appLanguageDesc: "同时更新默认文体名称和提示。",
 		save: "保存",
 		close: "关闭",
 		back: "返回",
@@ -376,6 +395,7 @@ const translations: Record<AppLanguage, Translations> = {
 		startMinimizedDesc: "启动时将主窗口最小化显示",
 		quickShortcut: "快捷键",
 		quickShortcutHint: "例如: CommandOrControl+Shift+H",
+		quickShortcutDesc: "在任意应用中唤起快速翻译。",
 		applyShortcut: "应用",
 		shortcutInvalid: "快捷键无效",
 		polite: "礼貌",
@@ -426,6 +446,7 @@ const translations: Record<AppLanguage, Translations> = {
 		moreActions: "추가 작업",
 		startOCR: "화면 문자 인식 (OCR)",
 		ocrEngine: "OCR 엔진",
+		ocrEngineDesc: "정확도와 속도 중 우선순위를 선택합니다.",
 		ocrHighAccuracy: "PaddleOCR (고정밀)",
 		ocrHighAccuracyDesc: "정확도를 최우선으로 합니다. 시간이 조금 걸릴 수 있습니다.",
 		ocrFast: "Windows 표준 (고속)",
@@ -452,10 +473,13 @@ const translations: Record<AppLanguage, Translations> = {
 		anthropicApiKey: "Anthropic API Key",
 		translationCount: "번역 제안 수",
 		defaultTargetLang: "기본 대상 언어",
+		defaultTargetLangDesc: "자동 감지 및 빠른 번역에 사용되는 기본 언어입니다.",
 		theme: "테마",
+		themeDesc: "다크/라이트 테마를 즉시 전환합니다.",
 		themeDark: "다크",
 		themeLight: "라이트",
 		appLanguage: "앱 언어",
+		appLanguageDesc: "기본 문체 이름과 프롬프트도 함께 변경됩니다.",
 		save: "저장",
 		close: "닫기",
 		back: "뒤로",
@@ -474,6 +498,7 @@ const translations: Record<AppLanguage, Translations> = {
 		startMinimizedDesc: "실행 시 메인 창을 최소화합니다.",
 		quickShortcut: "단축키",
 		quickShortcutHint: "예: CommandOrControl+Shift+H",
+		quickShortcutDesc: "어떤 앱에서도 빠른 번역을 호출합니다.",
 		applyShortcut: "적용",
 		shortcutInvalid: "유효하지 않은 단축키",
 		polite: "정중",

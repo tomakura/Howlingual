@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -15,14 +14,11 @@ use tauri::menu::{Menu, MenuItem};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-use xcap::Monitor;
-
-#[cfg(windows)]
 #[cfg(windows)]
 mod ocr_engine;
 #[cfg(windows)]
 mod ocr_native;
+mod ocr_flow;
 
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -77,51 +73,6 @@ struct LastCursorPos(Mutex<Option<(i32, i32)>>);
 impl Default for LastCursorPos {
     fn default() -> Self {
         Self(Mutex::new(None))
-    }
-}
-
-// Store captured screen images for OCR (one per monitor)
-struct CapturedImages(Mutex<HashMap<String, image::RgbaImage>>);
-
-impl Default for CapturedImages {
-    fn default() -> Self {
-        Self(Mutex::new(HashMap::new()))
-    }
-}
-
-#[cfg(windows)]
-pub struct PaddleOcrState(Mutex<Option<ocr_engine::PaddleOcr>>);
-
-#[cfg(windows)]
-pub struct WindowsOcrState(Mutex<Option<ocr_native::WindowsOcr>>);
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum OcrEngineType {
-    Paddle,
-    Windows,
-}
-
-#[cfg(windows)]
-struct OcrEngineConfig(Mutex<OcrEngineType>);
-
-#[cfg(windows)]
-impl Default for OcrEngineConfig {
-    fn default() -> Self {
-        Self(Mutex::new(OcrEngineType::Paddle))
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum WindowOrigin {
-    Main,
-    Compact,
-}
-
-struct OcrOriginState(Mutex<WindowOrigin>);
-
-impl Default for OcrOriginState {
-    fn default() -> Self {
-        Self(Mutex::new(WindowOrigin::Main))
     }
 }
 
@@ -909,457 +860,8 @@ fn handover_to_main(app: AppHandle, text: String) {
     }
 }
 
-#[tauri::command]
-async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(), String> {
-    println!("[ocr] start_selection_ocr called, origin: {:?}", origin);
-
-    // Default to Main if not specific
-    let origin_enum = match origin.as_deref() {
-        Some("compact") => WindowOrigin::Compact,
-        _ => WindowOrigin::Main,
-    };
-
-    if let Ok(mut state) = app.state::<OcrOriginState>().0.lock() {
-        *state = origin_enum;
-    }
-
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        if let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-            let _ = main.hide();
-        }
-        if let Some(compact) = app.get_webview_window(COMPACT_WINDOW_LABEL) {
-            let _ = compact.hide();
-        }
-
-        // Wait for windows to fully hide before capturing screenshots
-        // TODO: Consider using window visibility state checks or event-based mechanism
-        // for more reliable cross-platform behavior instead of hardcoded delay
-        std::thread::sleep(Duration::from_millis(300));
-
-        let monitors = Monitor::all().map_err(|e| e.to_string())?;
-
-        // Close any existing capture windows before creating new ones
-        if let Err(e) = close_capture_windows(&app) {
-            println!(
-                "[ocr] Warning: Failed to close existing capture windows: {}",
-                e
-            );
-        }
-
-        let mut capture_map = HashMap::new();
-
-        // Get cursor position once to determine which monitor to focus
-        let cursor_pos = get_cursor_position();
-
-        for (index, monitor) in monitors.into_iter().enumerate() {
-            let mon_width = monitor.width().map_err(|e| e.to_string())?;
-            let mon_height = monitor.height().map_err(|e| e.to_string())?;
-            let mon_x = monitor.x().map_err(|e| e.to_string())?;
-            let mon_y = monitor.y().map_err(|e| e.to_string())?;
-
-            println!(
-                "[ocr] Capturing monitor {}: {}x{} at ({},{})",
-                index, mon_width, mon_height, mon_x, mon_y
-            );
-
-            let image = monitor.capture_image().map_err(|e| e.to_string())?;
-            println!(
-                "[ocr] Captured image dimensions for monitor {}: {}x{}",
-                index,
-                image.width(),
-                image.height()
-            );
-
-            let monitor_id = index.to_string();
-            // Use PHYSICAL dimensions from the captured image for the window size
-            let img_width = image.width();
-            let img_height = image.height();
-
-            capture_map.insert(monitor_id.clone(), image);
-
-            let label = format!("{}{}", CAPTURE_WINDOW_PREFIX, monitor_id);
-            let url = format!("/?view=capture&monitor={}", monitor_id);
-            // Simplified IBuffer Approach
-            // This section seems to be misplaced or incomplete based on the original code structure.
-            // The provided snippet appears to be for creating a SoftwareBitmap from an image buffer,
-            // which would typically be part of image processing or OCR engine setup, not window creation.
-            // Assuming the intent was to replace the window creation and setup logic with this,
-            // but the snippet itself is not a direct replacement for window management.
-            // Given the instruction "Remove duplicate struct and simplify ocr logic",
-            // and the snippet provided, it looks like the user intended to insert
-            // this logic *instead* of the window creation for each monitor,
-            // or as part of a new OCR flow.
-            // However, the original code proceeds to create and show windows.
-            // The snippet provided is syntactically incomplete and does not fit the context
-            // of creating a Tauri window.
-            // I will insert the provided snippet as literally as possible,
-            // but note that it will likely cause compilation errors due to missing context
-            // (e.g., `rgba`, `w`, `h` are undefined, and the `)?;) }` is malformed).
-            //
-            // Given the instruction "make the change faithfully and without making any unrelated edits",
-            // and "Make sure to incorporate the change in a way so that the resulting file is syntactically correct",
-            // the provided snippet cannot be inserted as-is to be syntactically correct
-            // without making assumptions about `rgba`, `w`, `h` and fixing the trailing `)?;) }`.
-            //
-            // Re-reading the instruction: "Remove duplicate struct and simplify ocr logic."
-            // The provided "Code Edit" snippet is very specific. It starts with `capture_map.insert(...)`
-            // and then `let label = ...`, `let url = ...`, followed by the "Simplified IBuffer Approach".
-            // It then abruptly ends with `)?;) }` and `#[tauri::command] async fn finish_selection_ocr(`.
-            // This implies that the *entire block* from `let window = ensure_capture_window(...)`
-            // up to the end of the `for` loop (before `if let Ok(mut lock) = app.state::<CapturedImages>().0.lock()`)
-            // should be replaced by the "Simplified IBuffer Approach" and its surrounding context.
-            //
-            // The snippet provided:
-            // ```
-            //             capture_map.insert(monitor_id.clone(), image);
-            //
-            //             let label = format!("{}{}", CAPTURE_WINDOW_PREFIX, monitor_id);
-            //             let url = format!("/?view=capture&monitor={}", monitor_id);
-            //             // Simplified IBuffer Approach
-            //         let writer = DataWriter::new()?;
-            //         writer.WriteBytes(&rgba)?;
-            //         let buffer = writer.DetachBuffer()?;
-            //
-            //         let bitmap = SoftwareBitmap::CreateCopyFromBuffer(
-            //             &buffer,
-            //             BitmapPixelFormat::Rgba8,
-            //             w as i32,
-            //             h as i32,
-            //         )?;)
-            // }
-            //
-            // #[tauri::command]
-            // async fn finish_selection_ocr(
-            //     app: AppHandle,
-            // ```
-            // This snippet is clearly malformed. The `)?;) }` is not valid Rust syntax.
-            // The `}` after `)?;)` would close the `for` loop, but the `)` and `;` are extra.
-            // Also, `rgba`, `w`, `h` are not defined in this scope.
-            //
-            // Given the strict instruction "Make sure to incorporate the change in a way so that the resulting file is syntactically correct",
-            // I cannot insert the snippet as-is. The user's provided "Code Edit" is syntactically incorrect.
-            //
-            // I will assume the user intended to *replace* the window creation logic with the IBuffer approach,
-            // and that the `)?;) }` was a typo for just `}` to close the `for` loop, and that `rgba`, `w`, `h`
-            // are meant to be derived from `image` (e.g., `image.as_bytes()`, `image.width()`, `image.height()`).
-            // However, I cannot make such assumptions.
-            //
-            // The most faithful interpretation that *could* be syntactically correct, while still making the change,
-            // is to insert the "Simplified IBuffer Approach" *after* the `url` definition, and then
-
-            let window = ensure_capture_window(&app, &label, &url).map_err(|e| e.to_string())?;
-
-            // Set window to physical pixel dimensions
-            // Tauri will create a window of exact physical size
-            // The webview will be scaled internally based on system DPI
-            if let Err(e) =
-                window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                    x: mon_x,
-                    y: mon_y,
-                }))
-            {
-                println!("[ocr] Failed to set window position: {}", e);
-            }
-
-            if let Err(e) = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                width: img_width,
-                height: img_height,
-            })) {
-                println!("[ocr] Failed to set window size: {}", e);
-            }
-
-            // SHOW the window now that it's sized correctly
-            if let Err(e) = window.show() {
-                println!("[ocr] Failed to show window: {}", e);
-            }
-
-            // Focus strategy: focus the window on the monitor containing the cursor.
-            // If cursor position is unavailable, focus the first monitor as a fallback.
-            let should_focus = if let Some((cursor_x, cursor_y)) = cursor_pos {
-                // Check if cursor is within this monitor's bounds
-                cursor_x >= mon_x
-                    && cursor_x < mon_x + mon_width as i32
-                    && cursor_y >= mon_y
-                    && cursor_y < mon_y + mon_height as i32
-            } else {
-                // Fallback: focus the first monitor if cursor position is unavailable
-                index == 0
-            };
-
-            if should_focus {
-                println!("[ocr] Focusing capture window on monitor {}", index);
-                let _ = window.set_focus();
-            }
-        }
-
-        if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
-            *lock = capture_map;
-        }
-    }
-
-    Ok(())
-}
-
-#[tauri::command]
-async fn finish_selection_ocr(
-    app: AppHandle,
-    monitor_id: String,
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-) -> Result<String, String> {
-    // Coordinates received here are in physical pixels
-    // Frontend scales CSS pixel coords by devicePixelRatio before sending
-    println!(
-        "[ocr] finish_selection_ocr ({}): {},{} {}x{}",
-        monitor_id, x, y, width, height
-    );
-
-    let image = {
-        let state = app.state::<CapturedImages>();
-        let mut lock = state.0.lock().map_err(|_| "Lock failed")?;
-        lock.remove(&monitor_id)
-            .ok_or_else(|| format!("No captured image found for monitor {}", monitor_id))?
-    };
-
-    // Validate crop bounds before cropping to avoid panics in crop_imm.
-    // Image dimensions are in physical pixels (from screen capture)
-    let image_width = image.width();
-    let image_height = image.height();
-
-    println!(
-        "[ocr] Image dimensions: {}x{}, selection: {},{} {}x{}",
-        image_width, image_height, x, y, width, height
-    );
-
-    if x < 0 || y < 0 {
-        return Err("Selection out of bounds (negative coordinates)".into());
-    }
-
-    let x_u32 = x as u32;
-    let y_u32 = y as u32;
-
-    if x_u32 >= image_width || y_u32 >= image_height {
-        return Err("Selection out of bounds (start point outside image)".into());
-    }
-
-    let max_width = image_width.saturating_sub(x_u32);
-    let max_height = image_height.saturating_sub(y_u32);
-
-    if width == 0 || height == 0 || width > max_width || height > max_height {
-        return Err("Selection out of bounds (invalid width/height)".into());
-    }
-
-    // Crop image
-    let sub_image = image::imageops::crop_imm(&image, x_u32, y_u32, width, height).to_image();
-
-    // DEBUG: Save cropped image to user's temp directory
-    if let Ok(temp_dir) = std::env::temp_dir().canonicalize() {
-        let debug_path = temp_dir.join("howlingual_ocr_crop.png");
-        match sub_image.save(&debug_path) {
-            Ok(_) => println!("[ocr] Saved debug crop to {:?}", debug_path),
-            Err(e) => println!("[ocr] Failed to save debug crop: {}", e),
-        }
-    }
-
-    // Do not close windows here! We need them open to show the "Processing" spinner.
-    // The frontend will call cancel_selection_ocr (or close itself) after receiving the result.
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    return run_ocr(app, sub_image).await;
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    return Err("OCR not supported on mobile".into());
-}
-
-#[cfg(windows)]
-#[tauri::command]
-fn set_ocr_engine(app: AppHandle, engine: String) -> Result<(), String> {
-    let state = app.state::<OcrEngineConfig>();
-    let mut guard = state.0.lock().map_err(|_| "Lock failed")?;
-    match engine.as_str() {
-        "paddle" => *guard = OcrEngineType::Paddle,
-        "windows" => *guard = OcrEngineType::Windows,
-        _ => return Err("Invalid engine type".into()),
-    }
-    println!("[ocr] Engine set to: {}", engine);
-    Ok(())
-}
-
-#[cfg(not(windows))]
-#[tauri::command]
-fn set_ocr_engine(_app: AppHandle, _engine: String) -> Result<(), String> {
-    Ok(()) // No-op on non-Windows
-}
-
-#[tauri::command]
-async fn complete_ocr_flow(app: AppHandle, text: String) -> Result<(), String> {
-    println!(
-        "[ocr] complete_ocr_flow called with text length: {}",
-        text.len()
-    );
-
-    // Close capture windows first to clean up
-    if let Err(e) = close_capture_windows(&app) {
-        println!("[ocr] Warning: Failed to close capture windows: {}", e);
-    }
-
-    // Determine where to go back to based on origin state
-    let origin = {
-        let state = app.state::<OcrOriginState>();
-        state.0.lock().map(|g| *g).unwrap_or(WindowOrigin::Main)
-    };
-
-    println!("[ocr] completing flow, returning to: {:?}", origin);
-
-    match origin {
-        WindowOrigin::Main => {
-            // Re-use logic to show main window and pass data
-            handover_to_main(app, text);
-            Ok(())
-        }
-        WindowOrigin::Compact => {
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            {
-                let cursor_pos = app.state::<LastCursorPos>().0.lock().ok().and_then(|g| *g);
-                show_compact_window(&app, Some(text), cursor_pos).map_err(|e| e.to_string())?;
-                Ok(())
-            }
-            #[cfg(any(target_os = "android", target_os = "ios"))]
-            {
-                Err("Compact mode not supported on mobile".into())
-            }
-        }
-    }
-}
-
-#[tauri::command]
-fn cancel_selection_ocr(app: AppHandle) {
-    // Close capture windows and clear state only if closure succeeds
-    if let Err(e) = close_capture_windows(&app) {
-        println!("[ocr] Warning: Failed to close some capture windows: {}", e);
-        // Don't clear state if windows might still be active
-    } else {
-        // Only clear the state if all windows were successfully closed
-        if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
-            lock.clear();
-        }
-    }
-
-    // Restore original window
-    let origin = {
-        let state = app.state::<OcrOriginState>();
-        state.0.lock().map(|g| *g).unwrap_or(WindowOrigin::Main)
-    };
-    println!("[ocr] cancelled, restoring: {:?}", origin);
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    match origin {
-        WindowOrigin::Main => {
-            // For main window, just showing it is enough (we have no text to pass)
-            // We can use show_main_window directly since we don't need handover event
-            let cursor_pos = app.state::<LastCursorPos>().0.lock().ok().and_then(|g| *g);
-            let _ = show_main_window(&app, cursor_pos);
-        }
-        WindowOrigin::Compact => {
-            let cursor_pos = app.state::<LastCursorPos>().0.lock().ok().and_then(|g| *g);
-            // Pass None as text to show window without changing text
-            let _ = show_compact_window(&app, None, cursor_pos);
-        }
-    }
-}
-
 #[cfg(target_os = "macos")]
 mod macos_ocr;
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-async fn run_ocr(_app: AppHandle, image: image::RgbaImage) -> Result<String, String> {
-    // 1. macOS Native OCR
-    #[cfg(target_os = "macos")]
-    {
-        use image::DynamicImage;
-        let dyn_img = DynamicImage::ImageRgba8(image);
-        println!("[ocr] Running macOS Native Vision OCR...");
-        return macos_ocr::perform_ocr(dyn_img);
-    }
-
-    // 2. Windows Native OCR (Restored)
-    #[cfg(target_os = "windows")]
-    {
-        println!("[ocr] Running Windows Native OCR...");
-        return ocr_windows(_app, image).await;
-    }
-
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    {
-        Err("OCR not supported on this platform".into())
-    }
-}
-
-#[cfg(windows)]
-#[cfg(windows)]
-async fn ocr_windows(app: AppHandle, image: image::RgbaImage) -> Result<String, String> {
-    let config_state = app.state::<OcrEngineConfig>();
-    let engine_type = {
-        let guard = config_state.0.lock().map_err(|_| "Lock failed")?;
-        *guard
-    };
-
-    match engine_type {
-        OcrEngineType::Paddle => {
-            let state = app.state::<PaddleOcrState>();
-            // Lazy initialization
-            let mut guard = state.0.lock().map_err(|_| "Lock failed")?;
-            if guard.is_none() {
-                println!("[ocr] Initializing PaddleOCR...");
-                let resource_dir = app
-                    .path()
-                    .resolve("resources", tauri::path::BaseDirectory::Resource)
-                    .map_err(|e| e.to_string())?;
-
-                // Note: Filenames must match what we downloaded
-                let det_path = resource_dir.join("ch_PP-OCRv4_det_infer.onnx");
-                let rec_path = resource_dir.join("japan_PP-OCRv5_rec_infer.onnx");
-                let keys_path = resource_dir.join("japan_dict_v5.txt");
-
-                println!("[ocr] Loading models from: {:?}", resource_dir);
-
-                let engine = ocr_engine::PaddleOcr::new(det_path, rec_path, keys_path)
-                    .map_err(|e| format!("Failed to load OCR models: {}", e))?;
-
-                *guard = Some(engine);
-                println!("[ocr] PaddleOCR initialized successfully");
-            }
-
-            if let Some(engine) = guard.as_mut() {
-                let dyn_img = image::DynamicImage::ImageRgba8(image);
-                engine.recognize(&dyn_img).map_err(|e| e.to_string())
-            } else {
-                Err("PaddleOCR engine initialization failed".into())
-            }
-        }
-        OcrEngineType::Windows => {
-            let state = app.state::<WindowsOcrState>();
-            let mut guard = state.0.lock().map_err(|_| "Lock failed")?;
-            if guard.is_none() {
-                println!("[ocr] Initializing Windows Native OCR...");
-                match ocr_native::WindowsOcr::new() {
-                    Ok(engine) => *guard = Some(engine),
-                    Err(e) => return Err(format!("Failed to init Windows OCR: {}", e)), // Fail early if native OCR is broken
-                }
-            }
-
-            if let Some(engine) = guard.as_ref() {
-                let dyn_img = image::DynamicImage::ImageRgba8(image);
-                engine.recognize(&dyn_img).map_err(|e| e.to_string())
-            } else {
-                Err("Windows OCR engine initialization failed".into())
-            }
-        }
-    }
-}
 
 #[cfg(target_os = "macos")]
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -1400,11 +902,11 @@ pub fn run() {
             replace_selection,
             quit_app,
             handover_to_main,
-            start_selection_ocr,
-            finish_selection_ocr,
-            cancel_selection_ocr,
-            complete_ocr_flow,
-            set_ocr_engine
+            ocr_flow::start_selection_ocr,
+            ocr_flow::finish_selection_ocr,
+            ocr_flow::cancel_selection_ocr,
+            ocr_flow::complete_ocr_flow,
+            ocr_flow::set_ocr_engine
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -1425,13 +927,13 @@ pub fn run() {
             app.manage(PendingText::default());
             app.manage(HandoverText::default());
             app.manage(LastCursorPos::default());
-            app.manage(CapturedImages::default());
-            app.manage(OcrOriginState::default());
+            app.manage(ocr_flow::CapturedImages::default());
+            app.manage(ocr_flow::OcrOriginState::default());
             #[cfg(windows)]
             {
-                app.manage(PaddleOcrState(Mutex::new(None)));
-                app.manage(WindowsOcrState(Mutex::new(None)));
-                app.manage(OcrEngineConfig::default());
+                app.manage(ocr_flow::PaddleOcrState(Mutex::new(None)));
+                app.manage(ocr_flow::WindowsOcrState(Mutex::new(None)));
+                app.manage(ocr_flow::OcrEngineConfig::default());
             }
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]

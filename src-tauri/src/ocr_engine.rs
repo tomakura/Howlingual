@@ -40,6 +40,7 @@ impl PaddleOcr {
         }
         keys.push(" ".to_string()); // Space at the end
                                     // keys.push("blank".to_string()); // Removed from end
+        #[cfg(debug_assertions)]
         println!("[ocr_engine] Loaded dictionary: {} keys", keys.len());
 
         Ok(Self {
@@ -50,6 +51,11 @@ impl PaddleOcr {
     }
 
     pub fn recognize(&mut self, img: &DynamicImage) -> Result<String, Box<dyn std::error::Error>> {
+        let (w, h) = img.dimensions();
+        if h <= 64 || w <= 64 {
+            return self.recognize_line(img);
+        }
+
         // 1. Detection
         let (boxes, scale_x, scale_y) = self.detect(img)?;
 
@@ -68,8 +74,6 @@ impl PaddleOcr {
         });
 
         let mut results = Vec::new();
-        let (w, h) = img.dimensions();
-
         for rect in sorted_boxes {
             // Unscale and crop
             let x = (rect.x as f32 / scale_x) as u32;
@@ -213,6 +217,7 @@ impl PaddleOcr {
                 }
             }
         }
+        #[cfg(debug_assertions)]
         println!("[ocr_debug] Detected {} text boxes.", rects.len());
         rects
     }
@@ -237,14 +242,15 @@ impl PaddleOcr {
         let num_classes = shape[2] as usize;
 
         // Decode CTC
-        let mut text = String::new();
+        let mut text = String::with_capacity(time_steps);
         let blank_idx = 0; // Padding is at 0 now
         let mut last_idx = blank_idx;
 
         // println!("[ocr_debug] Model num_classes: {}, Dictionary keys: {}, Blank idx: {}", num_classes, self.keys.len(), blank_idx);
 
         // Debug raw indices
-        let mut raw_indices = Vec::new();
+        #[cfg(debug_assertions)]
+        let mut raw_indices = Vec::with_capacity(time_steps);
 
         for t in 0..time_steps {
             let offset = t * num_classes;
@@ -259,6 +265,7 @@ impl PaddleOcr {
                     max_idx = i;
                 }
             }
+            #[cfg(debug_assertions)]
             raw_indices.push(max_idx);
 
             if max_idx != last_idx {
@@ -268,8 +275,11 @@ impl PaddleOcr {
                 last_idx = max_idx;
             }
         }
-        println!("[ocr_debug] Raw indices: {:?}", raw_indices);
-        println!("[ocr_debug] Decoded text: {}", text);
+        #[cfg(debug_assertions)]
+        {
+            println!("[ocr_debug] Raw indices: {:?}", raw_indices);
+            println!("[ocr_debug] Decoded text: {}", text);
+        }
         Ok(text)
     }
 
@@ -281,13 +291,21 @@ impl PaddleOcr {
         let mean = [0.485, 0.456, 0.406];
         let std = [0.229, 0.224, 0.225];
 
-        for (x, y, px) in img.pixels() {
-            let r = (px[0] as f32 / 255.0 - mean[0]) / std[0];
-            let g = (px[1] as f32 / 255.0 - mean[1]) / std[1];
-            let b = (px[2] as f32 / 255.0 - mean[2]) / std[2];
-            arr[[0, 0, y as usize, x as usize]] = r;
-            arr[[0, 1, y as usize, x as usize]] = g;
-            arr[[0, 2, y as usize, x as usize]] = b;
+        let rgb = img.to_rgb8();
+        let raw = rgb.as_raw();
+        let w_usize = w as usize;
+
+        for y in 0..h as usize {
+            let row_start = y * w_usize * 3;
+            for x in 0..w_usize {
+                let idx = row_start + x * 3;
+                let r = (raw[idx] as f32 / 255.0 - mean[0]) / std[0];
+                let g = (raw[idx + 1] as f32 / 255.0 - mean[1]) / std[1];
+                let b = (raw[idx + 2] as f32 / 255.0 - mean[2]) / std[2];
+                arr[[0, 0, y, x]] = r;
+                arr[[0, 1, y, x]] = g;
+                arr[[0, 2, y, x]] = b;
+            }
         }
         Ok(arr)
     }
@@ -297,13 +315,21 @@ impl PaddleOcr {
         let mut arr = Array4::<f32>::zeros((1, 3, h as usize, w as usize));
 
         // Normalize: (x/255 - 0.5) / 0.5
-        for (x, y, px) in img.pixels() {
-            let r = (px[0] as f32 / 255.0 - 0.5) / 0.5;
-            let g = (px[1] as f32 / 255.0 - 0.5) / 0.5;
-            let b = (px[2] as f32 / 255.0 - 0.5) / 0.5;
-            arr[[0, 0, y as usize, x as usize]] = r;
-            arr[[0, 1, y as usize, x as usize]] = g;
-            arr[[0, 2, y as usize, x as usize]] = b;
+        let rgb = img.to_rgb8();
+        let raw = rgb.as_raw();
+        let w_usize = w as usize;
+
+        for y in 0..h as usize {
+            let row_start = y * w_usize * 3;
+            for x in 0..w_usize {
+                let idx = row_start + x * 3;
+                let r = (raw[idx] as f32 / 255.0 - 0.5) / 0.5;
+                let g = (raw[idx + 1] as f32 / 255.0 - 0.5) / 0.5;
+                let b = (raw[idx + 2] as f32 / 255.0 - 0.5) / 0.5;
+                arr[[0, 0, y, x]] = r;
+                arr[[0, 1, y, x]] = g;
+                arr[[0, 2, y, x]] = b;
+            }
         }
         Ok(arr)
     }

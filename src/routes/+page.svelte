@@ -4529,6 +4529,9 @@
                     <label class="settings-label" for="app-lang-select"
                       >{t(appLanguage, "appLanguage")}</label
                     >
+                    <div class="settings-description">
+                      {t(appLanguage, "appLanguageDesc")}
+                    </div>
                     <select
                       id="app-lang-select"
                       class="settings-select"
@@ -4544,6 +4547,9 @@
                   <!-- Theme -->
                   <div class="settings-section">
                     <div class="settings-label">{t(appLanguage, "theme")}</div>
+                    <div class="settings-description">
+                      {t(appLanguage, "themeDesc")}
+                    </div>
                     <div class="theme-toggle">
                       <button
                         class="theme-btn"
@@ -4567,6 +4573,9 @@
                     <label class="settings-label" for="target-lang-select"
                       >{t(appLanguage, "defaultTargetLang")}</label
                     >
+                    <div class="settings-description">
+                      {t(appLanguage, "defaultTargetLangDesc")}
+                    </div>
                     <select
                       id="target-lang-select"
                       class="settings-select"
@@ -4610,39 +4619,22 @@
                     <div class="settings-label">
                       {t(appLanguage, "allowRewrite")}
                     </div>
-                    <div class="settings-card-row">
+                    <div class="settings-card-row settings-toggle-row">
                       <span
                         id="allow-rewrite-label"
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-description"
                       >
                         {t(appLanguage, "allowRewriteDescription")}
                       </span>
                       <button
                         onclick={() => (allowRewrite = !allowRewrite)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {allowRewrite
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 99px; 
-                        position: relative; 
-                        border: none; 
-                        cursor: pointer;
-                        transition: background 0.2s;"
+                        class="toggle-switch"
+                        class:active={allowRewrite}
                         aria-labelledby="allow-rewrite-label"
+                        aria-checked={allowRewrite}
+                        role="switch"
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {allowRewrite ? '23px' : '3px'}; 
-                          transition: left 0.2s;"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                   </div>
@@ -4652,36 +4644,19 @@
                     <div class="settings-label">
                       {t(appLanguage, "translationCount") || "翻訳案の個数"}
                     </div>
+                    <div class="settings-description">
+                      {t(appLanguage, "translationCountDesc") ||
+                        "1回の翻訳で生成する翻訳案の数"}
+                    </div>
                     <div class="settings-card-row">
-                      <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
-                      >
-                        {t(appLanguage, "translationCountDesc") ||
-                          "1回の翻訳で生成する翻訳案の数"}
-                      </span>
-                      <div style="display: flex; gap: 4px;">
+                      <div class="settings-button-group">
                         {#each [1, 2, 3] as count}
                           <button
                             onclick={() =>
                               (translationCount = count as 1 | 2 | 3)}
-                            style="
-                              width: 36px;
-                              height: 28px;
-                              background: {translationCount === count
-                              ? '#3b82f6'
-                              : 'rgba(255,255,255,0.1)'};
-                              border: 1px solid {translationCount === count
-                              ? '#3b82f6'
-                              : 'rgba(255,255,255,0.2)'};
-                              border-radius: 6px;
-                              color: {translationCount === count
-                              ? 'white'
-                              : 'var(--text-muted)'};
-                              font-size: 13px;
-                              font-weight: 500;
-                              cursor: pointer;
-                              transition: all 0.2s;
-                            "
+                            class="count-btn"
+                            class:active={translationCount === count}
+                            aria-pressed={translationCount === count}
                           >
                             {count}
                           </button>
@@ -4696,40 +4671,23 @@
                       {t(appLanguage, "autoRunQuick") ||
                         "クイック翻訳の自動実行"}
                     </div>
-                    <div class="settings-card-row">
+                    <div class="settings-card-row settings-toggle-row">
                       <span
                         id="auto-run-label"
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-description"
                       >
                         {t(appLanguage, "autoRunQuickDesc") ||
                           "ショートカット呼出時に自動で翻訳を開始します"}
                       </span>
                       <button
                         onclick={() => (autoRunQuick = !autoRunQuick)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {autoRunQuick
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 99px; 
-                        position: relative; 
-                        border: none; 
-                        cursor: pointer;
-                        transition: background 0.2s;"
+                        class="toggle-switch"
+                        class:active={autoRunQuick}
                         aria-labelledby="auto-run-label"
+                        aria-checked={autoRunQuick}
+                        role="switch"
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {autoRunQuick ? '23px' : '3px'}; 
-                          transition: left 0.2s;"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                   </div>
@@ -4739,41 +4697,23 @@
                     <div class="settings-label">
                       {t(appLanguage, "showTechInfo") || "技術情報を表示"}
                     </div>
-                    <div class="settings-card-row">
+                    <div class="settings-card-row settings-toggle-row">
                       <span
                         id="tech-info-label"
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-description"
                       >
                         {t(appLanguage, "showTechInfoDesc") ||
                           "翻訳時に処理時間やトークン数を表示します"}
                       </span>
                       <button
                         onclick={() => (showTechInfo = !showTechInfo)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {showTechInfo
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 99px; 
-                        position: relative; 
-                        border: none; 
-                        cursor: pointer;
-                        transition: background 0.2s;"
+                        class="toggle-switch"
+                        class:active={showTechInfo}
                         aria-labelledby="tech-info-label"
+                        aria-checked={showTechInfo}
+                        role="switch"
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {showTechInfo ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                   </div>
@@ -4783,41 +4723,22 @@
                     <div class="settings-label">
                       {t(appLanguage, "autoStart") || "スタートアップ起動"}
                     </div>
-                    <div class="settings-card-row">
+                    <div class="settings-card-row settings-toggle-row">
                       <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-description"
                       >
                         {t(appLanguage, "autoStartDesc") ||
                           "OS 起動時にアプリを自動で起動します"}
                       </span>
                       <button
                         onclick={toggleAutoStart}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {autoStartEnabled
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 20px; 
-                        border: none;
-                        cursor: pointer;
-                        position: relative;
-                        transition: background 0.2s;
-                      "
+                        class="toggle-switch"
+                        class:active={autoStartEnabled}
                         aria-label="Toggle autostart"
+                        aria-checked={autoStartEnabled}
+                        role="switch"
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {autoStartEnabled ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                   </div>
@@ -4828,41 +4749,22 @@
                       {t(appLanguage, "startMinimized") ||
                         "起動時はメイン画面を最小化"}
                     </div>
-                    <div class="settings-card-row">
+                    <div class="settings-card-row settings-toggle-row">
                       <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-description"
                       >
                         {t(appLanguage, "startMinimizedDesc") ||
                           "起動時にメイン画面を最小化して開始します"}
                       </span>
                       <button
                         onclick={() => (startMinimized = !startMinimized)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {startMinimized
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 20px; 
-                        border: none;
-                        cursor: pointer;
-                        position: relative;
-                        transition: background 0.2s;
-                      "
+                        class="toggle-switch"
+                        class:active={startMinimized}
                         aria-label="Toggle start minimized"
+                        aria-checked={startMinimized}
+                        role="switch"
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {startMinimized ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                   </div>
@@ -4873,9 +4775,11 @@
                       <div class="settings-label">
                         {t(appLanguage, "ocrEngine")}
                       </div>
+                      <div class="settings-description">
+                        {t(appLanguage, "ocrEngineDesc")}
+                      </div>
                       <div
-                        class="settings-card-row"
-                        style="flex-direction: column; gap: 12px; align-items: flex-start;"
+                        class="settings-card-row stack"
                       >
                         <label
                           style="display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%;"
@@ -4932,6 +4836,9 @@
                     <label class="settings-label" for="quick-shortcut-input"
                       >{t(appLanguage, "quickShortcut")}</label
                     >
+                    <div class="settings-description">
+                      {t(appLanguage, "quickShortcutDesc")}
+                    </div>
                     <div class="shortcut-row">
                       <input
                         id="quick-shortcut-input"
@@ -5000,8 +4907,7 @@
                 {:else if settingsTab === "api"}
                   <!-- AI Settings Tab -->
                   <p
-                    class="settings-description"
-                    style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;"
+                    class="settings-description settings-description-lead"
                   >
                     {t(appLanguage, "aiTabDescription") ||
                       "選択したAIプロバイダーのモデルが有効になります。"}
@@ -7616,6 +7522,16 @@
     gap: 8px;
   }
 
+  .settings-description {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+
+  .settings-description-lead {
+    margin-bottom: 12px;
+  }
+
   .shortcut-row {
     display: flex;
     align-items: center;
@@ -7804,6 +7720,76 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 12px;
+  }
+
+  .settings-card-row.stack {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .settings-toggle-row {
+    align-items: center;
+  }
+
+  .settings-toggle-row .settings-description {
+    flex: 1;
+  }
+
+  .settings-button-group {
+    display: flex;
+    gap: 6px;
+  }
+
+  .count-btn {
+    width: 36px;
+    height: 28px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .count-btn.active {
+    background: #3b82f6;
+    border-color: #3b82f6;
+    color: #fff;
+  }
+
+  .toggle-switch {
+    width: 44px;
+    height: 24px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 999px;
+    position: relative;
+    border: none;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .toggle-switch.active {
+    background: #3b82f6;
+  }
+
+  .toggle-knob {
+    width: 18px;
+    height: 18px;
+    background: #fff;
+    border-radius: 50%;
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  }
+
+  .toggle-switch.active .toggle-knob {
+    left: 23px;
   }
 
   .settings-select:focus,
