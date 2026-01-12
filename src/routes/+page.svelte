@@ -3919,30 +3919,10 @@
         <div class="output-area">
           {#if !isTranslating && !inputQuery.trim() && translations.every((t) => !t.text)}
             <!-- Empty State - No Input -->
-            <div class="empty-state-container" in:fade={{ duration: 300 }}>
-              <div class="empty-state-visual">
-                <div class="empty-icon-wrapper">
-                  <svg
-                    class="empty-icon"
-                    width="48"
-                    height="48"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path d="m5 8 6 6" />
-                    <path d="m4 14 6-6 2-3" />
-                    <path d="M2 5h12" />
-                    <path d="M7 2h1" />
-                    <path d="m22 22-5-10-5 10" />
-                    <path d="M14 18h6" />
-                  </svg>
-                  <div class="empty-icon-glow"></div>
-                </div>
-              </div>
+            <div
+              class="empty-state-container horizontal"
+              in:fade={{ duration: 300 }}
+            >
               <div class="empty-state-content">
                 <h3 class="empty-title">
                   {t(appLanguage, "emptyTitle")}
@@ -3951,10 +3931,7 @@
                   {t(appLanguage, "emptyDescription")}
                 </p>
               </div>
-              <div
-                class="empty-hints"
-                style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; max-width: 300px;"
-              >
+              <div class="empty-hints vertical">
                 <div class="empty-hint">
                   <span class="hint-icon">
                     <svg
@@ -6667,6 +6644,20 @@
     text-align: center;
     gap: 24px;
     animation: fadeInScale 0.4s var(--easing-smooth);
+  }
+
+  .empty-state-container.horizontal {
+    flex-direction: row;
+    text-align: left;
+    padding: 32px 24px;
+    gap: 32px;
+  }
+
+  .empty-hints.vertical {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 0;
   }
 
   .empty-state-visual {
