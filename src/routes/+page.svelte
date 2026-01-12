@@ -79,6 +79,7 @@
   // ====== Window Fade Animation ======
   let isWindowVisible = $state(false);
   let isWindows = $state(false);
+  let isMac = $state(false);
 
   async function hideWindow() {
     isWindowVisible = false;
@@ -95,6 +96,7 @@
       // Detect OS
       if (typeof navigator !== "undefined") {
         isWindows = navigator.userAgent.includes("Windows");
+        isMac = navigator.userAgent.includes("Mac");
       }
 
       // Listen for window_shown event from Rust
@@ -3236,7 +3238,7 @@
   <main class="container" class:visible={isWindowVisible}>
     <!-- App Header -->
     <!-- App Header -->
-    <header class="app-header" data-tauri-drag-region>
+    <header class="app-header" class:mac-padding={isMac} data-tauri-drag-region>
       <div class="header-left" data-tauri-drag-region>
         <img
           src={theme === "light" ? "/icon-light.svg" : "/icon-dark.svg"}

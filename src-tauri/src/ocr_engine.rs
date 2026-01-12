@@ -6,12 +6,14 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+#[allow(dead_code)]
 pub struct PaddleOcr {
     det_session: Session,
     rec_session: Session,
     keys: Vec<String>,
 }
 
+#[allow(dead_code)]
 impl PaddleOcr {
     pub fn new<P: AsRef<Path>>(
         det_model_path: P,
@@ -31,11 +33,12 @@ impl PaddleOcr {
         let keys_file = File::open(keys_path)?;
         let reader = BufReader::new(keys_file);
         let mut keys = Vec::new();
-        keys.push("blank".to_string());
+        // keys.push("blank".to_string()); // Removed from start
         for line in reader.lines() {
             keys.push(line?);
         }
         keys.push(" ".to_string());
+        keys.push("blank".to_string()); // Added to end
 
         Ok(Self {
             det_session,
@@ -49,7 +52,9 @@ impl PaddleOcr {
         let (det_boxes, scale_x, scale_y) = self.detect(img)?;
 
         if det_boxes.is_empty() {
-            return Ok("".to_string());
+            println!("[ocr] No boxes detected, falling back to full image recognition.");
+            let text = self.recognize_line(img)?;
+            return Ok(text);
         }
 
         // Sort boxes
@@ -228,48 +233,77 @@ impl PaddleOcr {
 
     fn recognize_line(&mut self, img: &DynamicImage) -> Result<String, Box<dyn std::error::Error>> {
         let (w, h) = img.dimensions();
+        // Try height 32 (often standard for ONNX exports even if v3 says 48)
         let h_target = 48;
         let scale = h_target as f32 / h as f32;
         let mut w_target = (w as f32 * scale) as u32;
         if w_target == 0 {
             w_target = 1;
         }
+        println!(
+            "[ocr] recognize_line: resizing to {}x{}",
+            w_target, h_target
+        );
         let resized = img.resize_exact(w_target, h_target, FilterType::Triangle);
         let input_tensor = self.preprocess_rec(&resized)?;
 
         // Run Rec
-        // FIX: pass by value
         let input_value = ort::value::Tensor::from_array(input_tensor)?;
-        // FIX: remove ?
         let outputs = self.rec_session.run(ort::inputs!["x" => input_value])?;
 
-        let (shape, data) = outputs["softmax_0.tmp_0"].try_extract_tensor::<f32>()?;
+        // Get the first output tensor dynamically
+        let output_value = outputs
+            .iter()
+            .next()
+            .map(|(_name, value)| value)
+            .ok_or("No outputs found from OCR model")?;
+
+        let (shape, data) = output_value.try_extract_tensor::<f32>()?;
 
         let time_steps = shape[1] as usize;
         let num_classes = shape[2] as usize;
+        println!(
+            "[ocr] recognize_line: output shape [{}, {}, {}] vs keys.len: {}",
+            shape[0],
+            time_steps,
+            num_classes,
+            self.keys.len()
+        );
 
         let mut text = String::new();
         let mut last_idx = 0;
-        let blank = 0;
+        let blank = self.keys.len() - 1; // Blank is now the last key
+
+        // Debug: Log raw indices
+        let mut raw_indices = Vec::new();
 
         for t in 0..time_steps {
             let offset = t * num_classes;
             let step_data = &data[offset..offset + num_classes];
 
-            // Argmax
-            let (max_idx, _val) = step_data
+            // Argmax (safe)
+            let (max_idx, max_val) = step_data
                 .iter()
                 .enumerate()
-                .max_by(|(_, a): &(_, &f32), (_, b): &(_, &f32)| a.partial_cmp(b).unwrap())
-                .unwrap();
+                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(i, v)| (i, v))
+                .unwrap_or((0, &0.0));
+
+            if t < 50 {
+                // Log first 50 steps
+                raw_indices.push(format!("{}({:.2})", max_idx, max_val));
+            }
 
             if max_idx != last_idx {
                 if max_idx != blank && max_idx < self.keys.len() {
-                    text.push_str(self.keys[max_idx].as_str());
+                    let char_str = &self.keys[max_idx];
+                    text.push_str(char_str);
                 }
                 last_idx = max_idx;
             }
         }
+        println!("[ocr] Raw indices (first 50): {:?}", raw_indices);
+        println!("[ocr] recognize_line result: '{}'", text);
         Ok(text)
     }
 
@@ -316,6 +350,7 @@ impl PaddleOcr {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 struct Rect {
     x: u32,
     y: u32,

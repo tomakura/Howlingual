@@ -100,6 +100,7 @@ impl Default for OcrOriginState {
     }
 }
 
+#[allow(dead_code)]
 struct PaddleOcrState(Mutex<Option<PaddleOcr>>);
 
 impl Default for PaddleOcrState {
@@ -576,15 +577,15 @@ fn ensure_capture_window(
 ) -> tauri::Result<tauri::WebviewWindow> {
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.hide();
-        let _ = window.show();
-        let _ = window.set_focus();
+        // let _ = window.show();
+        // let _ = window.set_focus();
         return Ok(window);
     }
 
     tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(url.into()))
         .title("Howlingual Capture")
         .transparent(true)
-        .resizable(false)
+        .resizable(true)
         .decorations(false)
         .shadow(false)
         .maximizable(false)
@@ -592,7 +593,7 @@ fn ensure_capture_window(
         .closable(false)
         .always_on_top(true)
         .skip_taskbar(true)
-        .visible(true)
+        .visible(false)
         .build()
 }
 
@@ -936,15 +937,14 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
         let cursor_pos = get_cursor_position();
 
         for (index, monitor) in monitors.into_iter().enumerate() {
-            let mon_width = monitor.width();
-            let mon_height = monitor.height();
+            let mon_width = monitor.width().map_err(|e| e.to_string())?;
+            let mon_height = monitor.height().map_err(|e| e.to_string())?;
+            let mon_x = monitor.x().map_err(|e| e.to_string())?;
+            let mon_y = monitor.y().map_err(|e| e.to_string())?;
+
             println!(
                 "[ocr] Capturing monitor {}: {}x{} at ({},{})",
-                index,
-                mon_width,
-                mon_height,
-                monitor.x(),
-                monitor.y()
+                index, mon_width, mon_height, mon_x, mon_y
             );
 
             let image = monitor.capture_image().map_err(|e| e.to_string())?;
@@ -956,6 +956,10 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
             );
 
             let monitor_id = index.to_string();
+            // Use PHYSICAL dimensions from the captured image for the window size
+            let img_width = image.width();
+            let img_height = image.height();
+
             capture_map.insert(monitor_id.clone(), image);
 
             let label = format!("{}{}", CAPTURE_WINDOW_PREFIX, monitor_id);
@@ -965,23 +969,35 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
             // Set window to physical pixel dimensions
             // Tauri will create a window of exact physical size
             // The webview will be scaled internally based on system DPI
-            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                x: monitor.x(),
-                y: monitor.y(),
-            }));
-            let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                width: mon_width,
-                height: mon_height,
-            }));
+            if let Err(e) =
+                window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                    x: mon_x,
+                    y: mon_y,
+                }))
+            {
+                println!("[ocr] Failed to set window position: {}", e);
+            }
+
+            if let Err(e) = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                width: img_width,
+                height: img_height,
+            })) {
+                println!("[ocr] Failed to set window size: {}", e);
+            }
+
+            // SHOW the window now that it's sized correctly
+            if let Err(e) = window.show() {
+                println!("[ocr] Failed to show window: {}", e);
+            }
 
             // Focus strategy: focus the window on the monitor containing the cursor.
             // If cursor position is unavailable, focus the first monitor as a fallback.
             let should_focus = if let Some((cursor_x, cursor_y)) = cursor_pos {
                 // Check if cursor is within this monitor's bounds
-                cursor_x >= monitor.x()
-                    && cursor_x < monitor.x() + monitor.width() as i32
-                    && cursor_y >= monitor.y()
-                    && cursor_y < monitor.y() + monitor.height() as i32
+                cursor_x >= mon_x
+                    && cursor_x < mon_x + mon_width as i32
+                    && cursor_y >= mon_y
+                    && cursor_y < mon_y + mon_height as i32
             } else {
                 // Fallback: focus the first monitor if cursor position is unavailable
                 index == 0
@@ -1055,14 +1071,18 @@ async fn finish_selection_ocr(
     // Crop image
     let sub_image = image::imageops::crop_imm(&image, x_u32, y_u32, width, height).to_image();
 
+    // DEBUG: Save cropped image
+    let _ = sub_image.save("/tmp/howlingual_ocr_crop.png");
+    println!("[ocr] Saved debug crop to /tmp/howlingual_ocr_crop.png");
+
     // Do not close windows here! We need them open to show the "Processing" spinner.
     // The frontend will call cancel_selection_ocr (or close itself) after receiving the result.
 
-    #[cfg(windows)]
-    return ocr_windows(app, sub_image).await;
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    return run_ocr(app, sub_image).await;
 
-    #[cfg(not(windows))]
-    return Err("OCR implemented for Windows only (macOS pending)".into());
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return Err("OCR not supported on mobile".into());
 }
 
 #[tauri::command]
@@ -1118,25 +1138,85 @@ fn cancel_selection_ocr(app: AppHandle) {
             lock.clear();
         }
     }
+
+    // Restore original window
+    let origin = {
+        let state = app.state::<OcrOriginState>();
+        state.0.lock().map(|g| *g).unwrap_or(WindowOrigin::Main)
+    };
+    println!("[ocr] cancelled, restoring: {:?}", origin);
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    match origin {
+        WindowOrigin::Main => {
+            // For main window, just showing it is enough (we have no text to pass)
+            // We can use show_main_window directly since we don't need handover event
+            let cursor_pos = app.state::<LastCursorPos>().0.lock().ok().and_then(|g| *g);
+            let _ = show_main_window(&app, cursor_pos);
+        }
+        WindowOrigin::Compact => {
+            let cursor_pos = app.state::<LastCursorPos>().0.lock().ok().and_then(|g| *g);
+            // Pass None as text to show window without changing text
+            let _ = show_compact_window(&app, None, cursor_pos);
+        }
+    }
 }
 
-#[cfg(windows)]
-async fn ocr_windows(app: AppHandle, image: image::RgbaImage) -> Result<String, String> {
+#[cfg(target_os = "macos")]
+mod macos_ocr;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+async fn run_ocr(_app: AppHandle, image: image::RgbaImage) -> Result<String, String> {
     use image::DynamicImage;
+    let dyn_img = DynamicImage::ImageRgba8(image);
 
-    // Use PaddleOCR via ONNX
-    let state = app.state::<PaddleOcrState>();
-    let mut engine = state.0.lock().map_err(|_| "Failed to lock OCR engine")?;
-
-    if let Some(engine) = engine.as_mut() {
-        println!("[ocr] Running PaddleOCR...");
-        let dyn_img = DynamicImage::ImageRgba8(image);
-        return engine.recognize(&dyn_img).map_err(|e| e.to_string());
+    // 1. macOS Native OCR
+    #[cfg(target_os = "macos")]
+    {
+        println!("[ocr] Running macOS Native Vision OCR...");
+        return macos_ocr::perform_ocr(dyn_img);
     }
 
-    // Fallback or error if engine is not initialized
-    println!("[ocr] PaddleOCR not initialized, fallback unavailable.");
-    Err("OCR engine not initialized (check logs)".into())
+    // 2. PaddleOCR via ONNX (Windows/Linux)
+    #[cfg(not(target_os = "macos"))]
+    {
+        let state = app.state::<PaddleOcrState>();
+        let mut engine = match state.0.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                println!("[ocr] WARNING: PaddleOcrState Mutex is poisoned. Recovering...");
+                poisoned.into_inner()
+            }
+        };
+
+        if let Some(engine) = engine.as_mut() {
+            println!("[ocr] Running PaddleOCR...");
+            return engine.recognize(&dyn_img).map_err(|e| e.to_string());
+        }
+
+        println!("[ocr] PaddleOCR not initialized, fallback unavailable.");
+        Err("OCR engine not initialized (check logs)".into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGRequestScreenCaptureAccess() -> bool;
+}
+
+#[cfg(target_os = "macos")]
+fn check_screen_capture_permission() {
+    unsafe {
+        let has_access = CGPreflightScreenCaptureAccess();
+        println!("[main] Screen Capture Access Preflight: {}", has_access);
+        if !has_access {
+            println!("[main] Requesting Screen Capture Access...");
+            let requested = CGRequestScreenCaptureAccess();
+            println!("[main] Screen Capture Access Requested: {}", requested);
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1164,6 +1244,19 @@ pub fn run() {
             complete_ocr_flow
         ])
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            check_screen_capture_permission();
+
+            let _app_handle = app.handle();
+
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                // Enable native traffic lights (red/yellow/green)
+                let _ = window.set_decorations(true);
+                // Hide actual title text by setting empty string
+                let _ = window.set_title("");
+            }
+
             app.manage(ExitState::default());
             app.manage(ShortcutConfig::default());
             app.manage(PendingText::default());
@@ -1195,7 +1288,6 @@ pub fn run() {
                     println!("[ocr] Using resolved resources path: {:?}", final_res_path);
                 }
 
-                #[cfg(windows)]
                 if final_res_path.exists() {
                     let det_model = final_res_path.join("ch_PP-OCRv4_det_infer.onnx");
                     let rec_model = final_res_path.join("japan_PP-OCRv3_rec_infer.onnx");

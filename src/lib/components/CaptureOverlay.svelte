@@ -124,7 +124,15 @@
 			console.error("[Capture] OCR Failed:", e);
 			// Don't send error to main window if user cancelled
 			if (!isCancelled) {
-				// Error is logged above
+				// Prevent "reappearing" loop on error (e.g. Mac not supported yet)
+				console.log("[Capture] OCR failed, closing window.");
+				try {
+					await invoke("cancel_selection_ocr");
+				} catch (err) {
+					console.error("[Capture] Error canceling OCR:", err);
+				} finally {
+					getCurrentWindow().close();
+				}
 			}
 		} finally {
 			isProcessing = false;
