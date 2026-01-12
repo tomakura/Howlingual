@@ -3240,7 +3240,7 @@
     <!-- App Header -->
     <!-- App Header -->
     <header class="app-header" data-tauri-drag-region>
-      <div class="header-left">
+      <div class="header-left" data-tauri-drag-region>
         <img
           src={theme === "light" ? "/icon-light.svg" : "/icon-dark.svg"}
           alt="Howlingual"
