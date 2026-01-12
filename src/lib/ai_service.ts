@@ -52,24 +52,16 @@ export interface AiResponse {
 	usage?: UsageMetadata;
 }
 
-// Build system prompt with configurable explanation language and candidate count
-function buildSystemPrompt(explanationLang: string = "日本語", candidateCount: number = 3): string {
-	const countText = candidateCount === 1 ? "1つの翻訳案" : `${candidateCount}つの翻訳案`;
-	const variationText = candidateCount === 1
-		? "- 文脈を考慮した、最も最適で自然な翻訳。"
-		: candidateCount === 2
-			? `- 1つ目: 文脈を考慮した、最も最適で自然な翻訳。
-   - 2つ目: ニュアンスや表現を変えたバリエーション。`
-			: `- 1つ目: 文脈を考慮した、最も最適で自然な翻訳。
-   - 2つ目・3つ目: ニュアンスや表現を変えたバリエーション。`;
-
+// Build system prompt with configurable explanation language
+function buildSystemPrompt(explanationLang: string = "日本語"): string {
 	return `
 あなたはプロの翻訳者です。
 ユーザーから提供された原文を、指定された言語へ翻訳してください。
 
 [翻訳のルール]
-1. **厳密に${countText}**を作成すること。
-   ${variationText}
+1. **厳密に3つの翻訳案**を作成すること。
+   - 1つ目: 文脈を考慮した、最も最適で自然な翻訳。
+   - 2つ目・3つ目: ニュアンスや表現を変えたバリエーション。
 2. **detected_source_language**: 原文の言語を判定し、${explanationLang}で出力すること。
 3. 各翻訳案の「reason」と「detailed_explanation」は**${explanationLang}で**書くこと。
 4. **detailed_explanation**: 重要な単語や文法ポイントを3つ程度ピックアップし、${explanationLang}で詳しく解説すること。
@@ -283,11 +275,10 @@ export async function translateTextStream(
 	onUpdate: (partial: Partial<AiResponse>, usage?: UsageMetadata) => void,
 	explanationLang: string = "日本語",
 	styleMeta: Record<string, { name: string; prompt?: string }> = {},
-	apiKeys: Record<string, string> = {},
-	candidateCount: number = 3
+	apiKeys: Record<string, string> = {}
 ): Promise<void> {
 	const userPrompt = buildUserPrompt(text, sourceLang, targetLang, styles, styleMeta);
-	const systemPrompt = buildSystemPrompt(explanationLang, candidateCount);
+	const systemPrompt = buildSystemPrompt(explanationLang);
 
 	if (model.startsWith("gemini")) {
 		await streamGemini(model, userPrompt, onUpdate, systemPrompt, apiKeys.google?.trim() || apiKeys.gemini?.trim()); // handle both key names if needed

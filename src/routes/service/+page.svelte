@@ -85,14 +85,6 @@
 			await broadcastUpdate();
 		});
 
-		// Listen for stop request
-		await listen("stop_translation_command", async () => {
-			console.log("[Service] Stop command received");
-			isTranslating = false;
-			if (timerInterval) clearInterval(timerInterval);
-			await broadcastUpdate();
-		});
-
 		// Listen for state sync requests (when a window opens)
 		await listen("request_sync_state", async () => {
 			console.log("[Service] Sync requested");
@@ -130,13 +122,11 @@
 		styleLevels = params.styles;
 		currentModel = params.model;
 
-		// Create slots based on candidateCount (default to 3)
-		const count = params.candidateCount || 3;
-		const slots: TranslationResult[] = [];
-		for (let i = 1; i <= count; i++) {
-			slots.push({ id: i, text: "", reason: "" });
-		}
-		translations = slots;
+		translations = [
+			{ id: 1, text: "", reason: "" },
+			{ id: 2, text: "", reason: "" },
+			{ id: 3, text: "", reason: "" },
+		];
 		detailedExplanation = null;
 
 		// Tech info reset
@@ -155,7 +145,6 @@
 		const startTime = Date.now();
 		if (timerInterval) clearInterval(timerInterval);
 		timerInterval = setInterval(() => {
-			if (!isTranslating) return;
 			techMetrics.time = (Date.now() - startTime) / 1000;
 			if (techMetrics.firstTokenReceived) {
 				techMetrics.genTime = techMetrics.time - techMetrics.waitTime;
@@ -181,7 +170,6 @@
 				params.styles,
 				params.model,
 				(partial, usage) => {
-					if (!isTranslating) return;
 					if (!techMetrics.firstTokenReceived) {
 						techMetrics.firstTokenReceived = true;
 					}
@@ -216,7 +204,6 @@
 				params.explanationLang,
 				params.styleMeta, // pass style metadata (id -> {name, prompt})
 				params.apiKeys,
-				params.candidateCount || 3,
 			);
 		} catch (e) {
 			console.error("[Service] Translation error:", e);

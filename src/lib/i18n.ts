@@ -106,6 +106,11 @@ interface Translations {
 	showMore: string;
 	moreItems: string;
 	showLess: string;
+	ocrEngine: string;
+	ocrHighAccuracy: string;
+	ocrHighAccuracyDesc: string;
+	ocrFast: string;
+	ocrFastDesc: string;
 }
 
 const translations: Record<AppLanguage, Translations> = {
@@ -126,6 +131,11 @@ const translations: Record<AppLanguage, Translations> = {
 		replaceSelection: "選択文を置換",
 		moreActions: "その他の操作",
 		startOCR: "画面から文字を読み取る",
+		ocrEngine: "OCRエンジン",
+		ocrHighAccuracy: "PaddleOCR (高精度)",
+		ocrHighAccuracyDesc: "精度を最優先します。少し時間がかかる場合があります。",
+		ocrFast: "Windows標準 (高速)",
+		ocrFastDesc: "OS標準機能を使用します。非常に高速ですが、精度は劣る場合があります。",
 		explanation: "解説",
 		settingsTitle: "設定",
 		tabGeneral: "一般",
@@ -219,6 +229,11 @@ const translations: Record<AppLanguage, Translations> = {
 		replaceSelection: "Replace selection",
 		moreActions: "More actions",
 		startOCR: "Extract Text (OCR)",
+		ocrEngine: "OCR Engine",
+		ocrHighAccuracy: "PaddleOCR (High Accuracy)",
+		ocrHighAccuracyDesc: "Prioritizes accuracy. May take slightly longer.",
+		ocrFast: "Windows Standard (Fast)",
+		ocrFastDesc: "Uses OS native feature. Very fast, but may be less accurate.",
 		explanation: "Explanation",
 		settingsTitle: "Settings",
 		tabGeneral: "General",
@@ -312,6 +327,11 @@ const translations: Record<AppLanguage, Translations> = {
 		replaceSelection: "替换所选",
 		moreActions: "更多操作",
 		startOCR: "屏幕文字识别 (OCR)",
+		ocrEngine: "OCR引擎",
+		ocrHighAccuracy: "PaddleOCR (高精度)",
+		ocrHighAccuracyDesc: "优先考虑准确性。可能需要稍长时间。",
+		ocrFast: "Windows标准 (快速)",
+		ocrFastDesc: "使用系统原生功能。速度很快，但准确性可能较低。",
 		explanation: "解说",
 		settingsTitle: "设置",
 		tabGeneral: "常规",
@@ -405,6 +425,11 @@ const translations: Record<AppLanguage, Translations> = {
 		replaceSelection: "선택 문장 바꾸기",
 		moreActions: "추가 작업",
 		startOCR: "화면 문자 인식 (OCR)",
+		ocrEngine: "OCR 엔진",
+		ocrHighAccuracy: "PaddleOCR (고정밀)",
+		ocrHighAccuracyDesc: "정확도를 최우선으로 합니다. 시간이 조금 걸릴 수 있습니다.",
+		ocrFast: "Windows 표준 (고속)",
+		ocrFastDesc: "OS 표준 기능을 사용합니다. 매우 빠르지만 정확도가 떨어질 수 있습니다.",
 		explanation: "설명",
 		settingsTitle: "설정",
 		tabGeneral: "일반",

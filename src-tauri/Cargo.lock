@@ -5132,6 +5132,7 @@ dependencies = [
  "objc2-foundation 0.2.2",
  "objc2-vision",
  "ort",
+ "rayon",
  "serde",
  "serde_json",
  "tauri",

@@ -2,6 +2,7 @@ use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView};
 use ndarray::Array4;
 use ort::session::{builder::GraphOptimizationLevel, Session};
+// use rayon::prelude::*; // Reverted
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -33,12 +34,13 @@ impl PaddleOcr {
         let keys_file = File::open(keys_path)?;
         let reader = BufReader::new(keys_file);
         let mut keys = Vec::new();
-        // keys.push("blank".to_string()); // Removed from start
+        keys.push("blank".to_string()); // Index 0 = blank for Paddle v5
         for line in reader.lines() {
             keys.push(line?);
         }
-        keys.push(" ".to_string());
-        keys.push("blank".to_string()); // Added to end
+        keys.push(" ".to_string()); // Space at the end
+                                    // keys.push("blank".to_string()); // Removed from end
+        println!("[ocr_engine] Loaded dictionary: {} keys", keys.len());
 
         Ok(Self {
             det_session,
@@ -49,17 +51,15 @@ impl PaddleOcr {
 
     pub fn recognize(&mut self, img: &DynamicImage) -> Result<String, Box<dyn std::error::Error>> {
         // 1. Detection
-        let (det_boxes, scale_x, scale_y) = self.detect(img)?;
+        let (boxes, scale_x, scale_y) = self.detect(img)?;
 
-        if det_boxes.is_empty() {
-            println!("[ocr] No boxes detected, falling back to full image recognition.");
-            let text = self.recognize_line(img)?;
-            return Ok(text);
+        if boxes.is_empty() {
+            return self.recognize_line(img);
         }
 
-        // Sort boxes
-        let mut boxes = det_boxes;
-        boxes.sort_by(|a, b| {
+        // Sort boxes top-down, left-to-right
+        let mut sorted_boxes = boxes;
+        sorted_boxes.sort_by(|a, b| {
             if (a.y as i32 - b.y as i32).abs() < 10 {
                 a.x.cmp(&b.x)
             } else {
@@ -67,62 +67,34 @@ impl PaddleOcr {
             }
         });
 
-        // 2. Recognition for each box
         let mut results = Vec::new();
-        for rect in boxes {
-            // Un-scale boxes
-            let orig_x = (rect.x as f32 / scale_x) as u32;
-            let orig_y = (rect.y as f32 / scale_y) as u32;
-            let orig_w = (rect.w as f32 / scale_x) as u32;
-            let orig_h = (rect.h as f32 / scale_y) as u32;
+        let (w, h) = img.dimensions();
 
-            // Boundary checks
-            let (img_w, img_h) = img.dimensions();
-            let x = orig_x.min(img_w - 1);
-            let y = orig_y.min(img_h - 1);
-            let w = orig_w.min(img_w - x);
-            let h = orig_h.min(img_h - y);
+        for rect in sorted_boxes {
+            // Unscale and crop
+            let x = (rect.x as f32 / scale_x) as u32;
+            let y = (rect.y as f32 / scale_y) as u32;
+            let width = (rect.w as f32 / scale_x) as u32;
+            let height = (rect.h as f32 / scale_y) as u32;
 
-            if w < 5 || h < 5 {
+            let x = x.min(w - 1);
+            let y = y.min(h - 1);
+            let width = width.min(w - x);
+            let height = height.min(h - y);
+
+            if width < 5 || height < 5 {
                 continue;
             }
 
-            let crop = img.crop_imm(x, y, w, h);
-
+            let crop = img.crop_imm(x, y, width, height);
             let text = self.recognize_line(&crop)?;
-            if !text.trim().is_empty() {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
                 results.push(text);
             }
         }
 
-        // Simple join
-        let raw_text = results.join("\n");
-
-        // 日本語のスペース除去処理
-        let mut cleaned = String::with_capacity(raw_text.len());
-        let chars: Vec<char> = raw_text.chars().collect();
-        for i in 0..chars.len() {
-            let c = chars[i];
-            if c.is_whitespace() {
-                if c == '\n' {
-                    cleaned.push(c);
-                    continue;
-                }
-                let prev = if i > 0 { chars[i - 1] } else { 'a' };
-                let next = if i + 1 < chars.len() {
-                    chars[i + 1]
-                } else {
-                    'a'
-                };
-
-                if (prev as u32) > 0x2000 && (next as u32) > 0x2000 {
-                    continue;
-                }
-            }
-            cleaned.push(c);
-        }
-
-        Ok(cleaned)
+        Ok(results.join("\n"))
     }
 
     fn detect(
@@ -130,41 +102,54 @@ impl PaddleOcr {
         img: &DynamicImage,
     ) -> Result<(Vec<Rect>, f32, f32), Box<dyn std::error::Error>> {
         let (w, h) = img.dimensions();
-        let limit_side_len = 960;
+        let limit = 1600; // Balanced for performance and accuracy
         let mut ratio = 1.0;
-        if w.max(h) > limit_side_len {
-            if h > w {
-                ratio = limit_side_len as f32 / h as f32;
-            } else {
-                ratio = limit_side_len as f32 / w as f32;
-            }
+        if w.max(h) > limit {
+            ratio = limit as f32 / w.max(h) as f32;
         }
-        let mut resize_h = (h as f32 * ratio) as u32;
+
+        // Ensure strictly divisible by 32
         let mut resize_w = (w as f32 * ratio) as u32;
-        resize_h = (resize_h as i32 / 32 * 32) as u32;
-        resize_w = (resize_w as i32 / 32 * 32) as u32;
+        let mut resize_h = (h as f32 * ratio) as u32;
+        resize_w = (resize_w / 32) * 32;
+        resize_h = (resize_h / 32) * 32;
+
+        if resize_w == 0 {
+            resize_w = 32;
+        }
+        if resize_h == 0 {
+            resize_h = 32;
+        }
+
         let resized = img.resize_exact(resize_w, resize_h, FilterType::Triangle);
         let scale_x = resize_w as f32 / w as f32;
         let scale_y = resize_h as f32 / h as f32;
 
-        let input_tensor = self.preprocess_det(&resized)?;
-
-        // Run Det
-        // FIX: pass by value (move input_tensor) because OwnedTensorArrayData requires it
+        // Preprocess
+        let input_tensor = Self::preprocess_det(&resized)?;
         let input_value = ort::value::Tensor::from_array(input_tensor)?;
-        // FIX: remove ? after inputs!
         let outputs = self.det_session.run(ort::inputs!["x" => input_value])?;
 
-        let (shape, data) = outputs["sigmoid_0.tmp_0"].try_extract_tensor::<f32>()?;
+        // Output map name might vary, usually "sigmoid_0.tmp_0" or just output 0
+        let output_tensor = outputs.values().next().ok_or("No output")?;
+        let (shape, data) = output_tensor.try_extract_tensor::<f32>()?;
+        // shape: [1, 1, h, w]
         let out_h = shape[2] as usize;
         let out_w = shape[3] as usize;
 
-        let boxes = Self::find_contours(data, out_w, out_h, 0.3);
-
-        Ok((boxes, scale_x, scale_y))
+        let rects = Self::postprocess_det(data, out_w, out_h, 0.2);
+        Ok((rects, scale_x, scale_y))
     }
 
-    fn find_contours(data: &[f32], w: usize, h: usize, thresh: f32) -> Vec<Rect> {
+    fn postprocess_det(map: &[f32], w: usize, h: usize, thresh: f32) -> Vec<Rect> {
+        // Simple bitmap generation and contour finding (BFS)
+        let mut bitmap = vec![false; w * h];
+        for i in 0..map.len() {
+            if map[i] > thresh {
+                bitmap[i] = true;
+            }
+        }
+
         let mut visited = vec![false; w * h];
         let mut rects = Vec::new();
         let mut queue = std::collections::VecDeque::new();
@@ -172,148 +157,127 @@ impl PaddleOcr {
         for y in 0..h {
             for x in 0..w {
                 let idx = y * w + x;
-                if data[idx] > thresh && !visited[idx] {
-                    // BFS
+                if bitmap[idx] && !visited[idx] {
+                    // Start simplified component analysis
                     let mut min_x = x;
                     let mut max_x = x;
                     let mut min_y = y;
                     let mut max_y = y;
-
                     queue.push_back((x, y));
                     visited[idx] = true;
 
                     while let Some((cx, cy)) = queue.pop_front() {
-                        if cx < min_x {
-                            min_x = cx;
-                        }
-                        if cx > max_x {
-                            max_x = cx;
-                        }
-                        if cy < min_y {
-                            min_y = cy;
-                        }
-                        if cy > max_y {
-                            max_y = cy;
-                        }
+                        min_x = min_x.min(cx);
+                        max_x = max_x.max(cx);
+                        min_y = min_y.min(cy);
+                        max_y = max_y.max(cy);
 
-                        let neighbors = [
+                        let nbs = [
                             (cx.wrapping_sub(1), cy),
                             (cx + 1, cy),
                             (cx, cy.wrapping_sub(1)),
                             (cx, cy + 1),
                         ];
-
-                        for (nx, ny) in neighbors {
+                        for (nx, ny) in nbs {
                             if nx < w && ny < h {
-                                let n_idx = ny * w + nx;
-                                if !visited[n_idx] && data[n_idx] > thresh {
-                                    visited[n_idx] = true;
+                                let nidx = ny * w + nx;
+                                if bitmap[nidx] && !visited[nidx] {
+                                    visited[nidx] = true;
                                     queue.push_back((nx, ny));
                                 }
                             }
                         }
                     }
 
-                    let box_w = max_x - min_x + 1;
-                    let box_h = max_y - min_y + 1;
+                    if (max_x - min_x) > 3 && (max_y - min_y) > 3 {
+                        // Unclip logic
+                        let width = (max_x - min_x + 1) as f32;
+                        let height = (max_y - min_y + 1) as f32;
+                        let area = width * height;
+                        let perimeter = 2.0 * (width + height);
+                        let ratio = 1.6; // Standard unclip ratio
+                        let offset = (area * ratio) / perimeter;
 
-                    if box_w > 5 && box_h > 5 {
+                        let new_min_x = (min_x as f32 - offset).max(0.0) as u32;
+                        let new_min_y = (min_y as f32 - offset).max(0.0) as u32;
+                        let new_max_x = (max_x as f32 + offset).min((w - 1) as f32) as u32;
+                        let new_max_y = (max_y as f32 + offset).min((h - 1) as f32) as u32;
+
                         rects.push(Rect {
-                            x: min_x as u32,
-                            y: min_y as u32,
-                            w: box_w as u32,
-                            h: box_h as u32,
+                            x: new_min_x,
+                            y: new_min_y,
+                            w: new_max_x - new_min_x + 1,
+                            h: new_max_y - new_min_y + 1,
                         });
                     }
                 }
             }
         }
+        println!("[ocr_debug] Detected {} text boxes.", rects.len());
         rects
     }
 
     fn recognize_line(&mut self, img: &DynamicImage) -> Result<String, Box<dyn std::error::Error>> {
+        let h_target = 48; // PP-OCRv5 server usually uses 48
         let (w, h) = img.dimensions();
-        // Try height 32 (often standard for ONNX exports even if v3 says 48)
-        let h_target = 48;
         let scale = h_target as f32 / h as f32;
-        let mut w_target = (w as f32 * scale) as u32;
-        if w_target == 0 {
-            w_target = 1;
-        }
-        println!(
-            "[ocr] recognize_line: resizing to {}x{}",
-            w_target, h_target
-        );
+        let w_target = (w as f32 * scale) as u32;
+        let w_target = if w_target == 0 { 1 } else { w_target };
+
         let resized = img.resize_exact(w_target, h_target, FilterType::Triangle);
-        let input_tensor = self.preprocess_rec(&resized)?;
-
-        // Run Rec
+        let input_tensor = Self::preprocess_rec(&resized)?;
         let input_value = ort::value::Tensor::from_array(input_tensor)?;
+
         let outputs = self.rec_session.run(ort::inputs!["x" => input_value])?;
+        let output_tensor = outputs.values().next().ok_or("No output")?;
+        let (shape, data) = output_tensor.try_extract_tensor::<f32>()?;
 
-        // Get the first output tensor dynamically
-        let output_value = outputs
-            .iter()
-            .next()
-            .map(|(_name, value)| value)
-            .ok_or("No outputs found from OCR model")?;
-
-        let (shape, data) = output_value.try_extract_tensor::<f32>()?;
-
+        // shape: [batch, time_steps, num_classes]
         let time_steps = shape[1] as usize;
         let num_classes = shape[2] as usize;
-        println!(
-            "[ocr] recognize_line: output shape [{}, {}, {}] vs keys.len: {}",
-            shape[0],
-            time_steps,
-            num_classes,
-            self.keys.len()
-        );
 
+        // Decode CTC
         let mut text = String::new();
-        let mut last_idx = 0;
-        let blank = self.keys.len() - 1; // Blank is now the last key
+        let blank_idx = 0; // Padding is at 0 now
+        let mut last_idx = blank_idx;
 
-        // Debug: Log raw indices
+        // println!("[ocr_debug] Model num_classes: {}, Dictionary keys: {}, Blank idx: {}", num_classes, self.keys.len(), blank_idx);
+
+        // Debug raw indices
         let mut raw_indices = Vec::new();
 
         for t in 0..time_steps {
             let offset = t * num_classes;
-            let step_data = &data[offset..offset + num_classes];
+            let probs = &data[offset..offset + num_classes];
 
-            // Argmax (safe)
-            let (max_idx, max_val) = step_data
-                .iter()
-                .enumerate()
-                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(i, v)| (i, v))
-                .unwrap_or((0, &0.0));
-
-            if t < 50 {
-                // Log first 50 steps
-                raw_indices.push(format!("{}({:.2})", max_idx, max_val));
+            // Argmax
+            let mut max_idx = 0;
+            let mut max_val = -f32::INFINITY;
+            for (i, &val) in probs.iter().enumerate() {
+                if val > max_val {
+                    max_val = val;
+                    max_idx = i;
+                }
             }
+            raw_indices.push(max_idx);
 
             if max_idx != last_idx {
-                if max_idx != blank && max_idx < self.keys.len() {
-                    let char_str = &self.keys[max_idx];
-                    text.push_str(char_str);
+                if max_idx != blank_idx && max_idx < self.keys.len() {
+                    text.push_str(&self.keys[max_idx]);
                 }
                 last_idx = max_idx;
             }
         }
-        println!("[ocr] Raw indices (first 50): {:?}", raw_indices);
-        println!("[ocr] recognize_line result: '{}'", text);
+        println!("[ocr_debug] Raw indices: {:?}", raw_indices);
+        println!("[ocr_debug] Decoded text: {}", text);
         Ok(text)
     }
 
-    fn preprocess_det(
-        &self,
-        img: &DynamicImage,
-    ) -> Result<Array4<f32>, Box<dyn std::error::Error>> {
+    fn preprocess_det(img: &DynamicImage) -> Result<Array4<f32>, Box<dyn std::error::Error>> {
         let (w, h) = img.dimensions();
-        let mut array = Array4::<f32>::zeros((1, 3, h as usize, w as usize));
+        let mut arr = Array4::<f32>::zeros((1, 3, h as usize, w as usize));
 
+        // Normalize: (x/255 - mean) / std
         let mean = [0.485, 0.456, 0.406];
         let std = [0.229, 0.224, 0.225];
 
@@ -321,31 +285,27 @@ impl PaddleOcr {
             let r = (px[0] as f32 / 255.0 - mean[0]) / std[0];
             let g = (px[1] as f32 / 255.0 - mean[1]) / std[1];
             let b = (px[2] as f32 / 255.0 - mean[2]) / std[2];
-
-            array[[0, 0, y as usize, x as usize]] = r;
-            array[[0, 1, y as usize, x as usize]] = g;
-            array[[0, 2, y as usize, x as usize]] = b;
+            arr[[0, 0, y as usize, x as usize]] = r;
+            arr[[0, 1, y as usize, x as usize]] = g;
+            arr[[0, 2, y as usize, x as usize]] = b;
         }
-        Ok(array)
+        Ok(arr)
     }
 
-    fn preprocess_rec(
-        &self,
-        img: &DynamicImage,
-    ) -> Result<Array4<f32>, Box<dyn std::error::Error>> {
+    fn preprocess_rec(img: &DynamicImage) -> Result<Array4<f32>, Box<dyn std::error::Error>> {
         let (w, h) = img.dimensions();
-        let mut array = Array4::<f32>::zeros((1, 3, h as usize, w as usize));
+        let mut arr = Array4::<f32>::zeros((1, 3, h as usize, w as usize));
 
+        // Normalize: (x/255 - 0.5) / 0.5
         for (x, y, px) in img.pixels() {
             let r = (px[0] as f32 / 255.0 - 0.5) / 0.5;
             let g = (px[1] as f32 / 255.0 - 0.5) / 0.5;
             let b = (px[2] as f32 / 255.0 - 0.5) / 0.5;
-
-            array[[0, 0, y as usize, x as usize]] = r;
-            array[[0, 1, y as usize, x as usize]] = g;
-            array[[0, 2, y as usize, x as usize]] = b;
+            arr[[0, 0, y as usize, x as usize]] = r;
+            arr[[0, 1, y as usize, x as usize]] = g;
+            arr[[0, 2, y as usize, x as usize]] = b;
         }
-        Ok(array)
+        Ok(arr)
     }
 }
 

@@ -66,6 +66,7 @@
   let autoRunQuick = $state(true); // Auto-run setting - default ON for backward compatibility
   let autoStartEnabled = $state(false);
   let startMinimized = $state(false);
+  let ocrEngine = $state<"paddle" | "windows">("paddle");
 
   let historyAnimating = $state(false);
   let historyAnimTimer: ReturnType<typeof setTimeout> | null = null;
@@ -80,6 +81,20 @@
   let isWindowVisible = $state(false);
   let isWindows = $state(false);
   let isMac = $state(false);
+
+  async function toggleAutoStart() {
+    const next = !autoStartEnabled;
+    try {
+      if (next) {
+        await enableAutostart();
+      } else {
+        await disableAutostart();
+      }
+      autoStartEnabled = next;
+    } catch (e) {
+      console.warn("Failed to update autostart", e);
+    }
+  }
 
   async function hideWindow() {
     isWindowVisible = false;
@@ -347,6 +362,7 @@
             ...lastSelectedModels,
             ...parsed.lastSelectedModels,
           };
+        if (parsed.ocrEngine) ocrEngine = parsed.ocrEngine;
         if (
           parsed.translationCount &&
           [1, 2, 3].includes(parsed.translationCount)
@@ -868,11 +884,19 @@
       startMinimized: startMinimized,
       lastSelectedModels: lastSelectedModels,
       translationCount: translationCount,
+      ocrEngine: ocrEngine,
     };
     localStorage.setItem("howlingual_settings", JSON.stringify(settings));
 
     // Apply theme immediately
     document.documentElement.setAttribute("data-theme", theme);
+
+    // Sync OCR Engine to Backend (Windows only)
+    if (isWindows) {
+      invoke("set_ocr_engine", { engine: ocrEngine }).catch((e) =>
+        console.warn("Failed to set OCR engine", e),
+      );
+    }
 
     // console.log("[Settings] Auto-saved");
   });
@@ -3418,7 +3442,7 @@
     <!-- Language Selector Row - Moved outside of scroll area -->
     <div
       class="header-actions-row"
-      style="position: relative; display: flex; justify-content: center; align-items: center;"
+      style="position: relative; display: flex; justify-content: center; align-items: center; margin: 10px 0px 0px 0px;"
     >
       <!-- Clipboard / Clear Button -->
       <div style="position: absolute; left: 15px; z-index: 10;">
@@ -4767,19 +4791,7 @@
                           "OS 起動時にアプリを自動で起動します"}
                       </span>
                       <button
-                        onclick={async () => {
-                          const next = !autoStartEnabled;
-                          try {
-                            if (next) {
-                              await enableAutostart();
-                            } else {
-                              await disableAutostart();
-                            }
-                            autoStartEnabled = next;
-                          } catch (e) {
-                            console.warn("Failed to update autostart", e);
-                          }
-                        }}
+                        onclick={toggleAutoStart}
                         style="
                         width: 44px; 
                         height: 24px; 
@@ -4809,17 +4821,19 @@
                       </button>
                     </div>
                   </div>
+
+                  <!-- Start Minimized -->
                   <div class="settings-section">
                     <div class="settings-label">
                       {t(appLanguage, "startMinimized") ||
-                        "起動時にトレイに格納"}
+                        "起動時はメイン画面を最小化"}
                     </div>
                     <div class="settings-card-row">
                       <span
                         style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
                       >
                         {t(appLanguage, "startMinimizedDesc") ||
-                          "起動時にメイン画面を表示せず、タスクトレイに常駐します"}
+                          "起動時にメイン画面を最小化して開始します"}
                       </span>
                       <button
                         onclick={() => (startMinimized = !startMinimized)}
@@ -4852,6 +4866,66 @@
                       </button>
                     </div>
                   </div>
+
+                  {#if isWindows}
+                    <!-- OCR Engine -->
+                    <div class="settings-section">
+                      <div class="settings-label">
+                        {t(appLanguage, "ocrEngine")}
+                      </div>
+                      <div
+                        class="settings-card-row"
+                        style="flex-direction: column; gap: 12px; align-items: flex-start;"
+                      >
+                        <label
+                          style="display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%;"
+                        >
+                          <input
+                            type="radio"
+                            name="ocrEngine"
+                            value="paddle"
+                            bind:group={ocrEngine}
+                            style="cursor: pointer;"
+                          />
+                          <span style="flex: 1;">
+                            <div
+                              style="font-size: 14px; color: var(--text-main); font-weight: 500;"
+                            >
+                              {t(appLanguage, "ocrHighAccuracy")}
+                            </div>
+                            <div
+                              style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"
+                            >
+                              {t(appLanguage, "ocrHighAccuracyDesc")}
+                            </div>
+                          </span>
+                        </label>
+                        <label
+                          style="display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%;"
+                        >
+                          <input
+                            type="radio"
+                            name="ocrEngine"
+                            value="windows"
+                            bind:group={ocrEngine}
+                            style="cursor: pointer;"
+                          />
+                          <span style="flex: 1;">
+                            <div
+                              style="font-size: 14px; color: var(--text-main); font-weight: 500;"
+                            >
+                              {t(appLanguage, "ocrFast")}
+                            </div>
+                            <div
+                              style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"
+                            >
+                              {t(appLanguage, "ocrFastDesc")}
+                            </div>
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  {/if}
 
                   <!-- Quick Shortcut -->
                   <div class="settings-section">
