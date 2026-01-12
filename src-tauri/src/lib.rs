@@ -1052,39 +1052,57 @@ fn cancel_selection_ocr(app: AppHandle) {
 
 #[cfg(windows)]
 async fn ocr_windows(image: image::RgbaImage) -> Result<String, String> {
-    use image::GenericImageView;
-
-    let engine = OcrEngine::TryCreateFromUserProfileLanguages().map_err(|e| e.to_string())?;
-    let mut dynamic = image::DynamicImage::ImageRgba8(image);
-
-    let (width, height) = dynamic.dimensions();
-    let scale = if width < 1200 && height < 800 { 2 } else { 1 };
-    if scale > 1 {
-        dynamic = dynamic.resize(width * scale, height * scale, image::imageops::Lanczos3);
-    }
-
-    dynamic = dynamic.grayscale().adjust_contrast(1.2);
-
-    let processed = dynamic.to_rgba8();
-    let width = processed.width() as i32;
-    let height = processed.height() as i32;
-
+    use windows::Globalization::Language;
+    use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
+    use windows::Media::Ocr::OcrEngine;
     use windows::Storage::Streams::DataWriter;
+
+    // 画像処理を最小限にする（リサイズ・グレースケール・コントラスト調整を削除）
+    // 生の画像データを使用するほうが、現代の高解像度ディスプレイやOCRエンジンにとっては有利な場合が多い
+    let width = image.width() as i32;
+    let height = image.height() as i32;
+    let processed_bytes = image.into_raw();
+
+    // OCRエンジンの作成（日本語優先）
+    let engine = (|| {
+        // 1. まず日本語 ("ja-JP") で作成を試みる
+        if let Ok(lang) = Language::CreateLanguage(&windows::core::HSTRING::from("ja-JP")) {
+            if let Ok(engine) = OcrEngine::TryCreateFromLanguage(&lang) {
+                return Ok(engine);
+            }
+        }
+
+        // 2. 次に英語 ("en-US") で作成を試みる
+        if let Ok(lang) = Language::CreateLanguage(&windows::core::HSTRING::from("en-US")) {
+            if let Ok(engine) = OcrEngine::TryCreateFromLanguage(&lang) {
+                return Ok(engine);
+            }
+        }
+
+        // 3. 最後にユーザーのプロファイル言語で作成を試みる（フォールバック）
+        OcrEngine::TryCreateFromUserProfileLanguages()
+    })()
+    .map_err(|e| format!("Failed to create OCR engine: {}", e))?;
+
+    // SoftwareBitmapを作成
     let writer = DataWriter::new().map_err(|e| e.to_string())?;
-    writer.WriteBytes(&processed).map_err(|e| e.to_string())?;
+    writer
+        .WriteBytes(&processed_bytes)
+        .map_err(|e| e.to_string())?;
     let buffer = writer.DetachBuffer().map_err(|e| e.to_string())?;
 
     let bitmap =
         SoftwareBitmap::CreateCopyFromBuffer(&buffer, BitmapPixelFormat::Rgba8, width, height)
             .map_err(|e| e.to_string())?;
 
+    // OCR実行
     let result = engine
         .RecognizeAsync(&bitmap)
         .map_err(|e| e.to_string())?
-        .get() // Use blocking get() since await failed
+        .get() // awaitの代わりにblocking getを使用
         .map_err(|e| e.to_string())?;
 
-    // Iterate over lines to preserve newlines
+    // 結果の結合
     let lines = result
         .Lines()
         .map_err(|e: windows::core::Error| e.to_string())?;
@@ -1096,7 +1114,7 @@ async fn ocr_windows(image: image::RgbaImage) -> Result<String, String> {
     }
     let text = text_parts.join("\n");
 
-    // Remove spaces between Japanese characters (enhanced)
+    // 日本語のスペース除去処理（変更なし）
     let mut cleaned = String::with_capacity(text.len());
     let chars: Vec<char> = text.chars().collect();
     for i in 0..chars.len() {
