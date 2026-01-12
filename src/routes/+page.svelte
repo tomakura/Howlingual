@@ -2329,6 +2329,7 @@
           src={theme === "light" ? "/icon-light.svg" : "/icon-dark.svg"}
           alt="Howlingual"
           class="app-icon compact-icon"
+          style="width: 28px; height: 28px;"
         />
         <span class="compact-name">Howlingual</span>
       </div>
@@ -3247,6 +3248,9 @@
         />
         <h1 class="app-title">Howlingual</h1>
       </div>
+
+      <!-- Spacer that acts as the main drag handle -->
+      <div class="header-drag-spacer" data-tauri-drag-region></div>
     </header>
 
     <!-- Fixed Favorite Button - Right Edge (moved outside of header-actions-row) -->
@@ -5601,7 +5605,7 @@
 
   .compact-name {
     font-family: var(--font-display);
-    font-size: 20px;
+    font-size: 26px;
     font-weight: 600;
     letter-spacing: 0.5px;
   }
@@ -5890,6 +5894,12 @@
     gap: 4px;
     justify-content: flex-end;
     width: fit-content;
+  }
+
+  .header-drag-spacer {
+    flex: 1;
+    min-width: 40px;
+    height: 100%;
   }
 
   /* Language Selector Row - below header */
