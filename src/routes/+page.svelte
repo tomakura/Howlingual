@@ -2406,7 +2406,6 @@
             class="icon-btn compact-action-btn"
             onclick={() => (inputQuery = "")}
             title={t(appLanguage, "clearText") || "テキストをクリア"}
-            style="width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; color: var(--text-color);"
           >
             <svg
               width="16"
@@ -2435,7 +2434,6 @@
             }}
             title={t(appLanguage, "pasteFromClipboard") ||
               "クリップボードから貼り付け"}
-            style="width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; color: var(--text-color);"
           >
             <svg
               width="16"
@@ -2460,7 +2458,6 @@
           class="icon-btn compact-ocr-btn"
           onclick={startOCR}
           title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
-          style="width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; color: var(--text-color);"
         >
           <svg
             width="16"
@@ -3416,6 +3413,228 @@
       {/if}
     </div>
 
+    <!-- Language Selector Row - Moved outside of scroll area -->
+    <div
+      class="header-actions-row"
+      style="position: relative; display: flex; justify-content: center; align-items: center;"
+    >
+      <!-- Clipboard / Clear Button -->
+      <div style="position: absolute; left: 15px; z-index: 10;">
+        {#if inputQuery.trim()}
+          <button
+            class="icon-btn"
+            onclick={() => (inputQuery = "")}
+            title={t(appLanguage, "clearText") || "テキストをクリア"}
+            style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); color: var(--text-color);"
+          >
+            <!-- Close Icon -->
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        {:else}
+          <button
+            class="icon-btn"
+            onclick={async () => {
+              try {
+                const text = await navigator.clipboard.readText();
+                if (text) inputQuery = text;
+              } catch (e) {
+                console.error("Failed to read clipboard:", e);
+              }
+            }}
+            title={t(appLanguage, "pasteFromClipboard") ||
+              "クリップボードから貼り付け"}
+            style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); color: var(--text-color);"
+          >
+            <!-- Clipboard Icon -->
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path
+                d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
+              ></path>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+            </svg>
+          </button>
+        {/if}
+      </div>
+
+      <div
+        class="lang-selector-group"
+        style="display: flex; align-items: center; gap: 8px;"
+      >
+        <div class="lang-selector">
+          <button
+            class="lang-btn"
+            class:open={showSourceLangMenu}
+            disabled={isTranslating}
+            onclick={(e) => {
+              e.stopPropagation();
+              showSourceLangMenu = !showSourceLangMenu;
+              showTargetLangMenu = false;
+            }}
+          >
+            {#if isAutoDetect}
+              <svg
+                class="sparkle-icon"
+                class:is-active={isSparkling}
+                class:is-detecting={isDetecting}
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <path
+                  class="star-1"
+                  d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
+                ></path>
+                <path
+                  class="star-2"
+                  d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
+                ></path>
+                <path
+                  class="star-3"
+                  d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
+                ></path>
+              </svg>
+            {/if}
+            {#if isAutoDetect && detectedLang}
+              {detectedLang} - {t(appLanguage, "detected")}
+            {:else if isAutoDetect && isDetecting}
+              <span class="detecting-label">
+                {t(appLanguage, "detecting")}
+              </span>
+            {:else if isAutoDetect}
+              {t(appLanguage, "autoDetect")}
+            {:else}
+              {sourceLang}
+            {/if}
+            <svg
+              class="chevron-icon"
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M6 9l6 6 6-6"></path>
+            </svg>
+          </button>
+          {#if showSourceLangMenu}
+            <div
+              class="lang-menu"
+              in:fly={{ y: -5, duration: 200 }}
+              out:fade={{ duration: 150 }}
+            >
+              <button
+                class="lang-option auto-detect {isAutoDetect ? 'active' : ''}"
+                onclick={() => selectSourceLang(null)}
+              >
+                <svg
+                  class="sparkle-icon"
+                  class:is-active={isSparkling}
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                >
+                  <path
+                    class="star-1"
+                    d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
+                  ></path>
+                  <path
+                    class="star-2"
+                    d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
+                  ></path>
+                  <path
+                    class="star-3"
+                    d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
+                  ></path>
+                </svg>
+                自動検出
+              </button>
+              <div class="menu-divider"></div>
+              {#each languages as lang}
+                <button
+                  class="lang-option {!isAutoDetect && lang === sourceLang
+                    ? 'active'
+                    : ''}"
+                  onclick={() => selectSourceLang(lang)}>{lang}</button
+                >
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <svg
+          class="arrow-icon"
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path d="M5 12h14M12 5l7 7-7 7"></path>
+        </svg>
+
+        <div class="lang-selector">
+          <button
+            class="lang-btn"
+            class:open={showTargetLangMenu}
+            disabled={isTranslating}
+            onclick={(e) => {
+              e.stopPropagation();
+              showTargetLangMenu = !showTargetLangMenu;
+              showSourceLangMenu = false;
+            }}
+          >
+            {targetLang}
+            <svg
+              class="chevron-icon"
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M6 9l6 6 6-6"></path>
+            </svg>
+          </button>
+          {#if showTargetLangMenu}
+            <div
+              class="lang-menu"
+              in:fly={{ y: -5, duration: 200 }}
+              out:fade={{ duration: 150 }}
+            >
+              {#each languages as lang}
+                <button
+                  class="lang-option {lang === targetLang ? 'active' : ''}"
+                  onclick={() => selectTargetLang(lang)}>{lang}</button
+                >
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
+    </div>
+
     <!-- Unified Scroll Container -->
     <div class="scroll-wrapper" class:at-bottom={isAtBottom}>
       <section
@@ -3424,232 +3643,6 @@
         bind:this={scrollContainerEl}
         onscroll={onMainScroll}
       >
-        <!-- Language Selector Row -->
-        <div
-          class="header-actions-row"
-          style="position: relative; display: flex; justify-content: center; align-items: center;"
-        >
-          <!-- Clipboard / Clear Button -->
-          <div style="position: absolute; left: 15px; z-index: 10;">
-            {#if inputQuery.trim()}
-              <button
-                class="icon-btn"
-                onclick={() => (inputQuery = "")}
-                title={t(appLanguage, "clearText") || "テキストをクリア"}
-                style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); color: var(--text-color);"
-              >
-                <!-- Close Icon -->
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <line x1="18" y1="6" x2="6" y2="18"></line>
-                  <line x1="6" y1="6" x2="18" y2="18"></line>
-                </svg>
-              </button>
-            {:else}
-              <button
-                class="icon-btn"
-                onclick={async () => {
-                  try {
-                    const text = await navigator.clipboard.readText();
-                    if (text) inputQuery = text;
-                  } catch (e) {
-                    console.error("Failed to read clipboard:", e);
-                  }
-                }}
-                title={t(appLanguage, "pasteFromClipboard") ||
-                  "クリップボードから貼り付け"}
-                style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); color: var(--text-color);"
-              >
-                <!-- Clipboard Icon -->
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <path
-                    d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
-                  ></path>
-                  <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
-                </svg>
-              </button>
-            {/if}
-          </div>
-
-          <div
-            class="lang-selector-group"
-            style="display: flex; align-items: center; gap: 8px;"
-          >
-            <div class="lang-selector">
-              <button
-                class="lang-btn"
-                class:open={showSourceLangMenu}
-                disabled={isTranslating}
-                onclick={(e) => {
-                  e.stopPropagation();
-                  showSourceLangMenu = !showSourceLangMenu;
-                  showTargetLangMenu = false;
-                }}
-              >
-                {#if isAutoDetect}
-                  <svg
-                    class="sparkle-icon"
-                    class:is-active={isSparkling}
-                    class:is-detecting={isDetecting}
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="currentColor"
-                  >
-                    <path
-                      class="star-1"
-                      d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
-                    ></path>
-                    <path
-                      class="star-2"
-                      d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
-                    ></path>
-                    <path
-                      class="star-3"
-                      d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
-                    ></path>
-                  </svg>
-                {/if}
-                {#if isAutoDetect && detectedLang}
-                  {detectedLang} - {t(appLanguage, "detected")}
-                {:else if isAutoDetect && isDetecting}
-                  <span class="detecting-label">
-                    {t(appLanguage, "detecting")}
-                  </span>
-                {:else if isAutoDetect}
-                  {t(appLanguage, "autoDetect")}
-                {:else}
-                  {sourceLang}
-                {/if}
-                <svg
-                  class="chevron-icon"
-                  width="10"
-                  height="10"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <path d="M6 9l6 6 6-6"></path>
-                </svg>
-              </button>
-              {#if showSourceLangMenu}
-                <div
-                  class="lang-menu"
-                  in:fly={{ y: -5, duration: 200 }}
-                  out:fade={{ duration: 150 }}
-                >
-                  <button
-                    class="lang-option auto-detect {isAutoDetect
-                      ? 'active'
-                      : ''}"
-                    onclick={() => selectSourceLang(null)}
-                  >
-                    <svg
-                      class="sparkle-icon"
-                      class:is-active={isSparkling}
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="currentColor"
-                    >
-                      <path
-                        class="star-1"
-                        d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
-                      ></path>
-                      <path
-                        class="star-2"
-                        d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
-                      ></path>
-                      <path
-                        class="star-3"
-                        d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
-                      ></path>
-                    </svg>
-                    自動検出
-                  </button>
-                  <div class="menu-divider"></div>
-                  {#each languages as lang}
-                    <button
-                      class="lang-option {!isAutoDetect && lang === sourceLang
-                        ? 'active'
-                        : ''}"
-                      onclick={() => selectSourceLang(lang)}>{lang}</button
-                    >
-                    >
-                  {/each}
-                </div>
-              {/if}
-            </div>
-
-            <svg
-              class="arrow-icon"
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path d="M5 12h14M12 5l7 7-7 7"></path>
-            </svg>
-
-            <div class="lang-selector">
-              <button
-                class="lang-btn"
-                class:open={showTargetLangMenu}
-                disabled={isTranslating}
-                onclick={(e) => {
-                  e.stopPropagation();
-                  showTargetLangMenu = !showTargetLangMenu;
-                  showSourceLangMenu = false;
-                }}
-              >
-                {targetLang}
-                <svg
-                  class="chevron-icon"
-                  width="10"
-                  height="10"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <path d="M6 9l6 6 6-6"></path>
-                </svg>
-              </button>
-              {#if showTargetLangMenu}
-                <div
-                  class="lang-menu"
-                  in:fly={{ y: -5, duration: 200 }}
-                  out:fade={{ duration: 150 }}
-                >
-                  {#each languages as lang}
-                    <button
-                      class="lang-option {lang === targetLang ? 'active' : ''}"
-                      onclick={() => selectTargetLang(lang)}>{lang}</button
-                    >
-                    >
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          </div>
-        </div>
-
         <!-- Original Text Input -->
         <div class="input-area">
           <div class="textarea-container" class:has-overflow={showFade}>
@@ -5608,6 +5601,8 @@
     font-size: 26px;
     font-weight: 600;
     letter-spacing: 0.5px;
+    color: var(--text-main);
+    background: none;
   }
 
   .compact-main-btn {
@@ -5847,6 +5842,26 @@
     gap: 10px;
   }
 
+  .compact-action-btn,
+  .compact-ocr-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-main);
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .compact-action-btn:hover,
+  .compact-ocr-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
   /* App Header & Layout */
   .app-header {
     display: flex;
@@ -5877,15 +5892,7 @@
     font-weight: 600;
     font-size: 26px;
     color: var(--text-main);
-    letter-spacing: -0.02em;
-    background: linear-gradient(
-      135deg,
-      var(--text-main) 0%,
-      var(--text-secondary) 100%
-    );
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    background: none;
   }
 
   .header-right {
@@ -5982,44 +5989,35 @@
   }
 
   .win-btn-inline {
-    width: 36px;
-    height: 28px;
-    border-radius: 6px;
-    border: none;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.06);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     transition: all 0.2s ease;
     padding: 0;
-  }
-
-  .win-btn-inline.minimize {
-    background: rgba(255, 255, 255, 0.08);
-  }
-  .win-btn-inline.maximize {
-    background: rgba(255, 255, 255, 0.08);
-  }
-  .win-btn-inline.close {
-    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.6);
   }
 
   .win-btn-inline svg {
-    opacity: 0.7;
-    transition: opacity 0.2s ease;
-    color: rgba(255, 255, 255, 0.8);
+    opacity: 1;
+    transition: all 0.2s ease;
   }
 
   .win-btn-inline:hover {
-    background: rgba(255, 255, 255, 0.15);
-  }
-
-  .win-btn-inline:hover svg {
-    opacity: 1;
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.9);
   }
 
   .win-btn-inline.close:hover {
-    background: #e85d5d;
+    background: rgba(239, 68, 68, 0.2);
+    border-color: rgba(239, 68, 68, 0.3);
+    color: #f87171;
   }
 
   .win-btn-inline:active {
@@ -8446,6 +8444,30 @@
     color: #1a1a1a;
   }
 
+  /* Ensure App Title is visible in Light Mode */
+  :global([data-theme="light"]) .app-title,
+  :global([data-theme="light"]) .compact-name {
+    color: var(--text-main);
+  }
+
+  :global([data-theme="light"]) .win-btn-inline {
+    border-color: rgba(0, 0, 0, 0.1);
+    background: rgba(0, 0, 0, 0.05);
+    color: rgba(0, 0, 0, 0.6);
+  }
+
+  :global([data-theme="light"]) .win-btn-inline:hover {
+    background: rgba(0, 0, 0, 0.1);
+    border-color: rgba(0, 0, 0, 0.2);
+    color: rgba(0, 0, 0, 0.8);
+  }
+
+  :global([data-theme="light"]) .win-btn-inline.close:hover {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.2);
+    color: #dc2626;
+  }
+
   :global([data-theme="light"]) .compact-shell {
     background: var(--bg-color);
   }
@@ -8624,10 +8646,11 @@
   }
 
   .compact-header .compact-name {
-    font-size: 11px;
-    font-weight: 500;
-    margin-left: 6px;
-    opacity: 0.8;
+    font-size: 20px;
+    font-weight: 700;
+    margin-left: 0px;
+    opacity: 1;
+    color: var(--text-main);
   }
   /* Custom Window Controls */
   .app-header {
@@ -8764,5 +8787,33 @@
   .collapse-btn:hover {
     background: rgba(255, 255, 255, 0.05);
     color: var(--text-main);
+  }
+  /* Quick Screen Light Mode Overrides */
+  :global([data-theme="light"]) .compact-close-btn {
+    border-color: rgba(0, 0, 0, 0.1);
+    background: rgba(0, 0, 0, 0.05);
+    color: rgba(0, 0, 0, 0.6);
+  }
+
+  :global([data-theme="light"]) .compact-close-btn:hover {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.2);
+    color: #dc2626;
+  }
+
+  :global([data-theme="light"]) .compact-action-btn,
+  :global([data-theme="light"]) .compact-ocr-btn {
+    background: rgba(0, 0, 0, 0.05);
+    color: rgba(0, 0, 0, 0.7);
+  }
+
+  :global([data-theme="light"]) .compact-action-btn:hover,
+  :global([data-theme="light"]) .compact-ocr-btn:hover {
+    background: rgba(0, 0, 0, 0.1);
+    color: rgba(0, 0, 0, 0.9);
+  }
+
+  :global([data-theme="light"]) .lang-btn:hover {
+    background: rgba(0, 0, 0, 0.05);
   }
 </style>
