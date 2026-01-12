@@ -118,13 +118,21 @@
 
 			// Only send result if not cancelled by user
 			if (!isCancelled) {
-				await invoke("handover_to_main", { text: result });
+				await invoke("complete_ocr_flow", { text: result });
 			}
 		} catch (e) {
 			console.error("[Capture] OCR Failed:", e);
 			// Don't send error to main window if user cancelled
 			if (!isCancelled) {
-				// Error is logged above
+				// Prevent "reappearing" loop on error (e.g. Mac not supported yet)
+				console.log("[Capture] OCR failed, closing window.");
+				try {
+					await invoke("cancel_selection_ocr");
+				} catch (err) {
+					console.error("[Capture] Error canceling OCR:", err);
+				} finally {
+					getCurrentWindow().close();
+				}
 			}
 		} finally {
 			isProcessing = false;

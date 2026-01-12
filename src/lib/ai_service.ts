@@ -281,7 +281,7 @@ export async function translateTextStream(
 	const systemPrompt = buildSystemPrompt(explanationLang);
 
 	if (model.startsWith("gemini")) {
-		await streamGemini(userPrompt, onUpdate, systemPrompt, apiKeys.google?.trim() || apiKeys.gemini?.trim()); // handle both key names if needed
+		await streamGemini(model, userPrompt, onUpdate, systemPrompt, apiKeys.google?.trim() || apiKeys.gemini?.trim()); // handle both key names if needed
 	} else if (model.startsWith("gpt") || model.startsWith("o3")) {
 		await streamOpenAI(model, userPrompt, onUpdate, systemPrompt, apiKeys.openai?.trim());
 	} else if (model.startsWith("claude")) {
@@ -292,7 +292,7 @@ export async function translateTextStream(
 }
 
 // Gemini Streaming
-async function streamGemini(prompt: string, onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void, systemPrompt: string, apiKey?: string) {
+async function streamGemini(modelName: string, prompt: string, onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void, systemPrompt: string, apiKey?: string) {
 	const genAI = getGeminiClient(apiKey);
 	// Check schema definition from previous code... assuming it's available or re-defined here
 	// For brevity re-using the logic conceptually.
@@ -318,8 +318,8 @@ async function streamGemini(prompt: string, onUpdate: (data: Partial<AiResponse>
 	} as const;
 
 	const model = genAI.getGenerativeModel({
-		model: "gemini-1.5-flash",
-		systemInstruction: SYSTEM_PROMPT,
+		model: modelName,
+		systemInstruction: systemPrompt,
 		generationConfig: {
 			responseMimeType: "application/json",
 			responseSchema: schema as any

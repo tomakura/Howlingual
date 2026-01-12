@@ -4,6 +4,7 @@
   import { flip } from "svelte/animate";
   import { quintOut } from "svelte/easing";
   import { invoke } from "@tauri-apps/api/core";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { listen, emit, TauriEvent } from "@tauri-apps/api/event";
   import {
     enable as enableAutostart,
@@ -42,13 +43,21 @@
   let defaultTargetLang = $state("日本語");
   let theme = $state<"dark" | "light">("dark");
   let appLanguage = $state<"ja" | "en" | "zh" | "ko">("ja");
+  let translationCount = $state<1 | 2 | 3>(3); // 翻訳案の個数（1〜3）
   let allowRewrite = $state(false);
   let selectedProvider = $state<"openai" | "gemini" | "anthropic">("openai");
+  // プロバイダごとの最後に選択したモデルを記憶
+  let lastSelectedModels = $state<Record<string, string>>({
+    openai: "gpt-5-mini",
+    gemini: "gemini-2.5-flash",
+    anthropic: "claude-sonnet-4.5",
+  });
   // Initialize mode synchronously from URL to prevent flash of wrong UI
   const initialParams = new URLSearchParams(window.location.search);
   const initialView = initialParams.get("view");
   let isCompactMode = $state(initialView === "compact");
   let isCaptureMode = $state(initialView === "capture");
+  let isStackExpanded = $state(false); // Controls card stack in compact mode
   const DEFAULT_SHORTCUT = "CommandOrControl+Shift+H";
   let quickShortcut = $state(DEFAULT_SHORTCUT);
   let shortcutDraft = $state(DEFAULT_SHORTCUT);
@@ -57,12 +66,89 @@
   let autoRunQuick = $state(true); // Auto-run setting - default ON for backward compatibility
   let autoStartEnabled = $state(false);
   let startMinimized = $state(false);
+  let ocrEngine = $state<"paddle" | "windows">("paddle");
 
   let historyAnimating = $state(false);
+  let historyAnimTimer: ReturnType<typeof setTimeout> | null = null;
   function triggerHistoryAnim() {
+    // 既存のタイマーをクリアして即座に再開可能に
+    if (historyAnimTimer) clearTimeout(historyAnimTimer);
     historyAnimating = true;
-    setTimeout(() => (historyAnimating = false), 1000);
+    historyAnimTimer = setTimeout(() => (historyAnimating = false), 400);
   }
+
+  // ====== Window Fade Animation ======
+  let isWindowVisible = $state(false);
+  let isWindows = $state(false);
+  let isMac = $state(false);
+
+  async function toggleAutoStart() {
+    const next = !autoStartEnabled;
+    try {
+      if (next) {
+        await enableAutostart();
+      } else {
+        await disableAutostart();
+      }
+      autoStartEnabled = next;
+    } catch (e) {
+      console.warn("Failed to update autostart", e);
+    }
+  }
+
+  async function hideWindow() {
+    isWindowVisible = false;
+    setTimeout(async () => {
+      await getCurrentWindow().hide();
+    }, 250); // Match CSS transition duration
+  }
+
+  onMount(() => {
+    let unlistenShown: () => void;
+    let unlistenFocus: () => void;
+
+    (async () => {
+      // Detect OS
+      if (typeof navigator !== "undefined") {
+        isWindows = navigator.userAgent.includes("Windows");
+        isMac = navigator.userAgent.includes("Mac");
+      }
+
+      // Listen for window_shown event from Rust
+      unlistenShown = await listen("window_shown", () => {
+        // Slight delay to ensure opacity:0 is applied first
+        setTimeout(() => {
+          isWindowVisible = true;
+        }, 50);
+      });
+
+      // Fallback: Show on focus if not visible
+      const win = getCurrentWindow();
+      unlistenFocus = await win.listen("tauri://focus", () => {
+        // If we get focus, make sure we are visible
+        // This handles cases where show() didn't emit window_shown or we missed it
+        if (!isWindowVisible) {
+          requestAnimationFrame(() => {
+            isWindowVisible = true;
+          });
+        }
+      });
+    })();
+
+    // Handle Escape key globally
+    const handleKeydown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        hideWindow();
+      }
+    };
+    window.addEventListener("keydown", handleKeydown);
+
+    return () => {
+      if (unlistenShown) unlistenShown();
+      if (unlistenFocus) unlistenFocus();
+      window.removeEventListener("keydown", handleKeydown);
+    };
+  });
 
   function detectLanguageSimple(text: string) {
     // ひらがな・カタカナがあれば確実に日本語
@@ -110,7 +196,7 @@
       const resizeObserver = new ResizeObserver((entries) => {
         for (const entry of entries) {
           const totalWidth = entry.contentRect.width;
-          const itemWidth = 90;
+          const itemWidth = 80; // 閾値調整: 1個分多く表示
           const buttonWidth = 50;
 
           const maxIfNoButton = Math.floor(totalWidth / itemWidth);
@@ -271,6 +357,17 @@
           autoStartEnabled = parsed.autoStartEnabled;
         if (parsed.startMinimized !== undefined)
           startMinimized = parsed.startMinimized;
+        if (parsed.lastSelectedModels)
+          lastSelectedModels = {
+            ...lastSelectedModels,
+            ...parsed.lastSelectedModels,
+          };
+        if (parsed.ocrEngine) ocrEngine = parsed.ocrEngine;
+        if (
+          parsed.translationCount &&
+          [1, 2, 3].includes(parsed.translationCount)
+        )
+          translationCount = parsed.translationCount;
 
         // Apply theme on load
         document.documentElement.setAttribute("data-theme", theme);
@@ -302,7 +399,10 @@
         const parsedLevels = JSON.parse(savedStyleLevels);
         if (typeof parsedLevels === "object" && parsedLevels !== null) {
           styleLevels = normalizeStyleLevels(parsedLevels, customStyles);
-          console.log("[Settings] Loaded style levels from storage", styleLevels);
+          console.log(
+            "[Settings] Loaded style levels from storage",
+            styleLevels,
+          );
         }
       } catch (e) {
         console.warn("Failed to parse saved style levels", e);
@@ -782,11 +882,21 @@
       autoRunQuick: autoRunQuick,
       autoStartEnabled: autoStartEnabled,
       startMinimized: startMinimized,
+      lastSelectedModels: lastSelectedModels,
+      translationCount: translationCount,
+      ocrEngine: ocrEngine,
     };
     localStorage.setItem("howlingual_settings", JSON.stringify(settings));
 
     // Apply theme immediately
     document.documentElement.setAttribute("data-theme", theme);
+
+    // Sync OCR Engine to Backend (Windows only)
+    if (isWindows) {
+      invoke("set_ocr_engine", { engine: ocrEngine }).catch((e) =>
+        console.warn("Failed to set OCR engine", e),
+      );
+    }
 
     // console.log("[Settings] Auto-saved");
   });
@@ -858,47 +968,56 @@
     customStyles = getDefaultStyles(appLanguage);
     showResetConfirmation = false;
   }
-    // Auto-save style levels whenever they change (after initial load)
-    $effect(() => {
-      // Access both readiness flag and levels to make effect reactive
-      const ready = styleLevelsReady;
-      const _levels = styleLevels;
-      // Skip saving until initial onMount loading completes
-      if (!ready) return;
-      // Debounce writes to avoid excessive I/O
+  // Auto-save style levels whenever they change (after initial load)
+  $effect(() => {
+    // Access both readiness flag and levels to make effect reactive
+    const ready = styleLevelsReady;
+    const _levels = styleLevels;
+    // Skip saving until initial onMount loading completes
+    if (!ready) return;
+    // Debounce writes to avoid excessive I/O
+    if (styleLevelsSaveTimer !== null) {
+      clearTimeout(styleLevelsSaveTimer);
+      styleLevelsSaveTimer = null;
+    }
+    styleLevelsSaveTimer = window.setTimeout(() => {
+      persistStyleLevels();
+      console.log("[Settings] Auto-saved style levels");
+      styleLevelsSaveTimer = null;
+    }, 100);
+    return () => {
       if (styleLevelsSaveTimer !== null) {
         clearTimeout(styleLevelsSaveTimer);
         styleLevelsSaveTimer = null;
       }
-      styleLevelsSaveTimer = window.setTimeout(() => {
-        persistStyleLevels();
-        console.log("[Settings] Auto-saved style levels");
-        styleLevelsSaveTimer = null;
-      }, 100);
-      return () => {
-        if (styleLevelsSaveTimer !== null) {
-          clearTimeout(styleLevelsSaveTimer);
-          styleLevelsSaveTimer = null;
-        }
-      };
-    });
+    };
+  });
 
   function selectProvider(provider: "openai" | "gemini" | "anthropic") {
+    // 現在のモデルを現在のプロバイダに保存
+    lastSelectedModels[selectedProvider] = selectedModel;
+
     selectedProvider = provider;
 
-    // Check if current model belongs to this provider
-    const currentModelObj = availableModels.find(
-      (m) => m.value === selectedModel,
-    );
-    if (currentModelObj?.provider !== provider) {
-      // Switch to first available model for this provider
-      // Ideally we could store "last used model per provider", but for now default to first
-      const defaultForProvider = availableModels.find(
-        (m) => m.provider === provider,
+    // 保存されていたモデルを復元
+    if (lastSelectedModels[provider]) {
+      // 保存されたモデルがまだ利用可能か確認
+      const savedModelExists = availableModels.some(
+        (m) =>
+          m.value === lastSelectedModels[provider] && m.provider === provider,
       );
-      if (defaultForProvider) {
-        selectedModel = defaultForProvider.value as AiModel;
+      if (savedModelExists) {
+        selectedModel = lastSelectedModels[provider] as AiModel;
+        return;
       }
+    }
+
+    // フォールバック: プロバイダの最初のモデルを選択
+    const defaultForProvider = availableModels.find(
+      (m) => m.provider === provider,
+    );
+    if (defaultForProvider) {
+      selectedModel = defaultForProvider.value as AiModel;
     }
   }
 
@@ -1099,7 +1218,8 @@
     try {
       console.log("[UI] Starting OCR selection...");
       isWaitingForOCR = true;
-      await invoke("start_selection_ocr");
+      const origin = isCompactMode ? "compact" : "main";
+      await invoke("start_selection_ocr", { origin });
     } catch (e) {
       console.error("[UI] OCR trigger failed:", e);
       errorMessage = "OCR Error: " + String(e);
@@ -1219,6 +1339,7 @@
       isReal: false,
       firstTokenReceived: false,
     };
+    isStackExpanded = false; // Reset stack state
 
     await tick();
 
@@ -1495,16 +1616,18 @@
 
   // Button animation states (to prevent animation interruption on hover end)
   let settingsAnimating = $state(false);
+  let settingsAnimTimer: ReturnType<typeof setTimeout> | null = null;
   let speakAnimating: Record<number, boolean> = $state({});
   let copyAnimating: Record<number, boolean> = $state({});
   let isSpeakingId: number | null = $state(null);
 
   function triggerSettingsAnim() {
-    if (settingsAnimating) return;
+    // 既存のタイマーをクリアして即座に再開可能に
+    if (settingsAnimTimer) clearTimeout(settingsAnimTimer);
     settingsAnimating = true;
-    setTimeout(() => {
+    settingsAnimTimer = setTimeout(() => {
       settingsAnimating = false;
-    }, 1000);
+    }, 400);
   }
 
   function handleSpeak(id: number, text: string, lang: string) {
@@ -1737,18 +1860,18 @@
 
     // Auto-scroll logic: detect if user scrolled up
     if (isTranslating) {
-      const isNearBottom = scrollHeight - scrollTop - clientHeight < 50;
-      // Use smaller threshold for compact mode (smaller scroll area)
-      const scrollUpThreshold = isCompactMode ? 3 : 10;
-      const scrollDownThreshold = isCompactMode ? 2 : 5;
-      const scrollDelta = scrollTop - lastScrollTop;
+      // Allow slight tolerance for "bottom"
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 30;
 
-      if (scrollDelta < -scrollUpThreshold && !isNearBottom) {
-        // User scrolled up significantly, disable auto-scroll
-        autoScrollEnabled = false;
-      } else if (isNearBottom && scrollDelta > scrollDownThreshold) {
-        // User explicitly scrolled down to bottom, re-enable
+      if (isNearBottom) {
+        // If user is at the bottom, force enable auto-scroll
         autoScrollEnabled = true;
+      } else {
+        // Only disable if user explicitly scrolls up away from bottom
+        const scrollDelta = scrollTop - lastScrollTop;
+        if (scrollDelta < -10) {
+          autoScrollEnabled = false;
+        }
       }
     }
     lastScrollTop = scrollTop;
@@ -2123,15 +2246,12 @@
     showExplanation = false; // Hide explanation during translation
     showSourceLangMenu = false; // Close menu if open
     showTargetLangMenu = false; // Close menu if open
-    // Clear content but keep slots
-    translations = translations.map((t) => ({ ...t, text: "", reason: "" }));
-    if (translations.length === 0) {
-      translations = [
-        { id: 1, text: "", reason: "" },
-        { id: 2, text: "", reason: "" },
-        { id: 3, text: "", reason: "" },
-      ];
+    // Clear content and set slots based on translationCount setting
+    const slots: { id: number; text: string; reason: string }[] = [];
+    for (let i = 1; i <= translationCount; i++) {
+      slots.push({ id: i, text: "", reason: "" });
     }
+    translations = slots;
     detailedExplanation = null; // Clear explanation
     errorMessage = "";
     lastStreamCharCount = 0;
@@ -2169,13 +2289,24 @@
         model: currentModel,
         explanationLang: getLanguageName(appLanguage),
         apiKeys: $state.snapshot(apiKeys),
-        // Add any other params needed
         initialTokens: Math.ceil(inputQuery.length / 1.5) + 40,
+        candidateCount: translationCount,
       });
     } catch (error) {
       console.error("Translation failed:", error);
       errorMessage = "Translation failed to start.";
       isTranslating = false;
+    }
+  }
+
+  let isHoveringTranslate = $state(false);
+
+  async function stopTranslation() {
+    isTranslating = false;
+    try {
+      await emit("stop_translation_command");
+    } catch (e) {
+      console.error("Failed to stop translation:", e);
     }
   }
 
@@ -2217,13 +2348,14 @@
 {#if isCaptureMode}
   <CaptureOverlay {appLanguage} />
 {:else if isCompactMode}
-  <main class="compact-shell">
+  <main class="compact-shell" class:visible={isWindowVisible}>
     <header class="compact-header">
       <div class="compact-brand" data-tauri-drag-region>
         <img
           src={theme === "light" ? "/icon-light.svg" : "/icon-dark.svg"}
           alt="Howlingual"
           class="app-icon compact-icon"
+          style="width: 28px; height: 28px;"
         />
         <span class="compact-name">Howlingual</span>
       </div>
@@ -2288,30 +2420,89 @@
     </header>
 
     <div class="compact-lang-row">
-      <button
-        class="icon-btn compact-ocr-btn"
+      <!-- Left Actions Group -->
+      <div
+        class="compact-left-actions"
         class:hidden={isScrolledDown}
-        onclick={startOCR}
-        title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
-        style="width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; position: absolute; left: 12px; color: var(--text-color);"
+        style="position: absolute; left: 12px; display: flex; gap: 8px; align-items: center;"
       >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
+        <!-- Paste / Clear Button -->
+        {#if inputQuery.trim()}
+          <button
+            class="icon-btn compact-action-btn"
+            onclick={() => (inputQuery = "")}
+            title={t(appLanguage, "clearText") || "テキストをクリア"}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        {:else}
+          <button
+            class="icon-btn compact-action-btn"
+            onclick={async () => {
+              try {
+                const text = await navigator.clipboard.readText();
+                if (text) inputQuery = text;
+              } catch (e) {
+                console.error("Failed to read clipboard:", e);
+              }
+            }}
+            title={t(appLanguage, "pasteFromClipboard") ||
+              "クリップボードから貼り付け"}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
+              ></path>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+            </svg>
+          </button>
+        {/if}
+
+        <!-- OCR Button -->
+        <button
+          class="icon-btn compact-ocr-btn"
+          onclick={startOCR}
+          title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
         >
-          <path d="M3 7V5a2 2 0 0 1 2-2h2" />
-          <path d="M17 3h2a2 2 0 0 1 2 2v2" />
-          <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
-          <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
-          <path d="M7 9h10v6H7z" />
-        </svg>
-      </button>
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M3 7V5a2 2 0 0 1 2-2h2" />
+            <path d="M17 3h2a2 2 0 0 1 2 2v2" />
+            <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+            <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+            <path d="M7 9h10v6H7z" />
+          </svg>
+        </button>
+      </div>
       <div class="lang-selector-group compact-lang-group">
         <div class="lang-selector">
           <button
@@ -2512,12 +2703,18 @@
               <div
                 style="flex: 1; display: flex; align-items: center; gap: 6px; overflow: hidden; height: 100%;"
               >
-                {#each customStyles.slice(0, 3) as style (style.id)}
+                {#each customStyles.slice(0, 3) as style, i (style.id)}
                   <button
                     class="style-chip"
                     data-level={styleLevels[style.id] || 0}
                     onclick={() => cycleLevel(style.id)}
                     onpointerdown={(e) => handleDrag(style.id, e)}
+                    in:fly={{
+                      y: 10,
+                      duration: 250,
+                      delay: isWindowVisible ? i * 50 : 0,
+                      easing: quintOut,
+                    }}
                   >
                     <span
                       class="chip-fill"
@@ -2554,8 +2751,7 @@
                         >
                           <span
                             class="dropdown-item-fill"
-                            style="width: {(styleLevels[style.id] || 0) *
-                              50}%"
+                            style="width: {(styleLevels[style.id] || 0) * 50}%"
                           ></span>
                           <div class="dropdown-item-content">
                             <span>{style.name}</span>
@@ -2573,12 +2769,25 @@
             class="action-btn"
             class:translate-mode={!isScrolledDown}
             class:scroll-mode={isScrolledDown}
-            class:loading={isTranslating}
+            class:loading={!isScrolledDown &&
+              isTranslating &&
+              !isHoveringTranslate}
+            class:stop-mode={!isScrolledDown &&
+              isTranslating &&
+              isHoveringTranslate}
             title={isScrolledDown
               ? t(appLanguage, "scrollToTop")
-              : t(appLanguage, "translate")}
-            onclick={isScrolledDown ? scrollToTop : startTranslation}
-            disabled={!isScrolledDown && (isTranslating || !inputQuery.trim())}
+              : isTranslating
+                ? t(appLanguage, "stopTranslation") || "翻訳を停止"
+                : t(appLanguage, "translate")}
+            onclick={isScrolledDown
+              ? scrollToTop
+              : isTranslating
+                ? stopTranslation
+                : startTranslation}
+            disabled={!isScrolledDown && !isTranslating && !inputQuery.trim()}
+            onmouseenter={() => (isHoveringTranslate = true)}
+            onmouseleave={() => (isHoveringTranslate = false)}
           >
             {#if isScrolledDown}
               <svg
@@ -2593,6 +2802,18 @@
                 stroke-linejoin="round"
               >
                 <path d="m18 15-6-6-6 6" />
+              </svg>
+            {:else if isTranslating && isHoveringTranslate}
+              <svg
+                class="btn-icon"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                stroke="currentColor"
+                stroke-width="0"
+              >
+                <rect x="6" y="6" width="12" height="12" rx="2" />
               </svg>
             {:else if isTranslating}
               <span class="loading-spinner"></span>
@@ -2701,56 +2922,23 @@
 
         <!-- Translation Results -->
         <div class="output-area compact-output">
-          {#each translations as item (item.id)}
-            <div class="candidate-card" out:fade={{ duration: 200 }}>
-              <div
-                class="card-inner-content"
-                class:content-fade={isTranslating && !item.text}
-              >
-                <p class="translated-text">{item.text}</p>
-                <div class="card-footer">
-                  {#if item.reason}
-                    <p class="reason">
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        style="flex-shrink: 0; margin-top: 2px;"
-                      >
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <line x1="12" y1="16" x2="12" y2="12"></line>
-                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                      </svg>
-                      <span>{item.reason}</span>
-                    </p>
+          {#each translations as item, i (item.id)}
+            <!-- Show if expanded OR if it's the first item -->
+            {#if isCompactMode ? isStackExpanded || i === 0 : true}
+              <div class="candidate-card" out:fade={{ duration: 200 }}>
+                <div class="card-inner-content">
+                  {#if isTranslating && !item.text}
+                    <div
+                      class="skeleton-line primary"
+                      style="margin-top: 8px;"
+                    ></div>
+                    <div class="skeleton-line secondary"></div>
+                  {:else}
+                    <p class="translated-text">{item.text}</p>
                   {/if}
-                  <div class="candidate-actions" class:hide={!item.text}>
-                    <button
-                      class="icon-btn replace-btn"
-                      class:replaced={replacedId === item.id}
-                      title={t(appLanguage, "replaceSelection")}
-                      onclick={() => handleReplace(item.id, item.text)}
-                    >
-                      {#if replacedId === item.id}
-                        <svg
-                          class="check-icon"
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2.5"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                        >
-                          <polyline points="20 6 9 17 4 12"></polyline>
-                        </svg>
-                      {:else}
+                  <div class="card-footer">
+                    {#if item.reason}
+                      <p class="reason">
                         <svg
                           width="14"
                           height="14"
@@ -2760,158 +2948,225 @@
                           stroke-width="2"
                           stroke-linecap="round"
                           stroke-linejoin="round"
+                          style="flex-shrink: 0; margin-top: 2px;"
                         >
-                          <path d="M16 3l5 5-11 11H5v-5L16 3z"></path>
-                          <path d="M15 5l4 4"></path>
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="16" x2="12" y2="12"></line>
+                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
                         </svg>
-                      {/if}
-                    </button>
-                    <div class="action-menu">
+                        <span>{item.reason}</span>
+                      </p>
+                    {/if}
+                    <div class="candidate-actions" class:hide={!item.text}>
                       <button
-                        class="icon-btn action-menu-trigger"
-                        title={t(appLanguage, "moreActions")}
-                        aria-expanded={actionMenuOpenId === item.id}
-                        onclick={() => toggleActionMenu(item.id)}
+                        class="icon-btn replace-btn"
+                        class:replaced={replacedId === item.id}
+                        title={t(appLanguage, "replaceSelection")}
+                        onclick={() => handleReplace(item.id, item.text)}
                       >
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                        >
-                          <circle cx="12" cy="6" r="1.5"></circle>
-                          <circle cx="12" cy="12" r="1.5"></circle>
-                          <circle cx="12" cy="18" r="1.5"></circle>
-                        </svg>
+                        {#if replacedId === item.id}
+                          <svg
+                            class="check-icon"
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                          </svg>
+                        {:else}
+                          <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <path d="M16 3l5 5-11 11H5v-5L16 3z"></path>
+                            <path d="M15 5l4 4"></path>
+                          </svg>
+                        {/if}
                       </button>
-                      {#if actionMenuOpenId === item.id}
-                        <div
-                          class="action-menu-dropdown glass"
-                          transition:fade={{ duration: 120 }}
+                      <div class="action-menu">
+                        <button
+                          class="icon-btn action-menu-trigger"
+                          title={t(appLanguage, "moreActions")}
+                          aria-expanded={actionMenuOpenId === item.id}
+                          onclick={() => toggleActionMenu(item.id)}
                         >
-                          <button
-                            class="action-menu-item copy-item"
-                            class:animating={copyAnimating[item.id]}
-                            class:copied={copiedId === item.id}
-                            onclick={() => handleCopy(item.id, item.text)}
-                            onmouseenter={() => triggerCopyAnim(item.id)}
+                          <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
                           >
-                            <span class="action-menu-icon">
-                              {#if copiedId === item.id}
-                                <svg
-                                  class="check-icon"
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2.5"
-                                  stroke-linecap="round"
-                                  stroke-linejoin="round"
-                                >
-                                  <polyline points="20 6 9 17 4 12"></polyline>
-                                </svg>
-                              {:else}
-                                <svg
-                                  class="copy-icon"
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2"
-                                >
-                                  <rect
-                                    x="9"
-                                    y="9"
-                                    width="13"
-                                    height="13"
-                                    rx="2"
-                                    ry="2"
-                                  ></rect>
-                                  <path
-                                    d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                                  ></path>
-                                </svg>
-                              {/if}
-                            </span>
-                            <span>{t(appLanguage, "copy")}</span>
-                          </button>
-                          <button
-                            class="action-menu-item speak-item"
-                            class:active={isSpeakingId === item.id}
-                            class:animating={speakAnimating[item.id]}
-                            onclick={() =>
-                              handleSpeak(item.id, item.text, targetLang)}
-                            onmouseenter={() => triggerSpeakAnim(item.id)}
+                            <circle cx="12" cy="6" r="1.5"></circle>
+                            <circle cx="12" cy="12" r="1.5"></circle>
+                            <circle cx="12" cy="18" r="1.5"></circle>
+                          </svg>
+                        </button>
+                        {#if actionMenuOpenId === item.id}
+                          <div
+                            class="action-menu-dropdown glass"
+                            transition:fade={{ duration: 120 }}
                           >
-                            <span class="action-menu-icon">
-                              {#if isSpeakingId === item.id}
-                                <svg
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="currentColor"
-                                  stroke="none"
-                                >
-                                  <rect
-                                    x="6"
-                                    y="6"
-                                    width="12"
-                                    height="12"
-                                    rx="1"
-                                  />
-                                </svg>
-                              {:else}
-                                <svg
-                                  class="speak-icon"
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2"
-                                  style="overflow: visible;"
-                                >
-                                  <polygon
-                                    points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
-                                  ></polygon>
-                                  <path
-                                    class="sound-wave wave-1"
-                                    d="M15.54 8.46a5 5 0 0 1 0 7.07"
-                                  ></path>
-                                  <path
-                                    class="sound-wave wave-2"
-                                    d="M19.07 4.93a10 10 0 0 1 0 14.14"
-                                  ></path>
-                                  <path
-                                    class="sound-wave wave-3"
-                                    d="M22.07 1.93a14 14 0 0 1 0 20.14"
-                                  ></path>
-                                </svg>
-                              {/if}
-                            </span>
-                            <span>
-                              {isSpeakingId === item.id
-                                ? t(appLanguage, "stop")
-                                : t(appLanguage, "speak")}
-                            </span>
-                          </button>
-                        </div>
-                      {/if}
+                            <button
+                              class="action-menu-item copy-item"
+                              class:animating={copyAnimating[item.id]}
+                              class:copied={copiedId === item.id}
+                              onclick={() => handleCopy(item.id, item.text)}
+                              onmouseenter={() => triggerCopyAnim(item.id)}
+                            >
+                              <span class="action-menu-icon">
+                                {#if copiedId === item.id}
+                                  <svg
+                                    class="check-icon"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.5"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                  >
+                                    <polyline points="20 6 9 17 4 12"
+                                    ></polyline>
+                                  </svg>
+                                {:else}
+                                  <svg
+                                    class="copy-icon"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                  >
+                                    <rect
+                                      x="9"
+                                      y="9"
+                                      width="13"
+                                      height="13"
+                                      rx="2"
+                                      ry="2"
+                                    ></rect>
+                                    <path
+                                      d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                                    ></path>
+                                  </svg>
+                                {/if}
+                              </span>
+                              <span>{t(appLanguage, "copy")}</span>
+                            </button>
+                            <button
+                              class="action-menu-item speak-item"
+                              class:active={isSpeakingId === item.id}
+                              class:animating={speakAnimating[item.id]}
+                              onclick={() =>
+                                handleSpeak(item.id, item.text, targetLang)}
+                              onmouseenter={() => triggerSpeakAnim(item.id)}
+                            >
+                              <span class="action-menu-icon">
+                                {#if isSpeakingId === item.id}
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="currentColor"
+                                    stroke="none"
+                                  >
+                                    <rect
+                                      x="6"
+                                      y="6"
+                                      width="12"
+                                      height="12"
+                                      rx="1"
+                                    />
+                                  </svg>
+                                {:else}
+                                  <svg
+                                    class="speak-icon"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    style="overflow: visible;"
+                                  >
+                                    <polygon
+                                      points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
+                                    ></polygon>
+                                    <path
+                                      class="sound-wave wave-1"
+                                      d="M15.54 8.46a5 5 0 0 1 0 7.07"
+                                    ></path>
+                                    <path
+                                      class="sound-wave wave-2"
+                                      d="M19.07 4.93a10 10 0 0 1 0 14.14"
+                                    ></path>
+                                    <path
+                                      class="sound-wave wave-3"
+                                      d="M22.07 1.93a14 14 0 0 1 0 20.14"
+                                    ></path>
+                                  </svg>
+                                {/if}
+                              </span>
+                              <span>
+                                {isSpeakingId === item.id
+                                  ? t(appLanguage, "stop")
+                                  : t(appLanguage, "speak")}
+                              </span>
+                            </button>
+                          </div>
+                        {/if}
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
-            </div>
+            {/if}
           {/each}
 
+          <!-- Stack Indicator -->
+          {#if isCompactMode && !isStackExpanded && (translations.filter((t) => t.text).length > 1 || (detailedExplanation && detailedExplanation.points && detailedExplanation.points.length > 0))}
+            <button
+              class="stack-indicator"
+              onclick={() => (isStackExpanded = true)}
+              title={t(appLanguage, "showMore") || "もっと見る"}
+            >
+              <div class="stack-layer layer-1"></div>
+              <div class="stack-layer layer-2"></div>
+              <span class="stack-text">
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  ><polyline points="6 9 12 15 18 9"></polyline></svg
+                >
+              </span>
+            </button>
+          {/if}
+
           <!-- Explanation -->
-          {#if detailedExplanation && detailedExplanation.points && detailedExplanation.points.length > 0}
+          {#if (!isCompactMode || isStackExpanded) && detailedExplanation && detailedExplanation.points && detailedExplanation.points.length > 0}
             <div class="explanation-card" transition:fade={{ duration: 200 }}>
               <h3>
                 <svg
@@ -3004,10 +3259,11 @@
     </div>
   </main>
 {:else}
-  <main class="container">
+  <main class="container" class:visible={isWindowVisible}>
     <!-- App Header -->
-    <header class="app-header">
-      <div class="header-left">
+    <!-- App Header -->
+    <header class="app-header" class:mac-padding={isMac} data-tauri-drag-region>
+      <div class="header-left" data-tauri-drag-region>
         <img
           src={theme === "light" ? "/icon-light.svg" : "/icon-dark.svg"}
           alt="Howlingual"
@@ -3015,10 +3271,234 @@
         />
         <h1 class="app-title">Howlingual</h1>
       </div>
+
+      <!-- Spacer that acts as the main drag handle -->
+      <div class="header-drag-spacer" data-tauri-drag-region></div>
     </header>
 
-    <!-- Language Selector Row -->
-    <div class="header-actions-row">
+    <!-- Fixed Favorite Button - Right Edge (moved outside of header-actions-row) -->
+    {#if translations.some((t) => t.text) && !isTranslating}
+      <button
+        class="save-favorite-btn-fixed"
+        class:active={isFavorited(inputQuery)}
+        class:animating={starAnimatingId === "current"}
+        onclick={() => {
+          const itemToSave = {
+            id: crypto.randomUUID(),
+            timestamp: Date.now(),
+            sourceText: inputQuery,
+            sourceLang: detectedLang || sourceLang,
+            targetLang: targetLang,
+            translations: translations.map((t) => ({
+              text: t.text,
+              reason: t.reason,
+            })),
+            detailedExplanation: detailedExplanation
+              ? $state.snapshot(detailedExplanation)
+              : undefined,
+            styleLevels: $state.snapshot(styleLevels),
+          };
+          toggleFavorite(itemToSave);
+          if (starAnimatingId === "") triggerStarAnim("current");
+        }}
+        title={t(appLanguage, "saveToFavorites") || "お気に入りに保存"}
+      >
+        <svg
+          class="save-star-icon"
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill={isFavorited(inputQuery) ? "currentColor" : "none"}
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <polygon
+            points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"
+          ></polygon>
+        </svg>
+      </button>
+    {/if}
+
+    <!-- Header Right Actions -->
+    <div class="header-right-standalone">
+      <button
+        class="icon-btn header-btn history-btn"
+        class:animating={historyAnimating}
+        title={t(appLanguage, "history")}
+        onclick={() => (showHistory = true)}
+        onmouseenter={triggerHistoryAnim}
+      >
+        <svg
+          class="history-icon"
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline class="clock-hands" points="12 6 12 12 16 14"></polyline>
+        </svg>
+      </button>
+      <button
+        class="icon-btn header-btn settings-btn"
+        class:animating={settingsAnimating}
+        title={t(appLanguage, "settings")}
+        onclick={openSettings}
+        onmouseenter={triggerSettingsAnim}
+      >
+        <svg
+          class="settings-icon"
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="3"></circle>
+          <path
+            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
+          ></path>
+        </svg>
+      </button>
+      {#if isWindows}
+        <div
+          class="window-controls-inline"
+          onpointerdown={(e) => e.stopPropagation()}
+        >
+          <button
+            class="win-btn-inline minimize"
+            onclick={() => getCurrentWindow().minimize()}
+            title="Minimize"
+          >
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="3"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              ><line x1="5" y1="12" x2="19" y2="12"></line></svg
+            >
+          </button>
+          <button
+            class="win-btn-inline maximize"
+            onclick={() => getCurrentWindow().toggleMaximize()}
+            title="Maximize"
+          >
+            <svg
+              width="8"
+              height="8"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="3"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              ><polyline points="15 3 21 3 21 9"></polyline><polyline
+                points="9 21 3 21 3 15"
+              ></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line
+                x1="3"
+                y1="21"
+                x2="10"
+                y2="14"
+              ></line></svg
+            >
+          </button>
+          <button
+            class="win-btn-inline close"
+            onclick={() => hideWindow()}
+            title="Close"
+          >
+            <svg
+              width="8"
+              height="8"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="3"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              ><line x1="18" y1="6" x2="6" y2="18"></line><line
+                x1="6"
+                y1="6"
+                x2="18"
+                y2="18"
+              ></line></svg
+            >
+          </button>
+        </div>
+      {/if}
+    </div>
+
+    <!-- Language Selector Row - Moved outside of scroll area -->
+    <div
+      class="header-actions-row"
+      style="position: relative; display: flex; justify-content: center; align-items: center; margin: 10px 0px 0px 0px;"
+    >
+      <!-- Clipboard / Clear Button -->
+      <div style="position: absolute; left: 15px; z-index: 10;">
+        {#if inputQuery.trim()}
+          <button
+            class="icon-btn"
+            onclick={() => (inputQuery = "")}
+            title={t(appLanguage, "clearText") || "テキストをクリア"}
+            style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); color: var(--text-color);"
+          >
+            <!-- Close Icon -->
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        {:else}
+          <button
+            class="icon-btn"
+            onclick={async () => {
+              try {
+                const text = await navigator.clipboard.readText();
+                if (text) inputQuery = text;
+              } catch (e) {
+                console.error("Failed to read clipboard:", e);
+              }
+            }}
+            title={t(appLanguage, "pasteFromClipboard") ||
+              "クリップボードから貼り付け"}
+            style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); color: var(--text-color);"
+          >
+            <!-- Clipboard Icon -->
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path
+                d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
+              ></path>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+            </svg>
+          </button>
+        {/if}
+      </div>
+
       <div
         class="lang-selector-group"
         style="display: flex; align-items: center; gap: 8px;"
@@ -3181,56 +3661,6 @@
       </div>
     </div>
 
-    <!-- Header Right Actions -->
-    <div class="header-right-standalone">
-      <button
-        class="icon-btn header-btn history-btn"
-        class:animating={historyAnimating}
-        title={t(appLanguage, "history")}
-        onclick={() => (showHistory = true)}
-        onmouseenter={triggerHistoryAnim}
-      >
-        <svg
-          class="history-icon"
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <circle cx="12" cy="12" r="10"></circle>
-          <polyline class="clock-hands" points="12 6 12 12 16 14"></polyline>
-        </svg>
-      </button>
-      <button
-        class="icon-btn header-btn settings-btn"
-        class:animating={settingsAnimating}
-        title={t(appLanguage, "settings")}
-        onclick={openSettings}
-        onmouseenter={triggerSettingsAnim}
-      >
-        <svg
-          class="settings-icon"
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <circle cx="12" cy="12" r="3"></circle>
-          <path
-            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
-          ></path>
-        </svg>
-      </button>
-    </div>
-
     <!-- Unified Scroll Container -->
     <div class="scroll-wrapper" class:at-bottom={isAtBottom}>
       <section
@@ -3271,14 +3701,19 @@
             <div
               style="flex: 1; display: flex; align-items: center; gap: 8px; overflow: hidden; height: 100%; mask-image: linear-gradient(to right, black 90%, transparent 100%);"
             >
-              {#each visibleStyles as style (style.id)}
+              {#each visibleStyles as style, i (style.id)}
                 <button
                   class="style-chip"
                   data-level={styleLevels[style.id] || 0}
                   onclick={() => cycleLevel(style.id)}
                   onpointerdown={(e) => handleDrag(style.id, e)}
                   animate:flip={{ duration: 300, easing: quintOut }}
-                  in:receive={{ key: style.id }}
+                  in:fly={{
+                    y: 10,
+                    duration: 250,
+                    delay: isWindowVisible ? i * 50 : 0,
+                    easing: quintOut,
+                  }}
                   out:send={{ key: style.id }}
                 >
                   <span
@@ -3314,7 +3749,10 @@
                         data-level={styleLevels[style.id] || 0}
                         onclick={() => cycleLevel(style.id)}
                         onpointerdown={(e) => handleDrag(style.id, e)}
-                        animate:flip={{ duration: 300, easing: quintOut }}
+                        animate:flip={{
+                          duration: 300,
+                          easing: quintOut,
+                        }}
                         in:receive={{ key: style.id }}
                         out:send={{ key: style.id }}
                       >
@@ -3388,12 +3826,28 @@
             class="action-btn translate-btn-animated"
             class:translate-mode={!isScrolledDown}
             class:scroll-mode={isScrolledDown}
-            class:loading={isTranslating}
+            class:loading={!isScrolledDown &&
+              isTranslating &&
+              !isHoveringTranslate}
+            class:stop-mode={!isScrolledDown &&
+              isTranslating &&
+              isHoveringTranslate}
             title={isScrolledDown
               ? t(appLanguage, "scrollToTop")
-              : t(appLanguage, "translate")}
-            onclick={isScrolledDown ? scrollToTop : startTranslation}
-            disabled={!isScrolledDown && (isTranslating || !inputQuery.trim())}
+              : isTranslating
+                ? t(appLanguage, "stopTranslation") || "翻訳を停止"
+                : t(appLanguage, "translate")}
+            onclick={isScrolledDown
+              ? scrollToTop
+              : isTranslating
+                ? stopTranslation
+                : startTranslation}
+            disabled={!isScrolledDown && !isTranslating && !inputQuery.trim()}
+            onmouseenter={() => (isHoveringTranslate = true)}
+            onmouseleave={() => (isHoveringTranslate = false)}
+            class:hidden={!isScrolledDown &&
+              !isTranslating &&
+              !inputQuery.trim()}
           >
             {#if isScrolledDown}
               <svg
@@ -3408,6 +3862,18 @@
                 stroke-linejoin="round"
               >
                 <path d="m18 15-6-6-6 6" />
+              </svg>
+            {:else if isTranslating && isHoveringTranslate}
+              <svg
+                class="btn-icon"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                stroke="currentColor"
+                stroke-width="0"
+              >
+                <rect x="6" y="6" width="12" height="12" rx="2" />
               </svg>
             {:else if isTranslating}
               <span class="loading-spinner"></span>
@@ -3468,7 +3934,10 @@
               <span class="token-row">
                 <span class="tech-label">In:</span>
                 {#if isTranslating && !techMetrics.isReal}
-                  <span class="loading-dots-inline">...</span>
+                  <div
+                    class="skeleton-line"
+                    style="width: 40px; display: inline-block; vertical-align: middle;"
+                  ></div>
                 {:else}
                   {techMetrics.inputTokens}
                 {/if}
@@ -3476,7 +3945,10 @@
               <span class="token-row">
                 <span class="tech-label">Out:</span>
                 {#if isTranslating && !techMetrics.isReal}
-                  <span class="loading-dots-inline">...</span>
+                  <div
+                    class="skeleton-line"
+                    style="width: 40px; display: inline-block; vertical-align: middle;"
+                  ></div>
                 {:else}
                   {techMetrics.outputTokens}
                 {/if}
@@ -3516,46 +3988,111 @@
 
         <!-- Translation Results -->
         <div class="output-area">
-          {#if !isTranslating && !inputQuery.trim() && translations.every(t => !t.text)}
+          {#if !isTranslating && !inputQuery.trim() && translations.every((t) => !t.text)}
             <!-- Empty State - No Input -->
-            <div class="empty-state-container" in:fade={{ duration: 300 }}>
-              <div class="empty-state-visual">
-                <div class="empty-icon-wrapper">
-                  <svg class="empty-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m5 8 6 6" />
-                    <path d="m4 14 6-6 2-3" />
-                    <path d="M2 5h12" />
-                    <path d="M7 2h1" />
-                    <path d="m22 22-5-10-5 10" />
-                    <path d="M14 18h6" />
-                  </svg>
-                  <div class="empty-icon-glow"></div>
-                </div>
-              </div>
+            <div
+              class="empty-state-container horizontal"
+              in:fade={{ duration: 300 }}
+            >
               <div class="empty-state-content">
-                <h3 class="empty-title">{t(appLanguage, 'emptyTitle')}</h3>
-                <p class="empty-description">{t(appLanguage, 'emptyDescription')}</p>
+                <h3 class="empty-title">
+                  {t(appLanguage, "emptyTitle")}
+                </h3>
+                <p class="empty-description">
+                  {t(appLanguage, "emptyDescription")}
+                </p>
               </div>
-              <div class="empty-hints">
+              <div class="empty-hints vertical">
                 <div class="empty-hint">
-                  <span class="hint-icon">⌨️</span>
-                  <span>{t(appLanguage, 'emptyHintType')}</span>
+                  <span class="hint-icon">
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      ><rect x="2" y="4" width="20" height="16" rx="2" ry="2"
+                      ></rect><line x1="6" y1="8" x2="6" y2="8"></line><line
+                        x1="10"
+                        y1="8"
+                        x2="10"
+                        y2="8"
+                      ></line><line x1="14" y1="8" x2="14" y2="8"></line><line
+                        x1="18"
+                        y1="8"
+                        x2="18"
+                        y2="8"
+                      ></line><line x1="6" y1="12" x2="6" y2="12"></line><line
+                        x1="10"
+                        y1="12"
+                        x2="10"
+                        y2="12"
+                      ></line><line x1="14" y1="12" x2="14" y2="12"></line><line
+                        x1="18"
+                        y1="12"
+                        x2="18"
+                        y2="12"
+                      ></line><line x1="6" y1="16" x2="18" y2="16"></line></svg
+                    >
+                  </span>
+                  <span>{t(appLanguage, "emptyHintType")}</span>
                 </div>
                 <div class="empty-hint">
-                  <span class="hint-icon">📋</span>
-                  <span>{t(appLanguage, 'emptyHintPaste')}</span>
+                  <span class="hint-icon">
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      ><path
+                        d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
+                      ></path><rect
+                        x="8"
+                        y="2"
+                        width="8"
+                        height="4"
+                        rx="1"
+                        ry="1"
+                      ></rect></svg
+                    >
+                  </span>
+                  <span>{t(appLanguage, "emptyHintPaste")}</span>
                 </div>
                 <div class="empty-hint">
-                  <span class="hint-icon">📷</span>
-                  <span>{t(appLanguage, 'emptyHintOcr')}</span>
+                  <span class="hint-icon">
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      ><path
+                        d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"
+                      ></path><circle cx="12" cy="13" r="4"></circle></svg
+                    >
+                  </span>
+                  <span>{t(appLanguage, "emptyHintOcr")}</span>
                 </div>
               </div>
             </div>
-          {:else if isTranslating && translations.every(t => !t.text)}
+          {:else if isTranslating && translations.every((t) => !t.text)}
             <!-- Loading State -->
             <div class="loading-state-container" in:fade={{ duration: 200 }}>
               {#each [1, 2, 3] as idx}
-                <div class="skeleton-card" style="animation-delay: {idx * 0.1}s">
+                <div
+                  class="skeleton-card"
+                  style="animation-delay: {idx * 0.1}s"
+                >
                   <div class="skeleton-line primary"></div>
                   <div class="skeleton-line secondary"></div>
                 </div>
@@ -3563,135 +4100,146 @@
             </div>
           {:else}
             {#each translations as item (item.id)}
-            <div class="candidate-card" out:fade={{ duration: 200 }}>
-              <div
-                class="card-inner-content"
-                class:content-fade={isTranslating && !item.text}
-              >
-                <p class="translated-text">{item.text}</p>
-                <div class="card-footer">
-                  {#if item.reason}
-                    <p class="reason">
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        style="flex-shrink: 0; margin-top: 2px;"
-                      >
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <line x1="12" y1="16" x2="12" y2="12"></line>
-                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                      </svg>
-                      <span>{item.reason}</span>
-                    </p>
+              <div class="candidate-card" out:fade={{ duration: 200 }}>
+                <div class="card-inner-content">
+                  {#if isTranslating && !item.text}
+                    <div
+                      class="skeleton-line primary"
+                      style="margin-top: 8px;"
+                    ></div>
+                    <div class="skeleton-line secondary"></div>
+                  {:else}
+                    <p class="translated-text">{item.text}</p>
                   {/if}
-                  <div
-                    class="candidate-actions"
-                    class:hide={!item.text}
-                    style="gap: 4px;"
-                  >
-                    <!-- Speak Button -->
-                    <button
-                      class="icon-btn"
-                      class:active={isSpeakingId === item.id}
-                      class:animating={speakAnimating[item.id]}
-                      title={isSpeakingId === item.id
-                        ? t(appLanguage, "stop")
-                        : t(appLanguage, "speak")}
-                      onclick={() =>
-                        handleSpeak(item.id, item.text, targetLang)}
-                      onmouseenter={() => triggerSpeakAnim(item.id)}
-                    >
-                      {#if isSpeakingId === item.id}
+                  <div class="card-footer">
+                    {#if item.reason}
+                      <p class="reason">
                         <svg
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="currentColor"
-                          stroke="none"
-                        >
-                          <rect x="6" y="6" width="12" height="12" rx="1" />
-                        </svg>
-                      {:else}
-                        <svg
-                          class="speak-icon"
-                          width="16"
-                          height="16"
+                          width="14"
+                          height="14"
                           viewBox="0 0 24 24"
                           fill="none"
                           stroke="currentColor"
                           stroke-width="2"
-                          style="overflow: visible;"
-                        >
-                          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
-                          ></polygon>
-                          <path
-                            class="sound-wave wave-1"
-                            d="M15.54 8.46a5 5 0 0 1 0 7.07"
-                          ></path>
-                          <path
-                            class="sound-wave wave-2"
-                            d="M19.07 4.93a10 10 0 0 1 0 14.14"
-                          ></path>
-                          <path
-                            class="sound-wave wave-3"
-                            d="M22.07 1.93a14 14 0 0 1 0 20.14"
-                          ></path>
-                        </svg>
-                      {/if}
-                    </button>
-
-                    <!-- Copy Button -->
-                    <button
-                      class="icon-btn"
-                      class:animating={copyAnimating[item.id]}
-                      class:copied={copiedId === item.id}
-                      title={t(appLanguage, "copy")}
-                      onclick={() => handleCopy(item.id, item.text)}
-                      onmouseenter={() => triggerCopyAnim(item.id)}
-                    >
-                      {#if copiedId === item.id}
-                        <svg
-                          class="check-icon"
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2.5"
                           stroke-linecap="round"
                           stroke-linejoin="round"
+                          style="flex-shrink: 0; margin-top: 2px;"
                         >
-                          <polyline points="20 6 9 17 4 12"></polyline>
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="16" x2="12" y2="12"></line>
+                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
                         </svg>
-                      {:else}
-                        <svg
-                          class="copy-icon"
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                        >
-                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"
-                          ></rect>
-                          <path
-                            d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                          ></path>
-                        </svg>
-                      {/if}
-                    </button>
+                        <span>{item.reason}</span>
+                      </p>
+                    {/if}
+                    <div
+                      class="candidate-actions"
+                      class:hide={!item.text}
+                      style="gap: 4px;"
+                    >
+                      <!-- Speak Button -->
+                      <button
+                        class="icon-btn"
+                        class:active={isSpeakingId === item.id}
+                        class:animating={speakAnimating[item.id]}
+                        title={isSpeakingId === item.id
+                          ? t(appLanguage, "stop")
+                          : t(appLanguage, "speak")}
+                        onclick={() =>
+                          handleSpeak(item.id, item.text, targetLang)}
+                        onmouseenter={() => triggerSpeakAnim(item.id)}
+                      >
+                        {#if isSpeakingId === item.id}
+                          <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="currentColor"
+                            stroke="none"
+                          >
+                            <rect x="6" y="6" width="12" height="12" rx="1" />
+                          </svg>
+                        {:else}
+                          <svg
+                            class="speak-icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            style="overflow: visible;"
+                          >
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
+                            ></polygon>
+                            <path
+                              class="sound-wave wave-1"
+                              d="M15.54 8.46a5 5 0 0 1 0 7.07"
+                            ></path>
+                            <path
+                              class="sound-wave wave-2"
+                              d="M19.07 4.93a10 10 0 0 1 0 14.14"
+                            ></path>
+                            <path
+                              class="sound-wave wave-3"
+                              d="M22.07 1.93a14 14 0 0 1 0 20.14"
+                            ></path>
+                          </svg>
+                        {/if}
+                      </button>
+
+                      <!-- Copy Button -->
+                      <button
+                        class="icon-btn"
+                        class:animating={copyAnimating[item.id]}
+                        class:copied={copiedId === item.id}
+                        title={t(appLanguage, "copy")}
+                        onclick={() => handleCopy(item.id, item.text)}
+                        onmouseenter={() => triggerCopyAnim(item.id)}
+                      >
+                        {#if copiedId === item.id}
+                          <svg
+                            class="check-icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                          </svg>
+                        {:else}
+                          <svg
+                            class="copy-icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                          >
+                            <rect
+                              x="9"
+                              y="9"
+                              width="13"
+                              height="13"
+                              rx="2"
+                              ry="2"
+                            ></rect>
+                            <path
+                              d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                            ></path>
+                          </svg>
+                        {/if}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          {/each}
+            {/each}
           {/if}
 
           <!-- Explanation -->
@@ -4099,6 +4647,49 @@
                     </div>
                   </div>
 
+                  <!-- Translation Count -->
+                  <div class="settings-section">
+                    <div class="settings-label">
+                      {t(appLanguage, "translationCount") || "翻訳案の個数"}
+                    </div>
+                    <div class="settings-card-row">
+                      <span
+                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                      >
+                        {t(appLanguage, "translationCountDesc") ||
+                          "1回の翻訳で生成する翻訳案の数"}
+                      </span>
+                      <div style="display: flex; gap: 4px;">
+                        {#each [1, 2, 3] as count}
+                          <button
+                            onclick={() =>
+                              (translationCount = count as 1 | 2 | 3)}
+                            style="
+                              width: 36px;
+                              height: 28px;
+                              background: {translationCount === count
+                              ? '#3b82f6'
+                              : 'rgba(255,255,255,0.1)'};
+                              border: 1px solid {translationCount === count
+                              ? '#3b82f6'
+                              : 'rgba(255,255,255,0.2)'};
+                              border-radius: 6px;
+                              color: {translationCount === count
+                              ? 'white'
+                              : 'var(--text-muted)'};
+                              font-size: 13px;
+                              font-weight: 500;
+                              cursor: pointer;
+                              transition: all 0.2s;
+                            "
+                          >
+                            {count}
+                          </button>
+                        {/each}
+                      </div>
+                    </div>
+                  </div>
+
                   <!-- Auto Run Quick Translate -->
                   <div class="settings-section">
                     <div class="settings-label">
@@ -4200,19 +4791,7 @@
                           "OS 起動時にアプリを自動で起動します"}
                       </span>
                       <button
-                        onclick={async () => {
-                          const next = !autoStartEnabled;
-                          try {
-                            if (next) {
-                              await enableAutostart();
-                            } else {
-                              await disableAutostart();
-                            }
-                            autoStartEnabled = next;
-                          } catch (e) {
-                            console.warn("Failed to update autostart", e);
-                          }
-                        }}
+                        onclick={toggleAutoStart}
                         style="
                         width: 44px; 
                         height: 24px; 
@@ -4242,17 +4821,19 @@
                       </button>
                     </div>
                   </div>
+
+                  <!-- Start Minimized -->
                   <div class="settings-section">
                     <div class="settings-label">
                       {t(appLanguage, "startMinimized") ||
-                        "起動時にトレイに格納"}
+                        "起動時はメイン画面を最小化"}
                     </div>
                     <div class="settings-card-row">
                       <span
                         style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
                       >
                         {t(appLanguage, "startMinimizedDesc") ||
-                          "起動時にメイン画面を表示せず、タスクトレイに常駐します"}
+                          "起動時にメイン画面を最小化して開始します"}
                       </span>
                       <button
                         onclick={() => (startMinimized = !startMinimized)}
@@ -4285,6 +4866,66 @@
                       </button>
                     </div>
                   </div>
+
+                  {#if isWindows}
+                    <!-- OCR Engine -->
+                    <div class="settings-section">
+                      <div class="settings-label">
+                        {t(appLanguage, "ocrEngine")}
+                      </div>
+                      <div
+                        class="settings-card-row"
+                        style="flex-direction: column; gap: 12px; align-items: flex-start;"
+                      >
+                        <label
+                          style="display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%;"
+                        >
+                          <input
+                            type="radio"
+                            name="ocrEngine"
+                            value="paddle"
+                            bind:group={ocrEngine}
+                            style="cursor: pointer;"
+                          />
+                          <span style="flex: 1;">
+                            <div
+                              style="font-size: 14px; color: var(--text-main); font-weight: 500;"
+                            >
+                              {t(appLanguage, "ocrHighAccuracy")}
+                            </div>
+                            <div
+                              style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"
+                            >
+                              {t(appLanguage, "ocrHighAccuracyDesc")}
+                            </div>
+                          </span>
+                        </label>
+                        <label
+                          style="display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%;"
+                        >
+                          <input
+                            type="radio"
+                            name="ocrEngine"
+                            value="windows"
+                            bind:group={ocrEngine}
+                            style="cursor: pointer;"
+                          />
+                          <span style="flex: 1;">
+                            <div
+                              style="font-size: 14px; color: var(--text-main); font-weight: 500;"
+                            >
+                              {t(appLanguage, "ocrFast")}
+                            </div>
+                            <div
+                              style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"
+                            >
+                              {t(appLanguage, "ocrFastDesc")}
+                            </div>
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  {/if}
 
                   <!-- Quick Shortcut -->
                   <div class="settings-section">
@@ -4575,8 +5216,8 @@
                     <div class="about-logo-wrapper">
                       <img
                         src={theme === "light"
-                          ? "icon-light.svg"
-                          : "icon-dark.svg"}
+                          ? "icon-full-light.svg"
+                          : "icon-full-dark.svg"}
                         alt="Howlingual Logo"
                         style="width: 100px; height: 100px; filter: drop-shadow(0 4px 12px rgba(0,0,0,0.2));"
                       />
@@ -4936,9 +5577,16 @@
   .container {
     display: flex;
     flex-direction: column;
+    width: 100%;
     height: 100vh;
     padding: 0;
     overflow: hidden;
+    opacity: 0;
+    transition: opacity 250ms ease-out;
+  }
+
+  .container.visible {
+    opacity: 1;
   }
 
   .compact-shell {
@@ -4953,6 +5601,12 @@
     background: var(--bg-color);
     position: relative;
     overflow: visible;
+    opacity: 0;
+    transition: opacity 250ms ease-out;
+  }
+
+  .compact-shell.visible {
+    opacity: 1;
   }
 
   .compact-shell::before {
@@ -5014,14 +5668,17 @@
   }
 
   .compact-icon {
-    width: 24px;
-    height: 24px;
+    width: 32px;
+    height: 32px;
   }
 
   .compact-name {
-    font-size: 18px;
+    font-family: var(--font-display);
+    font-size: 26px;
     font-weight: 600;
     letter-spacing: 0.5px;
+    color: var(--text-main);
+    background: none;
   }
 
   .compact-main-btn {
@@ -5261,6 +5918,26 @@
     gap: 10px;
   }
 
+  .compact-action-btn,
+  .compact-ocr-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-main);
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .compact-action-btn:hover,
+  .compact-ocr-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
   /* App Header & Layout */
   .app-header {
     display: flex;
@@ -5273,6 +5950,7 @@
     margin-bottom: 0px;
     position: relative;
     z-index: 200; /* Ensure dropdowns stay above main content */
+    width: 100%;
   }
 
   .header-left {
@@ -5290,11 +5968,7 @@
     font-weight: 600;
     font-size: 26px;
     color: var(--text-main);
-    letter-spacing: -0.02em;
-    background: linear-gradient(135deg, var(--text-main) 0%, var(--text-secondary) 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    background: none;
   }
 
   .header-right {
@@ -5303,6 +5977,12 @@
     gap: 4px;
     justify-content: flex-end;
     width: fit-content;
+  }
+
+  .header-drag-spacer {
+    flex: 1;
+    min-width: 40px;
+    height: 100%;
   }
 
   /* Language Selector Row - below header */
@@ -5314,6 +5994,55 @@
     padding: 0px 20px 10px 20px;
     position: relative;
     z-index: 200;
+    width: 100%;
+  }
+
+  /* Fixed Favorite Button - Right Edge */
+  .save-favorite-btn-fixed {
+    position: absolute;
+    right: 15px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--border-color);
+    background: var(--surface-color);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    z-index: 100;
+  }
+
+  .save-favorite-btn-fixed:hover {
+    background: rgba(255, 215, 0, 0.15);
+    border-color: rgba(255, 215, 0, 0.3);
+    color: #ffd700;
+  }
+
+  .save-favorite-btn-fixed.active {
+    color: #ffd700;
+    background: rgba(255, 215, 0, 0.2);
+    border-color: rgba(255, 215, 0, 0.4);
+  }
+
+  .save-favorite-btn-fixed.animating .save-star-icon {
+    animation: starPop 0.4s ease;
+  }
+
+  @keyframes starPop {
+    0% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.3);
+    }
+    100% {
+      transform: scale(1);
+    }
   }
 
   /* Header Right Standalone - positioned to the right */
@@ -5325,6 +6054,50 @@
     align-items: center;
     gap: 4px;
     z-index: 250;
+  }
+
+  /* Inline Window Controls - Windows角丸四角スタイル */
+  .window-controls-inline {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-right: 8px;
+  }
+
+  .win-btn-inline {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.06);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    padding: 0;
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .win-btn-inline svg {
+    opacity: 1;
+    transition: all 0.2s ease;
+  }
+
+  .win-btn-inline:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .win-btn-inline.close:hover {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: rgba(239, 68, 68, 0.3);
+    color: #f87171;
+  }
+
+  .win-btn-inline:active {
+    transform: scale(0.95);
   }
 
   .header-btn {
@@ -5737,8 +6510,19 @@
   .action-btn.translate-mode:disabled {
     background: rgba(99, 102, 241, 0.3);
     box-shadow: none;
-    cursor: not-allowed;
     transform: none;
+  }
+
+  /* Stop Mode (Red) */
+  .action-btn.stop-mode {
+    background: #ef4444;
+    color: #fff;
+    box-shadow: 0 4px 16px rgba(239, 68, 68, 0.25);
+  }
+
+  .action-btn.stop-mode:hover {
+    background: #dc2626;
+    box-shadow: 0 6px 24px rgba(239, 68, 68, 0.35);
   }
 
   /* Scroll-to-top mode (white) */
@@ -5862,7 +6646,7 @@
     display: flex;
     align-items: center;
     padding: 6px 14px;
-    border-radius: 20px;
+    border-radius: 8px;
     font-size: 12px;
     font-weight: 500;
     border: 1px solid var(--border-color);
@@ -5967,7 +6751,7 @@
   }
 
   .candidate-card::before {
-    content: '';
+    content: "";
     position: absolute;
     left: 0;
     top: 0;
@@ -6053,6 +6837,20 @@
     animation: fadeInScale 0.4s var(--easing-smooth);
   }
 
+  .empty-state-container.horizontal {
+    flex-direction: row;
+    text-align: left;
+    padding: 32px 24px;
+    gap: 32px;
+  }
+
+  .empty-hints.vertical {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 0;
+  }
+
   .empty-state-visual {
     position: relative;
   }
@@ -6065,7 +6863,11 @@
     width: 96px;
     height: 96px;
     border-radius: 24px;
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(34, 211, 238, 0.1));
+    background: linear-gradient(
+      135deg,
+      rgba(99, 102, 241, 0.1),
+      rgba(34, 211, 238, 0.1)
+    );
     border: 1px solid var(--border-color);
   }
 
@@ -6078,14 +6880,23 @@
   .empty-icon-glow {
     position: absolute;
     inset: -20px;
-    background: radial-gradient(circle, var(--primary-glow) 0%, transparent 70%);
+    background: radial-gradient(
+      circle,
+      var(--primary-glow) 0%,
+      transparent 70%
+    );
     opacity: 0.5;
     animation: pulse 3s ease-in-out infinite;
   }
 
   @keyframes floatSoft {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-6px); }
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-6px);
+    }
   }
 
   .empty-state-content {
@@ -6140,7 +6951,11 @@
   }
 
   :global([data-theme="light"]) .empty-icon-wrapper {
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(8, 145, 178, 0.08));
+    background: linear-gradient(
+      135deg,
+      rgba(99, 102, 241, 0.08),
+      rgba(8, 145, 178, 0.08)
+    );
   }
 
   :global([data-theme="light"]) .empty-hint {
@@ -6164,6 +6979,19 @@
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid var(--border-color);
     animation: skeletonPulse 1.5s ease-in-out infinite;
+  }
+
+  /* Staggered backgrounds for skeleton cards */
+  .skeleton-card:nth-child(1) {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .skeleton-card:nth-child(2) {
+    background: rgba(255, 255, 255, 0.05);
+    animation-delay: 0.1s;
+  }
+  .skeleton-card:nth-child(3) {
+    background: rgba(255, 255, 255, 0.03);
+    animation-delay: 0.2s;
   }
 
   .skeleton-line {
@@ -6190,8 +7018,13 @@
   }
 
   @keyframes skeletonPulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.7; }
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.7;
+    }
   }
 
   :global([data-theme="light"]) .skeleton-card {
@@ -6845,11 +7678,20 @@
     0% {
       transform: scale(1);
     }
-    40% {
+    15% {
+      transform: scale(0.6) rotate(-10deg);
+    }
+    45% {
       transform: scale(1.6) rotate(15deg);
     }
+    65% {
+      transform: scale(1.2) rotate(-8deg);
+    }
+    85% {
+      transform: scale(1.1) rotate(4deg);
+    }
     100% {
-      transform: scale(1);
+      transform: scale(1) rotate(0);
     }
   }
 
@@ -6885,7 +7727,13 @@
   }
 
   .save-favorite-btn.animating .save-star-icon {
-    animation: starPop 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    animation: starPop 0.75s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    filter: drop-shadow(0 0 6px rgba(253, 216, 53, 0.6));
+  }
+  .save-favorite-btn.animating {
+    background: rgba(255, 235, 59, 0.15);
+    border-color: rgba(255, 235, 59, 0.4);
+    box-shadow: 0 0 15px rgba(255, 235, 59, 0.2);
   }
 
   .save-label {
@@ -7672,6 +8520,30 @@
     color: #1a1a1a;
   }
 
+  /* Ensure App Title is visible in Light Mode */
+  :global([data-theme="light"]) .app-title,
+  :global([data-theme="light"]) .compact-name {
+    color: var(--text-main);
+  }
+
+  :global([data-theme="light"]) .win-btn-inline {
+    border-color: rgba(0, 0, 0, 0.1);
+    background: rgba(0, 0, 0, 0.05);
+    color: rgba(0, 0, 0, 0.6);
+  }
+
+  :global([data-theme="light"]) .win-btn-inline:hover {
+    background: rgba(0, 0, 0, 0.1);
+    border-color: rgba(0, 0, 0, 0.2);
+    color: rgba(0, 0, 0, 0.8);
+  }
+
+  :global([data-theme="light"]) .win-btn-inline.close:hover {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.2);
+    color: #dc2626;
+  }
+
   :global([data-theme="light"]) .compact-shell {
     background: var(--bg-color);
   }
@@ -7739,6 +8611,45 @@
     }
   }
 
+  /* History & Settings Button Animation */
+  .history-btn.animating svg {
+    animation: historyPulse 0.4s ease-out;
+  }
+
+  .settings-btn.animating svg {
+    animation: settingsSpin 0.4s ease-out;
+  }
+
+  @keyframes historyPulse {
+    0% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.15);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+
+  @keyframes settingsSpin {
+    0% {
+      transform: rotate(0deg);
+    }
+    100% {
+      transform: rotate(90deg);
+    }
+  }
+
+  /* Prevent logo from being dragged */
+  .about-logo-wrapper img,
+  img[alt*="Logo"],
+  img[alt*="logo"] {
+    -webkit-user-drag: none;
+    user-select: none;
+    pointer-events: none;
+  }
+
   /* OCR Button Animation */
   .ocr-btn-animated {
     position: relative;
@@ -7801,5 +8712,184 @@
         box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
       }
     }
+  }
+  /* Compact Mode Styles */
+  .compact-header .compact-icon {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    transform: translateY(0);
+  }
+
+  .compact-header .compact-name {
+    font-size: 20px;
+    font-weight: 700;
+    margin-left: 0px;
+    opacity: 1;
+    color: var(--text-main);
+  }
+  /* Custom Window Controls */
+  .app-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    padding-right: 16px;
+    height: 100%;
+  }
+
+  .window-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .win-btn {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.1s;
+    overflow: hidden;
+  }
+
+  .win-btn:hover svg {
+    opacity: 1 !important;
+  }
+
+  .win-btn.close {
+    background: #ff5f56;
+    border: 1px solid #e0443e;
+  }
+  .win-btn.minimize {
+    background: #ffbd2e;
+    border: 1px solid #dea123;
+  }
+  .win-btn.maximize {
+    background: #27c93f;
+    border: 1px solid #1aab29;
+  }
+
+  .win-btn:active {
+    filter: brightness(0.9);
+  }
+
+  /* Card Stack UI */
+  .stack-indicator {
+    width: 100%;
+    margin-top: -8px; /* Slight overlap */
+    padding: 12px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 5;
+  }
+
+  .stack-layer {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    height: 10px;
+    border-radius: 0 0 8px 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-top: none;
+    transition: all 0.2s ease;
+  }
+
+  .stack-layer.layer-1 {
+    width: 96%;
+    bottom: 6px;
+    z-index: 2;
+  }
+
+  .stack-layer.layer-2 {
+    width: 92%;
+    bottom: 0px;
+    z-index: 1;
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .stack-indicator:hover .stack-layer.layer-1 {
+    bottom: 4px;
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .stack-indicator:hover .stack-layer.layer-2 {
+    bottom: -2px;
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .stack-text {
+    position: relative;
+    z-index: 3;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: rgba(30, 30, 40, 0.8);
+    padding: 2px 8px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    backdrop-filter: blur(4px);
+  }
+
+  .collapse-btn {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 4px 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    transition: all 0.2s;
+  }
+  .collapse-btn:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-main);
+  }
+  /* Quick Screen Light Mode Overrides */
+  :global([data-theme="light"]) .compact-close-btn {
+    border-color: rgba(0, 0, 0, 0.1);
+    background: rgba(0, 0, 0, 0.05);
+    color: rgba(0, 0, 0, 0.6);
+  }
+
+  :global([data-theme="light"]) .compact-close-btn:hover {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.2);
+    color: #dc2626;
+  }
+
+  :global([data-theme="light"]) .compact-action-btn,
+  :global([data-theme="light"]) .compact-ocr-btn {
+    background: rgba(0, 0, 0, 0.05);
+    color: rgba(0, 0, 0, 0.7);
+  }
+
+  :global([data-theme="light"]) .compact-action-btn:hover,
+  :global([data-theme="light"]) .compact-ocr-btn:hover {
+    background: rgba(0, 0, 0, 0.1);
+    color: rgba(0, 0, 0, 0.9);
+  }
+
+  :global([data-theme="light"]) .lang-btn:hover {
+    background: rgba(0, 0, 0, 0.05);
   }
 </style>

@@ -99,6 +99,18 @@ interface Translations {
 	emptyHintType: string;
 	emptyHintPaste: string;
 	emptyHintOcr: string;
+	clearText: string;
+	pasteFromClipboard: string;
+	stopTranslation: string;
+	translationCountDesc: string;
+	showMore: string;
+	moreItems: string;
+	showLess: string;
+	ocrEngine: string;
+	ocrHighAccuracy: string;
+	ocrHighAccuracyDesc: string;
+	ocrFast: string;
+	ocrFastDesc: string;
 }
 
 const translations: Record<AppLanguage, Translations> = {
@@ -119,6 +131,11 @@ const translations: Record<AppLanguage, Translations> = {
 		replaceSelection: "選択文を置換",
 		moreActions: "その他の操作",
 		startOCR: "画面から文字を読み取る",
+		ocrEngine: "OCRエンジン",
+		ocrHighAccuracy: "PaddleOCR (高精度)",
+		ocrHighAccuracyDesc: "精度を最優先します。少し時間がかかる場合があります。",
+		ocrFast: "Windows標準 (高速)",
+		ocrFastDesc: "OS標準機能を使用します。非常に高速ですが、精度は劣る場合があります。",
 		explanation: "解説",
 		settingsTitle: "設定",
 		tabGeneral: "一般",
@@ -187,6 +204,13 @@ const translations: Record<AppLanguage, Translations> = {
 		emptyHintType: "テキストを直接入力",
 		emptyHintPaste: "クリップボードから貼り付け",
 		emptyHintOcr: "OCRで画面から読み取り",
+		clearText: "テキストをクリア",
+		pasteFromClipboard: "クリップボードから貼り付け",
+		stopTranslation: "翻訳を停止",
+		translationCountDesc: "一度に生成する翻訳案の数です",
+		showMore: "もっと見る",
+		moreItems: "件",
+		showLess: "折りたたむ",
 	},
 	en: {
 		settings: "Settings",
@@ -205,6 +229,11 @@ const translations: Record<AppLanguage, Translations> = {
 		replaceSelection: "Replace selection",
 		moreActions: "More actions",
 		startOCR: "Extract Text (OCR)",
+		ocrEngine: "OCR Engine",
+		ocrHighAccuracy: "PaddleOCR (High Accuracy)",
+		ocrHighAccuracyDesc: "Prioritizes accuracy. May take slightly longer.",
+		ocrFast: "Windows Standard (Fast)",
+		ocrFastDesc: "Uses OS native feature. Very fast, but may be less accurate.",
 		explanation: "Explanation",
 		settingsTitle: "Settings",
 		tabGeneral: "General",
@@ -273,6 +302,13 @@ const translations: Record<AppLanguage, Translations> = {
 		emptyHintType: "Type text directly",
 		emptyHintPaste: "Paste from clipboard",
 		emptyHintOcr: "OCR from screen",
+		clearText: "Clear text",
+		pasteFromClipboard: "Paste from clipboard",
+		stopTranslation: "Stop translation",
+		translationCountDesc: "Number of translation candidates to generate at once",
+		showMore: "Show more",
+		moreItems: "items",
+		showLess: "Show less",
 	},
 	zh: {
 		settings: "设置",
@@ -291,6 +327,11 @@ const translations: Record<AppLanguage, Translations> = {
 		replaceSelection: "替换所选",
 		moreActions: "更多操作",
 		startOCR: "屏幕文字识别 (OCR)",
+		ocrEngine: "OCR引擎",
+		ocrHighAccuracy: "PaddleOCR (高精度)",
+		ocrHighAccuracyDesc: "优先考虑准确性。可能需要稍长时间。",
+		ocrFast: "Windows标准 (快速)",
+		ocrFastDesc: "使用系统原生功能。速度很快，但准确性可能较低。",
 		explanation: "解说",
 		settingsTitle: "设置",
 		tabGeneral: "常规",
@@ -359,6 +400,13 @@ const translations: Record<AppLanguage, Translations> = {
 		emptyHintType: "直接输入文本",
 		emptyHintPaste: "从剪贴板粘贴",
 		emptyHintOcr: "通过OCR从屏幕读取",
+		clearText: "清空文本",
+		pasteFromClipboard: "从剪贴板粘贴",
+		stopTranslation: "停止翻译",
+		translationCountDesc: "一次生成的翻译候选数量",
+		showMore: "更多",
+		moreItems: "项",
+		showLess: "收起",
 	},
 	ko: {
 		settings: "설정",
@@ -377,6 +425,11 @@ const translations: Record<AppLanguage, Translations> = {
 		replaceSelection: "선택 문장 바꾸기",
 		moreActions: "추가 작업",
 		startOCR: "화면 문자 인식 (OCR)",
+		ocrEngine: "OCR 엔진",
+		ocrHighAccuracy: "PaddleOCR (고정밀)",
+		ocrHighAccuracyDesc: "정확도를 최우선으로 합니다. 시간이 조금 걸릴 수 있습니다.",
+		ocrFast: "Windows 표준 (고속)",
+		ocrFastDesc: "OS 표준 기능을 사용합니다. 매우 빠르지만 정확도가 떨어질 수 있습니다.",
 		explanation: "설명",
 		settingsTitle: "설정",
 		tabGeneral: "일반",
@@ -445,6 +498,13 @@ const translations: Record<AppLanguage, Translations> = {
 		emptyHintType: "텍스트 직접 입력",
 		emptyHintPaste: "클립보드에서 붙여넣기",
 		emptyHintOcr: "OCR로 화면에서 읽기",
+		clearText: "텍스트 지우기",
+		pasteFromClipboard: "클립보드에서 붙여넣기",
+		stopTranslation: "번역 중지",
+		translationCountDesc: "한 번에 생성할 번역 제안 수입니다",
+		showMore: "더 보기",
+		moreItems: "개",
+		showLess: "접기",
 	},
 };
 
