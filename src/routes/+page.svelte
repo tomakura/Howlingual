@@ -2219,15 +2219,12 @@
     showExplanation = false; // Hide explanation during translation
     showSourceLangMenu = false; // Close menu if open
     showTargetLangMenu = false; // Close menu if open
-    // Clear content but keep slots
-    translations = translations.map((t) => ({ ...t, text: "", reason: "" }));
-    if (translations.length === 0) {
-      translations = [
-        { id: 1, text: "", reason: "" },
-        { id: 2, text: "", reason: "" },
-        { id: 3, text: "", reason: "" },
-      ];
+    // Clear content and set slots based on translationCount setting
+    const slots: { id: number; text: string; reason: string }[] = [];
+    for (let i = 1; i <= translationCount; i++) {
+      slots.push({ id: i, text: "", reason: "" });
     }
+    translations = slots;
     detailedExplanation = null; // Clear explanation
     errorMessage = "";
     lastStreamCharCount = 0;
@@ -2265,8 +2262,8 @@
         model: currentModel,
         explanationLang: getLanguageName(appLanguage),
         apiKeys: $state.snapshot(apiKeys),
-        // Add any other params needed
         initialTokens: Math.ceil(inputQuery.length / 1.5) + 40,
+        candidateCount: translationCount,
       });
     } catch (error) {
       console.error("Translation failed:", error);
@@ -3139,14 +3136,6 @@
                   stroke-linejoin="round"
                   ><polyline points="6 9 12 15 18 9"></polyline></svg
                 >
-                {translations.filter((t) => t.text).length -
-                  1 +
-                  (detailedExplanation &&
-                  detailedExplanation.points &&
-                  detailedExplanation.points.length > 0
-                    ? 1
-                    : 0)}
-                {t(appLanguage, "moreItems") || "件"}
               </span>
             </button>
           {/if}
@@ -3257,79 +3246,6 @@
         />
         <h1 class="app-title">Howlingual</h1>
       </div>
-
-      {#if isWindows}
-        <div class="header-right" onpointerdown={(e) => e.stopPropagation()}>
-          <div class="window-controls">
-            <button
-              class="win-btn minimize"
-              onclick={() => getCurrentWindow().minimize()}
-              title="Minimize"
-            >
-              <svg
-                width="10"
-                height="10"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="4"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                style="opacity: 0; transition: opacity 0.2s; color: rgba(0,0,0,0.5);"
-                ><line x1="5" y1="12" x2="19" y2="12"></line></svg
-              >
-            </button>
-            <button
-              class="win-btn maximize"
-              onclick={() => getCurrentWindow().toggleMaximize()}
-              title="Maximize"
-            >
-              <svg
-                width="8"
-                height="8"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="4"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                style="opacity: 0; transition: opacity 0.2s; color: rgba(0,0,0,0.5);"
-                ><polyline points="15 3 21 3 21 9"></polyline><polyline
-                  points="9 21 3 21 3 15"
-                ></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line
-                  x1="3"
-                  y1="21"
-                  x2="10"
-                  y2="14"
-                ></line></svg
-              >
-            </button>
-            <button
-              class="win-btn close"
-              onclick={() => hideWindow()}
-              title="Close"
-            >
-              <svg
-                width="8"
-                height="8"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="4"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                style="opacity: 0; transition: opacity 0.2s; color: rgba(0,0,0,0.5);"
-                ><line x1="18" y1="6" x2="6" y2="18"></line><line
-                  x1="6"
-                  y1="6"
-                  x2="18"
-                  y2="18"
-                ></line></svg
-              >
-            </button>
-          </div>
-        </div>
-      {/if}
     </header>
 
     <!-- Language Selector Row -->
@@ -3338,7 +3254,7 @@
       style="position: relative; display: flex; justify-content: center; align-items: center;"
     >
       <!-- Clipboard / Clear Button -->
-      <div style="position: absolute; left: 0; z-index: 10;">
+      <div style="position: absolute; left: 15px; z-index: 10;">
         {#if inputQuery.trim()}
           <button
             class="icon-btn"
@@ -3556,6 +3472,76 @@
 
     <!-- Header Right Actions -->
     <div class="header-right-standalone">
+      {#if isWindows}
+        <div
+          class="window-controls-inline"
+          onpointerdown={(e) => e.stopPropagation()}
+        >
+          <button
+            class="win-btn-inline minimize"
+            onclick={() => getCurrentWindow().minimize()}
+            title="Minimize"
+          >
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="3"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              ><line x1="5" y1="12" x2="19" y2="12"></line></svg
+            >
+          </button>
+          <button
+            class="win-btn-inline maximize"
+            onclick={() => getCurrentWindow().toggleMaximize()}
+            title="Maximize"
+          >
+            <svg
+              width="8"
+              height="8"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="3"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              ><polyline points="15 3 21 3 21 9"></polyline><polyline
+                points="9 21 3 21 3 15"
+              ></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line
+                x1="3"
+                y1="21"
+                x2="10"
+                y2="14"
+              ></line></svg
+            >
+          </button>
+          <button
+            class="win-btn-inline close"
+            onclick={() => hideWindow()}
+            title="Close"
+          >
+            <svg
+              width="8"
+              height="8"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="3"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              ><line x1="18" y1="6" x2="6" y2="18"></line><line
+                x1="6"
+                y1="6"
+                x2="18"
+                y2="18"
+              ></line></svg
+            >
+          </button>
+        </div>
+      {/if}
       <button
         class="icon-btn header-btn history-btn"
         class:animating={historyAnimating}
@@ -5583,12 +5569,13 @@
   }
 
   .compact-icon {
-    width: 24px;
-    height: 24px;
+    width: 32px;
+    height: 32px;
   }
 
   .compact-name {
-    font-size: 18px;
+    font-family: var(--font-display);
+    font-size: 20px;
     font-weight: 600;
     letter-spacing: 0.5px;
   }
@@ -5898,6 +5885,51 @@
     align-items: center;
     gap: 4px;
     z-index: 250;
+  }
+
+  /* Inline Window Controls - macOS style */
+  .window-controls-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-right: 12px;
+  }
+
+  .win-btn-inline {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+    padding: 0;
+  }
+
+  .win-btn-inline.minimize {
+    background: #ffbd2e;
+  }
+  .win-btn-inline.maximize {
+    background: #28c940;
+  }
+  .win-btn-inline.close {
+    background: #ff5f57;
+  }
+
+  .win-btn-inline svg {
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    color: rgba(0, 0, 0, 0.5);
+  }
+
+  .win-btn-inline:hover svg {
+    opacity: 1;
+  }
+
+  .win-btn-inline:active {
+    transform: scale(0.9);
   }
 
   .header-btn {
@@ -6765,6 +6797,19 @@
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid var(--border-color);
     animation: skeletonPulse 1.5s ease-in-out infinite;
+  }
+
+  /* Staggered backgrounds for skeleton cards */
+  .skeleton-card:nth-child(1) {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .skeleton-card:nth-child(2) {
+    background: rgba(255, 255, 255, 0.05);
+    animation-delay: 0.1s;
+  }
+  .skeleton-card:nth-child(3) {
+    background: rgba(255, 255, 255, 0.03);
+    animation-delay: 0.2s;
   }
 
   .skeleton-line {

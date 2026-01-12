@@ -130,11 +130,13 @@
 		styleLevels = params.styles;
 		currentModel = params.model;
 
-		translations = [
-			{ id: 1, text: "", reason: "" },
-			{ id: 2, text: "", reason: "" },
-			{ id: 3, text: "", reason: "" },
-		];
+		// Create slots based on candidateCount (default to 3)
+		const count = params.candidateCount || 3;
+		const slots: TranslationResult[] = [];
+		for (let i = 1; i <= count; i++) {
+			slots.push({ id: i, text: "", reason: "" });
+		}
+		translations = slots;
 		detailedExplanation = null;
 
 		// Tech info reset
