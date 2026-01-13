@@ -4672,6 +4672,7 @@
                             class="count-btn"
                             class:active={translationCount === count}
                             aria-pressed={translationCount === count}
+                            aria-label={`Set translation count to ${count}`}
                           >
                             {count}
                           </button>

@@ -52,7 +52,7 @@ impl PaddleOcr {
 
     pub fn recognize(&mut self, img: &DynamicImage) -> Result<String, Box<dyn std::error::Error>> {
         let (w, h) = img.dimensions();
-        if h <= 64 || w <= 64 {
+        if h <= 64 && w <= 64 {
             return self.recognize_line(img);
         }
 
@@ -242,6 +242,8 @@ impl PaddleOcr {
         let num_classes = shape[2] as usize;
 
         // Decode CTC
+        // NOTE: String capacity is set to time_steps as an upper bound.
+        // The actual decoded text may be shorter due to CTC blank tokens and duplicates.
         let mut text = String::with_capacity(time_steps);
         let blank_idx = 0; // Padding is at 0 now
         let mut last_idx = blank_idx;
