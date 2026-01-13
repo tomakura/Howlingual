@@ -331,6 +331,21 @@
   // Load settings on mount
   onMount(() => {
     void detectWindowMode();
+
+    // Apply theme IMMEDIATELY to prevent white flash (especially in compact window)
+    try {
+      const savedSettings = localStorage.getItem("howlingual_settings");
+      if (savedSettings) {
+        const parsed = JSON.parse(savedSettings);
+        if (parsed.theme) {
+          theme = parsed.theme;
+          document.documentElement.setAttribute("data-theme", theme);
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to apply theme early", e);
+    }
+
     const saved = localStorage.getItem("howlingual_settings");
     if (saved) {
       try {
@@ -4673,10 +4688,7 @@
                         "クイック翻訳の自動実行"}
                     </div>
                     <div class="settings-card-row settings-toggle-row">
-                      <span
-                        id="auto-run-label"
-                        class="settings-description"
-                      >
+                      <span id="auto-run-label" class="settings-description">
                         {t(appLanguage, "autoRunQuickDesc") ||
                           "ショートカット呼出時に自動で翻訳を開始します"}
                       </span>
@@ -4699,10 +4711,7 @@
                       {t(appLanguage, "showTechInfo") || "技術情報を表示"}
                     </div>
                     <div class="settings-card-row settings-toggle-row">
-                      <span
-                        id="tech-info-label"
-                        class="settings-description"
-                      >
+                      <span id="tech-info-label" class="settings-description">
                         {t(appLanguage, "showTechInfoDesc") ||
                           "翻訳時に処理時間やトークン数を表示します"}
                       </span>
@@ -4725,9 +4734,7 @@
                       {t(appLanguage, "autoStart") || "スタートアップ起動"}
                     </div>
                     <div class="settings-card-row settings-toggle-row">
-                      <span
-                        class="settings-description"
-                      >
+                      <span class="settings-description">
                         {t(appLanguage, "autoStartDesc") ||
                           "OS 起動時にアプリを自動で起動します"}
                       </span>
@@ -4751,9 +4758,7 @@
                         "起動時はメイン画面を最小化"}
                     </div>
                     <div class="settings-card-row settings-toggle-row">
-                      <span
-                        class="settings-description"
-                      >
+                      <span class="settings-description">
                         {t(appLanguage, "startMinimizedDesc") ||
                           "起動時にメイン画面を最小化して開始します"}
                       </span>
@@ -4779,9 +4784,7 @@
                       <div class="settings-description">
                         {t(appLanguage, "ocrEngineDesc")}
                       </div>
-                      <div
-                        class="settings-card-row stack"
-                      >
+                      <div class="settings-card-row stack">
                         <label
                           style="display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%;"
                         >
@@ -4907,9 +4910,7 @@
                   </div>
                 {:else if settingsTab === "api"}
                   <!-- AI Settings Tab -->
-                  <p
-                    class="settings-description settings-description-lead"
-                  >
+                  <p class="settings-description settings-description-lead">
                     {t(appLanguage, "aiTabDescription") ||
                       "選択したAIプロバイダーのモデルが有効になります。"}
                   </p>
