@@ -16,9 +16,9 @@ use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 
 #[cfg(windows)]
 mod ocr_engine;
+mod ocr_flow;
 #[cfg(windows)]
 mod ocr_native;
-mod ocr_flow;
 
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -368,16 +368,95 @@ fn send_paste_shortcut() {
 // macOS: Use CGEventPost for keyboard simulation
 #[cfg(target_os = "macos")]
 fn send_copy_shortcut() {
-    // TODO: Implement macOS keyboard simulation using Core Graphics
-    // For now, this is a placeholder
-    println!("[copy] macOS keyboard simulation not yet implemented");
+    use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    println!("[copy] Sending Cmd+C via CGEvent...");
+
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .expect("Failed to create event source");
+
+    // Key codes for macOS
+    const KEY_C: CGKeyCode = 8;
+    const CMD_FLAG: CGEventFlags = CGEventFlags::CGEventFlagCommand;
+
+    // Create and post Command down event
+    if let Ok(cmd_down) = CGEvent::new_keyboard_event(source.clone(), 55, true) {
+        cmd_down.set_flags(CMD_FLAG);
+        cmd_down.post(CGEventTapLocation::HID);
+    }
+
+    std::thread::sleep(Duration::from_millis(20));
+
+    // Create and post C key down with Command modifier
+    if let Ok(c_down) = CGEvent::new_keyboard_event(source.clone(), KEY_C, true) {
+        c_down.set_flags(CMD_FLAG);
+        c_down.post(CGEventTapLocation::HID);
+    }
+
+    std::thread::sleep(Duration::from_millis(20));
+
+    // Create and post C key up with Command modifier
+    if let Ok(c_up) = CGEvent::new_keyboard_event(source.clone(), KEY_C, false) {
+        c_up.set_flags(CMD_FLAG);
+        c_up.post(CGEventTapLocation::HID);
+    }
+
+    std::thread::sleep(Duration::from_millis(20));
+
+    // Create and post Command up event
+    if let Ok(cmd_up) = CGEvent::new_keyboard_event(source, 55, false) {
+        cmd_up.post(CGEventTapLocation::HID);
+    }
+
+    println!("[copy] Cmd+C sent successfully");
 }
 
 // macOS: Use CGEventPost for keyboard simulation (Paste)
 #[cfg(target_os = "macos")]
 fn send_paste_shortcut() {
-    // TODO: Implement macOS keyboard simulation using Core Graphics
-    println!("[paste] macOS keyboard simulation not yet implemented");
+    use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    println!("[paste] Sending Cmd+V via CGEvent...");
+
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .expect("Failed to create event source");
+
+    // Key codes for macOS
+    const KEY_V: CGKeyCode = 9;
+    const CMD_FLAG: CGEventFlags = CGEventFlags::CGEventFlagCommand;
+
+    // Create and post Command down event
+    if let Ok(cmd_down) = CGEvent::new_keyboard_event(source.clone(), 55, true) {
+        cmd_down.set_flags(CMD_FLAG);
+        cmd_down.post(CGEventTapLocation::HID);
+    }
+
+    std::thread::sleep(Duration::from_millis(20));
+
+    // Create and post V key down with Command modifier
+    if let Ok(v_down) = CGEvent::new_keyboard_event(source.clone(), KEY_V, true) {
+        v_down.set_flags(CMD_FLAG);
+        v_down.post(CGEventTapLocation::HID);
+    }
+
+    std::thread::sleep(Duration::from_millis(20));
+
+    // Create and post V key up with Command modifier
+    if let Ok(v_up) = CGEvent::new_keyboard_event(source.clone(), KEY_V, false) {
+        v_up.set_flags(CMD_FLAG);
+        v_up.post(CGEventTapLocation::HID);
+    }
+
+    std::thread::sleep(Duration::from_millis(20));
+
+    // Create and post Command up event
+    if let Ok(cmd_up) = CGEvent::new_keyboard_event(source, 55, false) {
+        cmd_up.post(CGEventTapLocation::HID);
+    }
+
+    println!("[paste] Cmd+V sent successfully");
 }
 
 // Linux: Placeholder
@@ -810,15 +889,20 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::DoubleClick { .. } = event {
+                println!("[tray] Tray icon double-clicked");
                 let _ = show_main_window(tray.app_handle(), None);
             }
         });
 
     if let Some(icon) = app.default_window_icon().cloned() {
+        println!("[tray] Using default window icon for tray");
         tray = tray.icon(icon);
+    } else {
+        println!("[tray] WARNING: No default window icon found!");
     }
 
     tray.build(app)?;
+    println!("[tray] Tray icon created successfully");
     Ok(())
 }
 

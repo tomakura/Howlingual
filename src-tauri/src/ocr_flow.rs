@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use xcap::Monitor;
@@ -34,6 +34,7 @@ pub struct PaddleOcrState(pub Mutex<Option<ocr_engine::PaddleOcr>>);
 #[cfg(windows)]
 pub struct WindowsOcrState(pub Mutex<Option<ocr_native::WindowsOcr>>);
 
+#[cfg(windows)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum OcrEngineType {
     Paddle,
@@ -51,7 +52,7 @@ impl Default for OcrEngineConfig {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum WindowOrigin {
+pub(crate) enum WindowOrigin {
     Main,
     Compact,
 }
@@ -90,7 +91,7 @@ pub async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Resu
         // Wait for windows to fully hide before capturing screenshots
         // TODO: Consider using window visibility state checks or event-based mechanism
         // for more reliable cross-platform behavior instead of hardcoded delay
-        tauri::async_runtime::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
         let monitors = Monitor::all().map_err(|e| e.to_string())?;
 
@@ -140,8 +141,8 @@ pub async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Resu
             let label = format!("{}{}", crate::CAPTURE_WINDOW_PREFIX, monitor_id);
             let url = format!("/?view=capture&monitor={}", monitor_id);
 
-            let window = crate::ensure_capture_window(&app, &label, &url)
-                .map_err(|e| e.to_string())?;
+            let window =
+                crate::ensure_capture_window(&app, &label, &url).map_err(|e| e.to_string())?;
 
             // Set window to physical pixel dimensions
             // Tauri will create a window of exact physical size
@@ -326,7 +327,12 @@ pub async fn complete_ocr_flow(app: AppHandle, text: String) -> Result<(), Strin
         WindowOrigin::Compact => {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
-                let cursor_pos = app.state::<crate::LastCursorPos>().0.lock().ok().and_then(|g| *g);
+                let cursor_pos = app
+                    .state::<crate::LastCursorPos>()
+                    .0
+                    .lock()
+                    .ok()
+                    .and_then(|g| *g);
                 crate::show_compact_window(&app, Some(text), cursor_pos)
                     .map_err(|e| e.to_string())?;
                 Ok(())
@@ -364,11 +370,21 @@ pub fn cancel_selection_ocr(app: AppHandle) {
         WindowOrigin::Main => {
             // For main window, just showing it is enough (we have no text to pass)
             // We can use show_main_window directly since we don't need handover event
-            let cursor_pos = app.state::<crate::LastCursorPos>().0.lock().ok().and_then(|g| *g);
+            let cursor_pos = app
+                .state::<crate::LastCursorPos>()
+                .0
+                .lock()
+                .ok()
+                .and_then(|g| *g);
             let _ = crate::show_main_window(&app, cursor_pos);
         }
         WindowOrigin::Compact => {
-            let cursor_pos = app.state::<crate::LastCursorPos>().0.lock().ok().and_then(|g| *g);
+            let cursor_pos = app
+                .state::<crate::LastCursorPos>()
+                .0
+                .lock()
+                .ok()
+                .and_then(|g| *g);
             // Pass None as text to show window without changing text
             let _ = crate::show_compact_window(&app, None, cursor_pos);
         }
