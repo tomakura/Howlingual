@@ -1,0 +1,1158 @@
+
+> tauri-apphowlingual@0.1.0 tauri:build:mac
+> tauri build --target universal-apple-darwin
+
+        Info Looking up installed tauri packages to check mismatched versions...
+        Warn The bundle identifier "com.howlingual.app" set in `tauri.conf.json identifier` ends with `.app`. This is not recommended because it conflicts with the application bundle extension on macOS.
+     Running beforeBuildCommand `npm run build`
+
+> tauri-apphowlingual@0.1.0 build
+> vite build
+
+vite v6.4.1 building SSR bundle for production...
+transforming...
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:1005:29 This reference only captures the initial value of `customStyles`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally
+1003: 
+1004:   let styleLevels: Record<string, number> = $state(
+1005:     normalizeStyleLevels({}, customStyles),
+                                               ^
+1006:   );
+1007:   // Prevent initial auto-save from overwriting loaded values
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6251:2 Unused CSS selector ".compact-style-wrapper"
+https://svelte.dev/e/css_unused_selector
+6249:   }
+6250: 
+6251:   .compact-style-wrapper {
+                              ^
+6252:     position: relative;
+6253:     display: inline-flex;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6256:2 Unused CSS selector ".compact-style-chip"
+https://svelte.dev/e/css_unused_selector
+6254:   }
+6255: 
+6256:   .compact-style-chip {
+                           ^
+6257:     align-self: flex-start;
+6258:     display: inline-flex;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6271:2 Unused CSS selector ".compact-style-chip:hover"
+https://svelte.dev/e/css_unused_selector
+6269:   }
+6270: 
+6271:   .compact-style-chip:hover {
+                                 ^
+6272:     background: rgba(255, 255, 255, 0.12);
+6273:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6275:2 Unused CSS selector ".compact-style-chip.open"
+https://svelte.dev/e/css_unused_selector
+6273:   }
+6274: 
+6275:   .compact-style-chip.open {
+                                ^
+6276:     background: rgba(59, 130, 246, 0.2);
+6277:     border-color: rgba(59, 130, 246, 0.35);
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6287:2 Unused CSS selector ".chip-count"
+https://svelte.dev/e/css_unused_selector
+6285:   }
+6286: 
+6287:   .chip-count {
+                   ^
+6288:     min-width: 16px;
+6289:     height: 16px;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6301:2 Unused CSS selector ".chip-chevron"
+https://svelte.dev/e/css_unused_selector
+6299:   }
+6300: 
+6301:   .chip-chevron {
+                     ^
+6302:     transition: transform 0.2s var(--easing);
+6303:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6305:2 Unused CSS selector ".compact-style-chip.open .chip-chevron"
+https://svelte.dev/e/css_unused_selector
+6303:   }
+6304: 
+6305:   .compact-style-chip.open .chip-chevron {
+                                              ^
+6306:     transform: rotate(180deg);
+6307:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6309:2 Unused CSS selector ".compact-style-dropdown"
+https://svelte.dev/e/css_unused_selector
+6307:   }
+6308: 
+6309:   .compact-style-dropdown {
+                               ^
+6310:     position: absolute;
+6311:     top: calc(100% + 8px);
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6324:2 Unused CSS selector ".compact-style-dropdown .style-chip"
+https://svelte.dev/e/css_unused_selector
+6322:   }
+6323: 
+6324:   .compact-style-dropdown .style-chip {
+                                           ^
+6325:     width: 100%;
+6326:     justify-content: flex-start;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6331:2 Unused CSS selector ".style-row"
+https://svelte.dev/e/css_unused_selector
+6329:   }
+6330: 
+6331:   .style-row {
+                  ^
+6332:     display: flex;
+6333:     align-items: center;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6345:2 Unused CSS selector ".style-row:hover"
+https://svelte.dev/e/css_unused_selector
+6343:   }
+6344: 
+6345:   .style-row:hover {
+                        ^
+6346:     background: rgba(255, 255, 255, 0.08);
+6347:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6349:2 Unused CSS selector ".style-name"
+https://svelte.dev/e/css_unused_selector
+6347:   }
+6348: 
+6349:   .style-name {
+                   ^
+6350:     font-size: 12px;
+6351:     font-weight: 500;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6354:2 Unused CSS selector ".level-meter"
+https://svelte.dev/e/css_unused_selector
+6352:   }
+6353: 
+6354:   .level-meter {
+                    ^
+6355:     width: 64px;
+6356:     height: 6px;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6362:2 Unused CSS selector ".level-fill"
+https://svelte.dev/e/css_unused_selector
+6360:   }
+6361: 
+6362:   .level-fill {
+                   ^
+6363:     display: block;
+6364:     height: 100%;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6371:2 Unused CSS selector ".style-row[data-level="1"] .level-fill"
+https://svelte.dev/e/css_unused_selector
+6369:   }
+6370: 
+6371:   .style-row[data-level="1"] .level-fill {
+                                              ^
+6372:     opacity: 0.45;
+6373:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6375:2 Unused CSS selector ".style-row[data-level="2"] .level-fill"
+https://svelte.dev/e/css_unused_selector
+6373:   }
+6374: 
+6375:   .style-row[data-level="2"] .level-fill {
+                                              ^
+6376:     opacity: 0.8;
+6377:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:6436:2 Unused CSS selector ".header-right"
+https://svelte.dev/e/css_unused_selector
+6434:   }
+6435: 
+6436:   .header-right {
+                     ^
+6437:     display: flex;
+6438:     align-items: center;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:7235:2 Unused CSS selector ".card-inner-content.content-fade"
+https://svelte.dev/e/css_unused_selector
+7233:   }
+7234: 
+7235:   .card-inner-content.content-fade {
+                                        ^
+7236:     opacity: 0;
+7237:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:7308:2 Unused CSS selector ".empty-state-visual"
+https://svelte.dev/e/css_unused_selector
+7306:   }
+7307: 
+7308:   .empty-state-visual {
+                           ^
+7309:     position: relative;
+7310:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:7312:2 Unused CSS selector ".empty-icon-wrapper"
+https://svelte.dev/e/css_unused_selector
+7310:   }
+7311: 
+7312:   .empty-icon-wrapper {
+                           ^
+7313:     position: relative;
+7314:     display: flex;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:7328:2 Unused CSS selector ".empty-icon"
+https://svelte.dev/e/css_unused_selector
+7326:   }
+7327: 
+7328:   .empty-icon {
+                   ^
+7329:     color: var(--primary-color);
+7330:     opacity: 0.8;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:7334:2 Unused CSS selector ".empty-icon-glow"
+https://svelte.dev/e/css_unused_selector
+7332:   }
+7333: 
+7334:   .empty-icon-glow {
+                        ^
+7335:     position: absolute;
+7336:     inset: -20px;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:7407:2 Unused CSS selector ":global([data-theme="light"]) .empty-icon-wrapper"
+https://svelte.dev/e/css_unused_selector
+7405:   }
+7406: 
+7407:   :global([data-theme="light"]) .empty-icon-wrapper {
+                                                         ^
+7408:     background: linear-gradient(
+7409:       135deg,
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:7729:2 Unused CSS selector ".copy-btn.animating .copy-icon"
+https://svelte.dev/e/css_unused_selector
+7727: 
+7728:   /* コピーボタン: 紙が重なるように上に移動 */
+7729:   .copy-btn.animating .copy-icon {
+                                      ^
+7730:     animation: copySlide 0.6s var(--easing);
+7731:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:7769:2 Unused CSS selector ".speak-btn.animating .wave-2"
+https://svelte.dev/e/css_unused_selector
+7767:   }
+7768: 
+7769:   .speak-btn.animating .wave-2 {
+                                    ^
+7770:     animation: wavePulse 1.2s ease-in-out;
+7771:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:7773:2 Unused CSS selector ".speak-btn.animating .wave-3"
+https://svelte.dev/e/css_unused_selector
+7771:   }
+7772: 
+7773:   .speak-btn.animating .wave-3 {
+                                    ^
+7774:     animation: wavePulse 1.2s ease-in-out 0.15s;
+7775:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:7797:2 Unused CSS selector ".copy-btn.copied"
+https://svelte.dev/e/css_unused_selector
+7795: 
+7796:   /* Copy button feedback */
+7797:   .copy-btn.copied {
+                        ^
+7798:     color: #22c55e;
+7799:     background: rgba(34, 197, 94, 0.15);
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:8889:2 Unused CSS selector ":global([data-theme="light"]) .toggle-switch"
+https://svelte.dev/e/css_unused_selector
+8887: 
+8888:   /* Toggle switch */
+8889:   :global([data-theme="light"]) .toggle-switch {
+                                                    ^
+8890:     background: rgba(0, 0, 0, 0.15);
+8891:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:8903:2 Unused CSS selector ":global([data-theme="light"]) .confirm-dialog"
+https://svelte.dev/e/css_unused_selector
+8901: 
+8902:   /* Confirmation dialog */
+8903:   :global([data-theme="light"]) .confirm-dialog {
+                                                     ^
+8904:     background: rgba(255, 255, 255, 0.98);
+8905:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:8927:2 Unused CSS selector ":global([data-theme="light"]) .settings-row"
+https://svelte.dev/e/css_unused_selector
+8925: 
+8926:   /* Settings row borders */
+8927:   :global([data-theme="light"]) .settings-row {
+                                                   ^
+8928:     border-color: rgba(0, 0, 0, 0.08);
+8929:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:8932:2 Unused CSS selector ":global([data-theme="light"]) .settings-section h3"
+https://svelte.dev/e/css_unused_selector
+8930: 
+8931:   /* Section titles */
+8932:   :global([data-theme="light"]) .settings-section h3 {
+                                                          ^
+8933:     color: #333;
+8934:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:8978:2 Unused CSS selector ":global([data-theme="light"]) .style-editor-panel"
+https://svelte.dev/e/css_unused_selector
+8976: 
+8977:   /* Style editor */
+8978:   :global([data-theme="light"]) .style-editor-panel {
+                                                         ^
+8979:     background: rgba(0, 0, 0, 0.02);
+8980:     border-color: rgba(0, 0, 0, 0.08);
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:8984:2 Unused CSS selector ":global([data-theme="light"]) .api-indicator.set"
+https://svelte.dev/e/css_unused_selector
+8982: 
+8983:   /* API Key indicator */
+8984:   :global([data-theme="light"]) .api-indicator.set {
+                                                        ^
+8985:     background: rgba(34, 197, 94, 0.1);
+8986:     color: #16a34a;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:8988:2 Unused CSS selector ":global([data-theme="light"]) .api-indicator.not-set"
+https://svelte.dev/e/css_unused_selector
+8986:     color: #16a34a;
+8987:   }
+8988:   :global([data-theme="light"]) .api-indicator.not-set {
+                                                            ^
+8989:     background: rgba(239, 68, 68, 0.1);
+8990:     color: #dc2626;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9036:2 Unused CSS selector ":global([data-theme="light"]) .compact-style-chip"
+https://svelte.dev/e/css_unused_selector
+9034:   }
+9035: 
+9036:   :global([data-theme="light"]) .compact-style-chip {
+                                                         ^
+9037:     background: rgba(0, 0, 0, 0.05);
+9038:     border-color: rgba(0, 0, 0, 0.12);
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9042:2 Unused CSS selector ":global([data-theme="light"]) .compact-style-chip.open"
+https://svelte.dev/e/css_unused_selector
+9040:   }
+9041: 
+9042:   :global([data-theme="light"]) .compact-style-chip.open {
+                                                              ^
+9043:     background: rgba(59, 130, 246, 0.12);
+9044:     border-color: rgba(59, 130, 246, 0.2);
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9048:2 Unused CSS selector ":global([data-theme="light"]) .chip-count"
+https://svelte.dev/e/css_unused_selector
+9046:   }
+9047: 
+9048:   :global([data-theme="light"]) .chip-count {
+                                                 ^
+9049:     background: rgba(59, 130, 246, 0.2);
+9050:     color: #1d4ed8;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9053:2 Unused CSS selector ":global([data-theme="light"]) .style-row"
+https://svelte.dev/e/css_unused_selector
+9051:   }
+9052: 
+9053:   :global([data-theme="light"]) .style-row {
+                                                ^
+9054:     background: rgba(0, 0, 0, 0.03);
+9055:     border-color: rgba(0, 0, 0, 0.1);
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9058:2 Unused CSS selector ":global([data-theme="light"]) .level-meter"
+https://svelte.dev/e/css_unused_selector
+9056:   }
+9057: 
+9058:   :global([data-theme="light"]) .level-meter {
+                                                  ^
+9059:     background: rgba(0, 0, 0, 0.08);
+9060:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9160:2 Unused CSS selector ".usage-sub"
+https://svelte.dev/e/css_unused_selector
+9158:   }
+9159: 
+9160:   .usage-sub {
+                  ^
+9161:     font-size: 11px;
+9162:     color: var(--text-muted);
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9328:2 Unused CSS selector "img[alt*="logo"]"
+https://svelte.dev/e/css_unused_selector
+9326:   .about-logo-wrapper img,
+9327:   img[alt*="Logo"],
+9328:   img[alt*="logo"] {
+                        ^
+9329:     -webkit-user-drag: none;
+9330:     user-select: none;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9419:2 Unused CSS selector ".header-right"
+https://svelte.dev/e/css_unused_selector
+9417:   }
+9418: 
+9419:   .header-right {
+                     ^
+9420:     display: flex;
+9421:     align-items: center;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9426:2 Unused CSS selector ".window-controls"
+https://svelte.dev/e/css_unused_selector
+9424:   }
+9425: 
+9426:   .window-controls {
+                        ^
+9427:     display: flex;
+9428:     gap: 8px;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9432:2 Unused CSS selector ".win-btn"
+https://svelte.dev/e/css_unused_selector
+9430:   }
+9431: 
+9432:   .win-btn {
+                ^
+9433:     width: 12px;
+9434:     height: 12px;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9447:2 Unused CSS selector ".win-btn:hover svg"
+https://svelte.dev/e/css_unused_selector
+9445:   }
+9446: 
+9447:   .win-btn:hover svg {
+                          ^
+9448:     opacity: 1 !important;
+9449:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9451:2 Unused CSS selector ".win-btn.close"
+https://svelte.dev/e/css_unused_selector
+9449:   }
+9450: 
+9451:   .win-btn.close {
+                      ^
+9452:     background: #ff5f56;
+9453:     border: 1px solid #e0443e;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9455:2 Unused CSS selector ".win-btn.minimize"
+https://svelte.dev/e/css_unused_selector
+9453:     border: 1px solid #e0443e;
+9454:   }
+9455:   .win-btn.minimize {
+                         ^
+9456:     background: #ffbd2e;
+9457:     border: 1px solid #dea123;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9459:2 Unused CSS selector ".win-btn.maximize"
+https://svelte.dev/e/css_unused_selector
+9457:     border: 1px solid #dea123;
+9458:   }
+9459:   .win-btn.maximize {
+                         ^
+9460:     background: #27c93f;
+9461:     border: 1px solid #1aab29;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9464:2 Unused CSS selector ".win-btn:active"
+https://svelte.dev/e/css_unused_selector
+9462:   }
+9463: 
+9464:   .win-btn:active {
+                       ^
+9465:     filter: brightness(0.9);
+9466:   }
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9531:2 Unused CSS selector ".collapse-btn"
+https://svelte.dev/e/css_unused_selector
+9529:   }
+9530: 
+9531:   .collapse-btn {
+                     ^
+9532:     appearance: none;
+9533:     background: transparent;
+4:13:38 AM [vite-plugin-svelte] src/routes/+page.svelte:9544:2 Unused CSS selector ".collapse-btn:hover"
+https://svelte.dev/e/css_unused_selector
+9542:     transition: all 0.2s;
+9543:   }
+9544:   .collapse-btn:hover {
+                           ^
+9545:     background: rgba(255, 255, 255, 0.05);
+9546:     color: var(--text-main);
+"TauriEvent" is imported from external module "@tauri-apps/api/event" but never used in "src/routes/+page.svelte".
+✓ 199 modules transformed.
+rendering chunks...
+vite v6.4.1 building for production...
+transforming...
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:1005:29 This reference only captures the initial value of `customStyles`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally
+1003: 
+1004:   let styleLevels: Record<string, number> = $state(
+1005:     normalizeStyleLevels({}, customStyles),
+                                               ^
+1006:   );
+1007:   // Prevent initial auto-save from overwriting loaded values
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6251:2 Unused CSS selector ".compact-style-wrapper"
+https://svelte.dev/e/css_unused_selector
+6249:   }
+6250: 
+6251:   .compact-style-wrapper {
+                              ^
+6252:     position: relative;
+6253:     display: inline-flex;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6256:2 Unused CSS selector ".compact-style-chip"
+https://svelte.dev/e/css_unused_selector
+6254:   }
+6255: 
+6256:   .compact-style-chip {
+                           ^
+6257:     align-self: flex-start;
+6258:     display: inline-flex;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6271:2 Unused CSS selector ".compact-style-chip:hover"
+https://svelte.dev/e/css_unused_selector
+6269:   }
+6270: 
+6271:   .compact-style-chip:hover {
+                                 ^
+6272:     background: rgba(255, 255, 255, 0.12);
+6273:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6275:2 Unused CSS selector ".compact-style-chip.open"
+https://svelte.dev/e/css_unused_selector
+6273:   }
+6274: 
+6275:   .compact-style-chip.open {
+                                ^
+6276:     background: rgba(59, 130, 246, 0.2);
+6277:     border-color: rgba(59, 130, 246, 0.35);
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6287:2 Unused CSS selector ".chip-count"
+https://svelte.dev/e/css_unused_selector
+6285:   }
+6286: 
+6287:   .chip-count {
+                   ^
+6288:     min-width: 16px;
+6289:     height: 16px;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6301:2 Unused CSS selector ".chip-chevron"
+https://svelte.dev/e/css_unused_selector
+6299:   }
+6300: 
+6301:   .chip-chevron {
+                     ^
+6302:     transition: transform 0.2s var(--easing);
+6303:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6305:2 Unused CSS selector ".compact-style-chip.open .chip-chevron"
+https://svelte.dev/e/css_unused_selector
+6303:   }
+6304: 
+6305:   .compact-style-chip.open .chip-chevron {
+                                              ^
+6306:     transform: rotate(180deg);
+6307:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6309:2 Unused CSS selector ".compact-style-dropdown"
+https://svelte.dev/e/css_unused_selector
+6307:   }
+6308: 
+6309:   .compact-style-dropdown {
+                               ^
+6310:     position: absolute;
+6311:     top: calc(100% + 8px);
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6324:2 Unused CSS selector ".compact-style-dropdown .style-chip"
+https://svelte.dev/e/css_unused_selector
+6322:   }
+6323: 
+6324:   .compact-style-dropdown .style-chip {
+                                           ^
+6325:     width: 100%;
+6326:     justify-content: flex-start;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6331:2 Unused CSS selector ".style-row"
+https://svelte.dev/e/css_unused_selector
+6329:   }
+6330: 
+6331:   .style-row {
+                  ^
+6332:     display: flex;
+6333:     align-items: center;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6345:2 Unused CSS selector ".style-row:hover"
+https://svelte.dev/e/css_unused_selector
+6343:   }
+6344: 
+6345:   .style-row:hover {
+                        ^
+6346:     background: rgba(255, 255, 255, 0.08);
+6347:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6349:2 Unused CSS selector ".style-name"
+https://svelte.dev/e/css_unused_selector
+6347:   }
+6348: 
+6349:   .style-name {
+                   ^
+6350:     font-size: 12px;
+6351:     font-weight: 500;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6354:2 Unused CSS selector ".level-meter"
+https://svelte.dev/e/css_unused_selector
+6352:   }
+6353: 
+6354:   .level-meter {
+                    ^
+6355:     width: 64px;
+6356:     height: 6px;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6362:2 Unused CSS selector ".level-fill"
+https://svelte.dev/e/css_unused_selector
+6360:   }
+6361: 
+6362:   .level-fill {
+                   ^
+6363:     display: block;
+6364:     height: 100%;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6371:2 Unused CSS selector ".style-row[data-level="1"] .level-fill"
+https://svelte.dev/e/css_unused_selector
+6369:   }
+6370: 
+6371:   .style-row[data-level="1"] .level-fill {
+                                              ^
+6372:     opacity: 0.45;
+6373:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6375:2 Unused CSS selector ".style-row[data-level="2"] .level-fill"
+https://svelte.dev/e/css_unused_selector
+6373:   }
+6374: 
+6375:   .style-row[data-level="2"] .level-fill {
+                                              ^
+6376:     opacity: 0.8;
+6377:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:6436:2 Unused CSS selector ".header-right"
+https://svelte.dev/e/css_unused_selector
+6434:   }
+6435: 
+6436:   .header-right {
+                     ^
+6437:     display: flex;
+6438:     align-items: center;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:7235:2 Unused CSS selector ".card-inner-content.content-fade"
+https://svelte.dev/e/css_unused_selector
+7233:   }
+7234: 
+7235:   .card-inner-content.content-fade {
+                                        ^
+7236:     opacity: 0;
+7237:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:7308:2 Unused CSS selector ".empty-state-visual"
+https://svelte.dev/e/css_unused_selector
+7306:   }
+7307: 
+7308:   .empty-state-visual {
+                           ^
+7309:     position: relative;
+7310:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:7312:2 Unused CSS selector ".empty-icon-wrapper"
+https://svelte.dev/e/css_unused_selector
+7310:   }
+7311: 
+7312:   .empty-icon-wrapper {
+                           ^
+7313:     position: relative;
+7314:     display: flex;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:7328:2 Unused CSS selector ".empty-icon"
+https://svelte.dev/e/css_unused_selector
+7326:   }
+7327: 
+7328:   .empty-icon {
+                   ^
+7329:     color: var(--primary-color);
+7330:     opacity: 0.8;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:7334:2 Unused CSS selector ".empty-icon-glow"
+https://svelte.dev/e/css_unused_selector
+7332:   }
+7333: 
+7334:   .empty-icon-glow {
+                        ^
+7335:     position: absolute;
+7336:     inset: -20px;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:7407:2 Unused CSS selector ":global([data-theme="light"]) .empty-icon-wrapper"
+https://svelte.dev/e/css_unused_selector
+7405:   }
+7406: 
+7407:   :global([data-theme="light"]) .empty-icon-wrapper {
+                                                         ^
+7408:     background: linear-gradient(
+7409:       135deg,
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:7729:2 Unused CSS selector ".copy-btn.animating .copy-icon"
+https://svelte.dev/e/css_unused_selector
+7727: 
+7728:   /* コピーボタン: 紙が重なるように上に移動 */
+7729:   .copy-btn.animating .copy-icon {
+                                      ^
+7730:     animation: copySlide 0.6s var(--easing);
+7731:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:7769:2 Unused CSS selector ".speak-btn.animating .wave-2"
+https://svelte.dev/e/css_unused_selector
+7767:   }
+7768: 
+7769:   .speak-btn.animating .wave-2 {
+                                    ^
+7770:     animation: wavePulse 1.2s ease-in-out;
+7771:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:7773:2 Unused CSS selector ".speak-btn.animating .wave-3"
+https://svelte.dev/e/css_unused_selector
+7771:   }
+7772: 
+7773:   .speak-btn.animating .wave-3 {
+                                    ^
+7774:     animation: wavePulse 1.2s ease-in-out 0.15s;
+7775:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:7797:2 Unused CSS selector ".copy-btn.copied"
+https://svelte.dev/e/css_unused_selector
+7795: 
+7796:   /* Copy button feedback */
+7797:   .copy-btn.copied {
+                        ^
+7798:     color: #22c55e;
+7799:     background: rgba(34, 197, 94, 0.15);
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:8889:2 Unused CSS selector ":global([data-theme="light"]) .toggle-switch"
+https://svelte.dev/e/css_unused_selector
+8887: 
+8888:   /* Toggle switch */
+8889:   :global([data-theme="light"]) .toggle-switch {
+                                                    ^
+8890:     background: rgba(0, 0, 0, 0.15);
+8891:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:8903:2 Unused CSS selector ":global([data-theme="light"]) .confirm-dialog"
+https://svelte.dev/e/css_unused_selector
+8901: 
+8902:   /* Confirmation dialog */
+8903:   :global([data-theme="light"]) .confirm-dialog {
+                                                     ^
+8904:     background: rgba(255, 255, 255, 0.98);
+8905:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:8927:2 Unused CSS selector ":global([data-theme="light"]) .settings-row"
+https://svelte.dev/e/css_unused_selector
+8925: 
+8926:   /* Settings row borders */
+8927:   :global([data-theme="light"]) .settings-row {
+                                                   ^
+8928:     border-color: rgba(0, 0, 0, 0.08);
+8929:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:8932:2 Unused CSS selector ":global([data-theme="light"]) .settings-section h3"
+https://svelte.dev/e/css_unused_selector
+8930: 
+8931:   /* Section titles */
+8932:   :global([data-theme="light"]) .settings-section h3 {
+                                                          ^
+8933:     color: #333;
+8934:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:8978:2 Unused CSS selector ":global([data-theme="light"]) .style-editor-panel"
+https://svelte.dev/e/css_unused_selector
+8976: 
+8977:   /* Style editor */
+8978:   :global([data-theme="light"]) .style-editor-panel {
+                                                         ^
+8979:     background: rgba(0, 0, 0, 0.02);
+8980:     border-color: rgba(0, 0, 0, 0.08);
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:8984:2 Unused CSS selector ":global([data-theme="light"]) .api-indicator.set"
+https://svelte.dev/e/css_unused_selector
+8982: 
+8983:   /* API Key indicator */
+8984:   :global([data-theme="light"]) .api-indicator.set {
+                                                        ^
+8985:     background: rgba(34, 197, 94, 0.1);
+8986:     color: #16a34a;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:8988:2 Unused CSS selector ":global([data-theme="light"]) .api-indicator.not-set"
+https://svelte.dev/e/css_unused_selector
+8986:     color: #16a34a;
+8987:   }
+8988:   :global([data-theme="light"]) .api-indicator.not-set {
+                                                            ^
+8989:     background: rgba(239, 68, 68, 0.1);
+8990:     color: #dc2626;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9036:2 Unused CSS selector ":global([data-theme="light"]) .compact-style-chip"
+https://svelte.dev/e/css_unused_selector
+9034:   }
+9035: 
+9036:   :global([data-theme="light"]) .compact-style-chip {
+                                                         ^
+9037:     background: rgba(0, 0, 0, 0.05);
+9038:     border-color: rgba(0, 0, 0, 0.12);
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9042:2 Unused CSS selector ":global([data-theme="light"]) .compact-style-chip.open"
+https://svelte.dev/e/css_unused_selector
+9040:   }
+9041: 
+9042:   :global([data-theme="light"]) .compact-style-chip.open {
+                                                              ^
+9043:     background: rgba(59, 130, 246, 0.12);
+9044:     border-color: rgba(59, 130, 246, 0.2);
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9048:2 Unused CSS selector ":global([data-theme="light"]) .chip-count"
+https://svelte.dev/e/css_unused_selector
+9046:   }
+9047: 
+9048:   :global([data-theme="light"]) .chip-count {
+                                                 ^
+9049:     background: rgba(59, 130, 246, 0.2);
+9050:     color: #1d4ed8;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9053:2 Unused CSS selector ":global([data-theme="light"]) .style-row"
+https://svelte.dev/e/css_unused_selector
+9051:   }
+9052: 
+9053:   :global([data-theme="light"]) .style-row {
+                                                ^
+9054:     background: rgba(0, 0, 0, 0.03);
+9055:     border-color: rgba(0, 0, 0, 0.1);
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9058:2 Unused CSS selector ":global([data-theme="light"]) .level-meter"
+https://svelte.dev/e/css_unused_selector
+9056:   }
+9057: 
+9058:   :global([data-theme="light"]) .level-meter {
+                                                  ^
+9059:     background: rgba(0, 0, 0, 0.08);
+9060:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9160:2 Unused CSS selector ".usage-sub"
+https://svelte.dev/e/css_unused_selector
+9158:   }
+9159: 
+9160:   .usage-sub {
+                  ^
+9161:     font-size: 11px;
+9162:     color: var(--text-muted);
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9328:2 Unused CSS selector "img[alt*="logo"]"
+https://svelte.dev/e/css_unused_selector
+9326:   .about-logo-wrapper img,
+9327:   img[alt*="Logo"],
+9328:   img[alt*="logo"] {
+                        ^
+9329:     -webkit-user-drag: none;
+9330:     user-select: none;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9419:2 Unused CSS selector ".header-right"
+https://svelte.dev/e/css_unused_selector
+9417:   }
+9418: 
+9419:   .header-right {
+                     ^
+9420:     display: flex;
+9421:     align-items: center;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9426:2 Unused CSS selector ".window-controls"
+https://svelte.dev/e/css_unused_selector
+9424:   }
+9425: 
+9426:   .window-controls {
+                        ^
+9427:     display: flex;
+9428:     gap: 8px;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9432:2 Unused CSS selector ".win-btn"
+https://svelte.dev/e/css_unused_selector
+9430:   }
+9431: 
+9432:   .win-btn {
+                ^
+9433:     width: 12px;
+9434:     height: 12px;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9447:2 Unused CSS selector ".win-btn:hover svg"
+https://svelte.dev/e/css_unused_selector
+9445:   }
+9446: 
+9447:   .win-btn:hover svg {
+                          ^
+9448:     opacity: 1 !important;
+9449:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9451:2 Unused CSS selector ".win-btn.close"
+https://svelte.dev/e/css_unused_selector
+9449:   }
+9450: 
+9451:   .win-btn.close {
+                      ^
+9452:     background: #ff5f56;
+9453:     border: 1px solid #e0443e;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9455:2 Unused CSS selector ".win-btn.minimize"
+https://svelte.dev/e/css_unused_selector
+9453:     border: 1px solid #e0443e;
+9454:   }
+9455:   .win-btn.minimize {
+                         ^
+9456:     background: #ffbd2e;
+9457:     border: 1px solid #dea123;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9459:2 Unused CSS selector ".win-btn.maximize"
+https://svelte.dev/e/css_unused_selector
+9457:     border: 1px solid #dea123;
+9458:   }
+9459:   .win-btn.maximize {
+                         ^
+9460:     background: #27c93f;
+9461:     border: 1px solid #1aab29;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9464:2 Unused CSS selector ".win-btn:active"
+https://svelte.dev/e/css_unused_selector
+9462:   }
+9463: 
+9464:   .win-btn:active {
+                       ^
+9465:     filter: brightness(0.9);
+9466:   }
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9531:2 Unused CSS selector ".collapse-btn"
+https://svelte.dev/e/css_unused_selector
+9529:   }
+9530: 
+9531:   .collapse-btn {
+                     ^
+9532:     appearance: none;
+9533:     background: transparent;
+4:13:39 AM [vite-plugin-svelte] src/routes/+page.svelte:9544:2 Unused CSS selector ".collapse-btn:hover"
+https://svelte.dev/e/css_unused_selector
+9542:     transition: all 0.2s;
+9543:   }
+9544:   .collapse-btn:hover {
+                           ^
+9545:     background: rgba(255, 255, 255, 0.05);
+9546:     color: var(--text-main);
+✓ 327 modules transformed.
+rendering chunks...
+[plugin vite:reporter] 
+(!) /Users/flow/Programs/Howlingual/node_modules/@tauri-apps/api/window.js is dynamically imported by /Users/flow/Programs/Howlingual/src/routes/+page.svelte, /Users/flow/Programs/Howlingual/src/routes/+page.svelte, /Users/flow/Programs/Howlingual/src/routes/+page.svelte, /Users/flow/Programs/Howlingual/src/routes/+page.svelte, /Users/flow/Programs/Howlingual/src/routes/+page.svelte, /Users/flow/Programs/Howlingual/src/routes/+page.svelte, /Users/flow/Programs/Howlingual/src/routes/+page.svelte but also statically imported by /Users/flow/Programs/Howlingual/src/lib/components/CaptureOverlay.svelte, /Users/flow/Programs/Howlingual/src/routes/+page.svelte, dynamic import will not move module into another chunk.
+
+computing gzip size...
+.svelte-kit/output/client/_app/version.json                                                                 0.03 kB │ gzip:  0.05 kB
+.svelte-kit/output/client/.vite/manifest.json                                                               5.83 kB │ gzip:  0.95 kB
+.svelte-kit/output/client/_app/immutable/assets/Jost-VariableFont_wght.BvwSITGa.ttf                       134.48 kB
+.svelte-kit/output/client/_app/immutable/assets/Jost-Italic-VariableFont_wght.CRdCj9Xl.ttf                143.67 kB
+.svelte-kit/output/client/_app/immutable/assets/IBMPlexSans-VariableFont_wdth_wght.BTDN9bpA.ttf           532.74 kB
+.svelte-kit/output/client/_app/immutable/assets/IBMPlexSans-Italic-VariableFont_wdth_wght.BXyyqPfs.ttf    594.12 kB
+.svelte-kit/output/client/_app/immutable/assets/IBMPlexSansJP-Medium.CQbugmcI.ttf                       2,375.26 kB
+.svelte-kit/output/client/_app/immutable/assets/IBMPlexSansJP-Bold.B8ngi95m.ttf                         2,377.60 kB
+.svelte-kit/output/client/_app/immutable/assets/IBMPlexSansJP-Regular.uWF_iT2A.ttf                      2,382.63 kB
+.svelte-kit/output/client/_app/immutable/assets/0.DXoWQm-5.css                                              4.48 kB │ gzip:  1.45 kB
+.svelte-kit/output/client/_app/immutable/assets/2.C9xT6LzM.css                                             54.47 kB │ gzip:  9.11 kB
+.svelte-kit/output/client/_app/immutable/entry/start.D_VrT3yE.js                                            0.08 kB │ gzip:  0.09 kB
+.svelte-kit/output/client/_app/immutable/chunks/BvEARdRC.js                                                 0.30 kB │ gzip:  0.22 kB
+.svelte-kit/output/client/_app/immutable/nodes/0.DLfjD2x_.js                                                0.53 kB │ gzip:  0.38 kB
+.svelte-kit/output/client/_app/immutable/chunks/Cpl2WA_f.js                                                 0.53 kB │ gzip:  0.34 kB
+.svelte-kit/output/client/_app/immutable/nodes/1.DEFquX6J.js                                                0.59 kB │ gzip:  0.37 kB
+.svelte-kit/output/client/_app/immutable/chunks/s0am1CZ8.js                                                 1.45 kB │ gzip:  0.75 kB
+.svelte-kit/output/client/_app/immutable/chunks/Da2ma90K.js                                                 2.04 kB │ gzip:  0.93 kB
+.svelte-kit/output/client/_app/immutable/chunks/CEvmWAzx.js                                                 2.27 kB │ gzip:  0.99 kB
+.svelte-kit/output/client/_app/immutable/chunks/CcfW-vE0.js                                                 2.88 kB │ gzip:  1.53 kB
+.svelte-kit/output/client/_app/immutable/entry/app.B8_UvN0G.js                                              4.97 kB │ gzip:  2.23 kB
+.svelte-kit/output/client/_app/immutable/chunks/C-pD4NHE.js                                                 7.47 kB │ gzip:  3.16 kB
+.svelte-kit/output/client/_app/immutable/chunks/DmVnN9RQ.js                                                24.26 kB │ gzip:  9.42 kB
+.svelte-kit/output/client/_app/immutable/chunks/Be09PuiX.js                                                27.94 kB │ gzip: 10.83 kB
+.svelte-kit/output/client/_app/immutable/nodes/2.DpcIYwzz.js                                              179.76 kB │ gzip: 50.82 kB
+.svelte-kit/output/client/_app/immutable/nodes/3.B5i0Daj0.js                                              213.37 kB │ gzip: 56.60 kB
+✓ built in 1.26s
+.svelte-kit/output/server/.vite/manifest.json                                                               5.11 kB
+.svelte-kit/output/server/_app/immutable/assets/Jost-VariableFont_wght.BvwSITGa.ttf                       134.48 kB
+.svelte-kit/output/server/_app/immutable/assets/Jost-Italic-VariableFont_wght.CRdCj9Xl.ttf                143.67 kB
+.svelte-kit/output/server/_app/immutable/assets/IBMPlexSans-VariableFont_wdth_wght.BTDN9bpA.ttf           532.74 kB
+.svelte-kit/output/server/_app/immutable/assets/IBMPlexSans-Italic-VariableFont_wdth_wght.BXyyqPfs.ttf    594.12 kB
+.svelte-kit/output/server/_app/immutable/assets/IBMPlexSansJP-Medium.CQbugmcI.ttf                       2,375.26 kB
+.svelte-kit/output/server/_app/immutable/assets/IBMPlexSansJP-Bold.B8ngi95m.ttf                         2,377.60 kB
+.svelte-kit/output/server/_app/immutable/assets/IBMPlexSansJP-Regular.uWF_iT2A.ttf                      2,382.63 kB
+.svelte-kit/output/server/_app/immutable/assets/_layout.C4Enl4YB.css                                        4.60 kB
+.svelte-kit/output/server/_app/immutable/assets/_page.O3yHA8dr.css                                         54.05 kB
+.svelte-kit/output/server/entries/pages/_layout.ts.js                                                       0.04 kB
+.svelte-kit/output/server/entries/pages/_layout.svelte.js                                                   0.25 kB
+.svelte-kit/output/server/internal.js                                                                       0.33 kB
+.svelte-kit/output/server/chunks/environment.js                                                             0.65 kB
+.svelte-kit/output/server/entries/pages/service/_page.svelte.js                                             0.81 kB
+.svelte-kit/output/server/chunks/utils.js                                                                   1.15 kB
+.svelte-kit/output/server/chunks/equality.js                                                                1.23 kB
+.svelte-kit/output/server/entries/fallbacks/error.svelte.js                                                 1.37 kB
+.svelte-kit/output/server/chunks/context.js                                                                 1.70 kB
+.svelte-kit/output/server/chunks/exports.js                                                                 6.94 kB
+.svelte-kit/output/server/chunks/shared.js                                                                 17.71 kB
+.svelte-kit/output/server/remote-entry.js                                                                  18.82 kB
+.svelte-kit/output/server/chunks/index.js                                                                  29.14 kB
+.svelte-kit/output/server/entries/pages/_page.svelte.js                                                    68.10 kB
+.svelte-kit/output/server/chunks/internal.js                                                               75.52 kB
+.svelte-kit/output/server/index.js                                                                        126.58 kB
+✓ built in 2.76s
+
+Run npm run preview to preview your production build locally.
+
+> Using @sveltejs/adapter-static
+  Wrote site to "build"
+  ✔ done
+   Compiling tauri-apphowlingual v0.1.0 (/Users/flow/Programs/Howlingual/src-tauri)
+    Finished `release` profile [optimized] target(s) in 15.26s
+   Compiling objc2-encode v4.1.0
+   Compiling serde_core v1.0.228
+   Compiling libc v0.2.179
+   Compiling objc2-exception-helper v0.1.1
+   Compiling stable_deref_trait v1.2.1
+   Compiling memchr v2.7.6
+   Compiling crossbeam-utils v0.8.21
+   Compiling zerofrom v0.1.6
+   Compiling serde v1.0.228
+   Compiling cfg-if v1.0.4
+   Compiling thiserror v2.0.17
+   Compiling smallvec v1.15.1
+   Compiling simd-adler32 v0.3.8
+   Compiling writeable v0.6.2
+   Compiling litemap v0.8.1
+   Compiling itoa v1.0.17
+   Compiling yoke v0.8.1
+   Compiling zerovec v0.11.5
+   Compiling zerotrie v0.2.3
+   Compiling anyhow v1.0.100
+   Compiling icu_properties_data v2.1.2
+   Compiling icu_normalizer_data v2.1.1
+   Compiling adler2 v2.0.1
+   Compiling log v0.4.29
+   Compiling miniz_oxide v0.8.9
+   Compiling num-traits v0.2.19
+   Compiling tinystr v0.8.2
+   Compiling potential_utf v0.1.4
+   Compiling icu_locale_core v2.1.1
+   Compiling icu_collections v2.1.1
+   Compiling objc2 v0.6.3
+   Compiling crc32fast v1.5.0
+   Compiling core-foundation-sys v0.8.7
+   Compiling zmij v1.0.12
+   Compiling percent-encoding v2.3.2
+   Compiling utf8_iter v1.0.4
+   Compiling icu_provider v2.1.1
+   Compiling serde_json v1.0.149
+   Compiling form_urlencoded v1.2.2
+   Compiling crossbeam-epoch v0.9.18
+   Compiling fdeflate v0.3.7
+   Compiling powerfmt v0.2.0
+   Compiling icu_properties v2.1.2
+   Compiling deranged v0.5.5
+   Compiling rayon-core v1.13.0
+   Compiling bitflags v2.10.0
+   Compiling icu_normalizer v2.1.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling aho-corasick v1.1.4
+   Compiling dpi v0.1.2
+   Compiling typeid v1.0.3
+   Compiling idna_adapter v1.2.1
+   Compiling idna v1.1.0
+   Compiling flate2 v1.1.5
+   Compiling thiserror v1.0.69
+   Compiling alloc-no-stdlib v2.0.4
+   Compiling num-conv v0.1.0
+   Compiling url v2.5.8
+   Compiling bitflags v1.3.2
+   Compiling bytes v1.11.0
+   Compiling regex-syntax v0.8.8
+   Compiling unic-char-range v0.9.0
+   Compiling unic-common v0.9.0
+   Compiling time-core v0.1.6
+   Compiling unic-char-property v0.9.0
+   Compiling unic-ucd-version v0.9.0
+   Compiling time v0.3.44
+   Compiling num-integer v0.1.46
+   Compiling alloc-stdlib v0.2.2
+   Compiling equator v0.4.2
+   Compiling uuid v1.19.0
+   Compiling block2 v0.6.2
+   Compiling crossbeam-channel v0.5.15
+   Compiling erased-serde v0.4.9
+   Compiling dispatch2 v0.3.0
+   Compiling fnv v1.0.7
+   Compiling either v1.15.0
+   Compiling raw-window-handle v0.6.2
+   Compiling once_cell v1.21.3
+   Compiling winnow v0.7.14
+   Compiling objc2-core-foundation v0.3.2
+   Compiling byteorder v1.5.0
+   Compiling siphasher v1.0.1
+   Compiling jsonptr v0.6.3
+   Compiling phf_shared v0.11.3
+   Compiling http v1.4.0
+   Compiling cfb v0.7.3
+   Compiling cookie v0.18.1
+   Compiling num-bigint v0.4.6
+   Compiling tauri v2.9.5
+   Compiling aligned-vec v0.6.4
+   Compiling brotli-decompressor v5.0.0
+   Compiling objc2-javascript-core v0.3.2
+   Compiling regex-automata v0.4.13
+   Compiling unic-ucd-ident v0.9.0
+   Compiling serde_spanned v1.0.4
+   Compiling toml_parser v1.0.6+spec-1.1.0
+   Compiling toml_datetime v0.7.5+spec-1.1.0
+   Compiling core-foundation v0.10.1
+   Compiling objc2-foundation v0.3.2
+   Compiling objc2-core-text v0.3.2
+   Compiling objc2-security v0.3.2
+   Compiling arrayvec v0.7.6
+   Compiling foreign-types-shared v0.3.1
+   Compiling unicode-segmentation v1.12.0
+   Compiling toml_writer v1.0.6+spec-1.1.0
+   Compiling option-ext v0.2.0
+   Compiling same-file v1.0.6
+   Compiling dirs-sys v0.5.0
+   Compiling toml v0.9.10+spec-1.1.0
+   Compiling zerocopy v0.8.32
+   Compiling foreign-types v0.5.0
+   Compiling keyboard-types v0.7.0
+   Compiling walkdir v2.5.0
+   Compiling core-graphics-types v0.2.0
+   Compiling num-rational v0.4.2
+   Compiling brotli v8.0.2
+   Compiling v_frame v0.3.9
+   Compiling infer v0.19.0
+   Compiling serde-untagged v0.1.9
+   Compiling json-patch v3.0.1
+   Compiling phf v0.11.3
+   Compiling rayon v1.11.0
+   Compiling regex v1.12.2
+   Compiling serde_with v3.16.1
+   Compiling urlpattern v0.3.0
+   Compiling as-slice v0.2.1
+   Compiling semver v1.0.27
+   Compiling dunce v1.0.5
+   Compiling glob v0.3.3
+   Compiling scopeguard v1.2.0
+   Compiling tauri-runtime v2.9.2
+   Compiling av-scenechange v0.14.1
+   Compiling wry v0.53.5
+   Compiling aligned v0.4.3
+   Compiling core-graphics v0.24.0
+   Compiling dirs v6.0.0
+   Compiling png v0.17.16
+   Compiling nom v8.0.0
+   Compiling core2 v0.4.0
+   Compiling equivalent v1.0.2
+   Compiling quick-error v2.0.1
+   Compiling dispatch v0.2.0
+   Compiling y4m v0.8.0
+   Compiling lazy_static v1.5.0
+   Compiling hashbrown v0.16.1
+   Compiling tauri-utils v2.8.1
+   Compiling tauri-runtime-wry v2.9.3
+   Compiling profiling v1.0.17
+   Compiling bitstream-io v4.9.0
+   Compiling maybe-rayon v0.1.1
+   Compiling rav1e v0.8.1
+   Compiling indexmap v2.12.1
+   Compiling itertools v0.14.0
+   Compiling half v2.7.1
+   Compiling quick-xml v0.38.4
+   Compiling getrandom v0.3.4
+   Compiling zune-core v0.4.12
+   Compiling weezl v0.1.12
+   Compiling new_debug_unreachable v1.0.6
+   Compiling pin-project-lite v0.2.16
+   Compiling imgref v1.12.0
+   Compiling base64 v0.22.1
+   Compiling objc-sys v0.3.5
+   Compiling loop9 v0.1.5
+   Compiling tokio v1.49.0
+   Compiling zune-jpeg v0.4.21
+   Compiling plist v1.8.0
+   Compiling fax v0.2.6
+   Compiling serialize-to-javascript v0.1.2
+   Compiling avif-serialize v0.8.6
+   Compiling pxfm v0.1.27
+   Compiling zune-inflate v0.2.54
+   Compiling bytemuck v1.24.0
+   Compiling rgb v0.8.52
+   Compiling zune-core v0.5.0
+   Compiling byteorder-lite v0.1.0
+   Compiling heck v0.5.0
+   Compiling color_quant v1.1.0
+   Compiling lebe v0.5.3
+   Compiling mime v0.3.17
+   Compiling embed_plist v1.2.2
+   Compiling bit_field v0.10.3
+   Compiling gif v0.14.1
+   Compiling image-webp v0.2.4
+   Compiling zune-jpeg v0.5.8
+   Compiling exr v1.74.0
+   Compiling qoi v0.4.1
+   Compiling av1-grain v0.2.5
+   Compiling tiff v0.10.3
+   Compiling objc2-core-audio-types v0.3.2
+   Compiling png v0.18.0
+   Compiling core-foundation v0.9.4
+   Compiling dirs-sys v0.3.7
+   Compiling foreign-types-shared v0.1.1
+   Compiling foreign-types v0.3.2
+   Compiling dirs v4.0.0
+   Compiling core-graphics-types v0.1.3
+   Compiling tauri-plugin-opener v2.5.2
+   Compiling tauri-plugin-global-shortcut v2.3.1
+   Compiling tauri-plugin-autostart v2.5.1
+   Compiling moxcms v0.7.11
+   Compiling objc2 v0.5.2
+   Compiling objc2-image-io v0.3.2
+   Compiling objc2-core-audio v0.3.2
+   Compiling objc2-media-toolbox v0.3.2
+   Compiling pathdiff v0.2.3
+   Compiling objc2-foundation v0.2.2
+   Compiling open v5.3.3
+   Compiling core-graphics v0.22.3
+   Compiling auto-launch v0.5.0
+   Compiling tauri-apphowlingual v0.1.0 (/Users/flow/Programs/Howlingual/src-tauri)
+   Compiling mouse_position v0.1.4
+   Compiling objc2-vision v0.2.2
+   Compiling objc2-metal v0.3.2
+   Compiling objc2-core-image v0.3.2
+   Compiling objc2-quartz-core v0.3.2
+   Compiling objc2-core-data v0.3.2
+   Compiling objc2-cloud-kit v0.3.2
+   Compiling objc2-core-graphics v0.3.2
+   Compiling ravif v0.12.0
+   Compiling objc2-avf-audio v0.3.2
+   Compiling objc2-core-video v0.3.2
+   Compiling image v0.25.9
+   Compiling objc2-app-kit v0.3.2
+   Compiling objc2-core-media v0.3.2
+   Compiling objc2-av-foundation v0.3.2
+   Compiling objc2-web-kit v0.3.2
+   Compiling tao v0.34.5
+   Compiling muda v0.17.1
+   Compiling window-vibrancy v0.6.0
+   Compiling global-hotkey v0.7.0
+   Compiling arboard v3.6.1
+   Compiling xcap v0.8.1
+   Compiling tray-icon v0.21.3
+    Finished `release` profile [optimized] target(s) in 53.41s
+       Built application at: /Users/flow/Programs/Howlingual/src-tauri/target/universal-apple-darwin/release/tauri-apphowlingual
+    Bundling Howlingual.app (/Users/flow/Programs/Howlingual/src-tauri/target/universal-apple-darwin/release/bundle/macos/Howlingual.app)
+    Bundling Howlingual_0.1.0_universal.dmg (/Users/flow/Programs/Howlingual/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Howlingual_0.1.0_universal.dmg)
+     Running bundle_dmg.sh

@@ -1,0 +1,102 @@
+name: Build Installers
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build for macOS (universal)
+        run: npm run tauri:build:mac
+
+      - name: Upload macOS DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Howlingual-macos-universal
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/
+
+  build-windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            name: windows-x64
+          - target: aarch64-pc-windows-msvc
+            name: windows-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build for Windows (${{ matrix.target }})
+        run: npm run tauri build -- --target ${{ matrix.target }}
+
+      - name: Upload Windows installer (NSIS)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Howlingual-${{ matrix.name }}-nsis
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/nsis/
+
+      - name: Upload Windows installer (MSI)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Howlingual-${{ matrix.name }}-msi
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/msi/
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.exe
+            artifacts/**/*.msi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
