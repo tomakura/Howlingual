@@ -91,6 +91,8 @@
    npm run tauri build
    ```
 
+   プラットフォーム別のビルド方法は [BUILD.md](BUILD.md) を参照してください。
+
 ### API キーの設定
 初回起動時に設定画面からAPIキーを登録してください。
 
@@ -134,7 +136,17 @@
 
 ---
 
-## 📄 ライセンス
+## � ビルド・配布
+
+各プラットフォーム向けのインストーラーをビルドする方法は [BUILD.md](BUILD.md) を参照してください。
+
+- macOS: ユニバーサルバイナリ（Intel + Apple Silicon）
+- Windows: x64 / ARM64
+- Linux: 実験的サポート
+
+---
+
+## �📄 ライセンス
 
 MIT License
 
