@@ -417,16 +417,57 @@ fn send_paste_shortcut() {
 // macOS: Use CGEventPost for keyboard simulation
 #[cfg(target_os = "macos")]
 fn send_copy_shortcut() {
-    // TODO: Implement macOS keyboard simulation using Core Graphics
-    // For now, this is a placeholder
-    println!("[copy] macOS keyboard simulation not yet implemented");
+    use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    const KEY_C: u16 = 0x08;
+
+    let source = match CGEventSource::new(CGEventSourceStateID::CombinedSessionState) {
+        Ok(source) => source,
+        Err(_) => {
+            println!("[copy] macOS CGEventSource unavailable");
+            return;
+        }
+    };
+
+    if let Ok(event) = CGEvent::new_keyboard_event(source.clone(), KEY_C, true) {
+        event.set_flags(CGEventFlags::CGEventFlagCommand);
+        event.post(CGEventTapLocation::HID);
+    }
+    if let Ok(event) = CGEvent::new_keyboard_event(source, KEY_C, false) {
+        event.set_flags(CGEventFlags::CGEventFlagCommand);
+        event.post(CGEventTapLocation::HID);
+    }
+
+    std::thread::sleep(Duration::from_millis(30));
 }
 
 // macOS: Use CGEventPost for keyboard simulation (Paste)
 #[cfg(target_os = "macos")]
 fn send_paste_shortcut() {
-    // TODO: Implement macOS keyboard simulation using Core Graphics
-    println!("[paste] macOS keyboard simulation not yet implemented");
+    use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    const KEY_V: u16 = 0x09;
+
+    let source = match CGEventSource::new(CGEventSourceStateID::CombinedSessionState) {
+        Ok(source) => source,
+        Err(_) => {
+            println!("[paste] macOS CGEventSource unavailable");
+            return;
+        }
+    };
+
+    if let Ok(event) = CGEvent::new_keyboard_event(source.clone(), KEY_V, true) {
+        event.set_flags(CGEventFlags::CGEventFlagCommand);
+        event.post(CGEventTapLocation::HID);
+    }
+    if let Ok(event) = CGEvent::new_keyboard_event(source, KEY_V, false) {
+        event.set_flags(CGEventFlags::CGEventFlagCommand);
+        event.post(CGEventTapLocation::HID);
+    }
+
+    std::thread::sleep(Duration::from_millis(30));
 }
 
 // Linux: Placeholder
@@ -574,9 +615,9 @@ fn ensure_compact_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow>
         tauri::WebviewUrl::App("/?view=compact".into()),
     )
     .title("Howlingual Quick")
-    .inner_size(420.0, 520.0)
-    .min_inner_size(420.0, 520.0)
-    .max_inner_size(420.0, 520.0)
+    .inner_size(420.0, 560.0)
+    .min_inner_size(420.0, 560.0)
+    .max_inner_size(420.0, 560.0)
     .resizable(false)
     .decorations(false)
     .always_on_top(true)
@@ -717,21 +758,52 @@ fn show_main_window(app: &AppHandle, cursor_pos: Option<(i32, i32)>) -> tauri::R
             .find(|m| {
                 let pos = m.position();
                 let size = m.size();
-                cursor_x >= pos.x
-                    && cursor_x < pos.x + size.width as i32
-                    && cursor_y >= pos.y
-                    && cursor_y < pos.y + size.height as i32
+                #[cfg(target_os = "macos")]
+                {
+                    let scale = m.scale_factor();
+                    let logical_x = pos.x as f64 / scale;
+                    let logical_y = pos.y as f64 / scale;
+                    let logical_w = size.width as f64 / scale;
+                    let logical_h = size.height as f64 / scale;
+                    let cursor_x = cursor_x as f64;
+                    let cursor_y = cursor_y as f64;
+                    return cursor_x >= logical_x
+                        && cursor_x < logical_x + logical_w
+                        && cursor_y >= logical_y
+                        && cursor_y < logical_y + logical_h;
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    return cursor_x >= pos.x
+                        && cursor_x < pos.x + size.width as i32
+                        && cursor_y >= pos.y
+                        && cursor_y < pos.y + size.height as i32;
+                }
             })
             .or_else(|| window.primary_monitor().ok().flatten());
 
         if let Some(monitor) = monitor {
             let mon_pos = monitor.position();
             let mon_size = monitor.size();
-            let _scale = monitor.scale_factor();
+            #[cfg(target_os = "macos")]
+            let scale = monitor.scale_factor();
             let win_w = win_size.width as i32;
             let win_h = win_size.height as i32;
 
             // Center window on cursor
+            let (cursor_x, cursor_y) = {
+                #[cfg(target_os = "macos")]
+                {
+                    let cursor_x = (cursor_x as f64 * scale).round() as i32;
+                    let cursor_y = (cursor_y as f64 * scale).round() as i32;
+                    (cursor_x, cursor_y)
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    (cursor_x, cursor_y)
+                }
+            };
+
             let x = cursor_x - win_w / 2;
             let y = cursor_y - win_h / 2;
             let (x, y) = clamp_window_to_monitor(x, y, win_w, win_h, *mon_pos, *mon_size);
@@ -752,6 +824,9 @@ fn show_compact_window(
     text: Option<String>,
     cursor_pos: Option<(i32, i32)>,
 ) -> tauri::Result<()> {
+    if let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = main.hide();
+    }
     let window = ensure_compact_window(app)?;
 
     // Position window near cursor if available
@@ -761,7 +836,7 @@ fn show_compact_window(
         // Get window size
         let win_size = window.outer_size().unwrap_or(tauri::PhysicalSize {
             width: 420,
-            height: 520,
+            height: 560,
         });
         println!(
             "[debug] Window size: {}x{}",
@@ -781,10 +856,27 @@ fn show_compact_window(
                     "[debug] Monitor: pos=({},{}), size={}x{}",
                     pos.x, pos.y, size.width, size.height
                 );
-                cursor_x >= pos.x
-                    && cursor_x < pos.x + size.width as i32
-                    && cursor_y >= pos.y
-                    && cursor_y < pos.y + size.height as i32
+                #[cfg(target_os = "macos")]
+                {
+                    let scale = m.scale_factor();
+                    let logical_x = pos.x as f64 / scale;
+                    let logical_y = pos.y as f64 / scale;
+                    let logical_w = size.width as f64 / scale;
+                    let logical_h = size.height as f64 / scale;
+                    let cursor_x = cursor_x as f64;
+                    let cursor_y = cursor_y as f64;
+                    return cursor_x >= logical_x
+                        && cursor_x < logical_x + logical_w
+                        && cursor_y >= logical_y
+                        && cursor_y < logical_y + logical_h;
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    return cursor_x >= pos.x
+                        && cursor_x < pos.x + size.width as i32
+                        && cursor_y >= pos.y
+                        && cursor_y < pos.y + size.height as i32;
+                }
             })
             .or_else(|| window.primary_monitor().ok().flatten());
 
@@ -803,6 +895,19 @@ fn show_compact_window(
 
             // Start with cursor position offset slightly (so cursor is near top-left of window)
             // UPDATED: Shift it more to the right so it doesn't overlap cursor immediately
+            let (cursor_x, cursor_y) = {
+                #[cfg(target_os = "macos")]
+                {
+                    let cursor_x = (cursor_x as f64 * scale).round() as i32;
+                    let cursor_y = (cursor_y as f64 * scale).round() as i32;
+                    (cursor_x, cursor_y)
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    (cursor_x, cursor_y)
+                }
+            };
+
             let x = cursor_x + 10;
             let y = cursor_y + 10;
             println!("[debug] Initial calc pos: ({}, {})", x, y);
@@ -957,7 +1062,6 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
             let mon_height = monitor.height().map_err(|e| e.to_string())?;
             let mon_x = monitor.x().map_err(|e| e.to_string())?;
             let mon_y = monitor.y().map_err(|e| e.to_string())?;
-
             println!(
                 "[ocr] Capturing monitor {}: {}x{} at ({},{})",
                 index, mon_width, mon_height, mon_x, mon_y
@@ -973,7 +1077,9 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
 
             let monitor_id = index.to_string();
             // Use PHYSICAL dimensions from the captured image for the window size
+            #[cfg(not(target_os = "macos"))]
             let img_width = image.width();
+            #[cfg(not(target_os = "macos"))]
             let img_height = image.height();
 
             capture_map.insert(monitor_id.clone(), image);
@@ -1050,23 +1156,45 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
 
             let window = ensure_capture_window(&app, &label, &url).map_err(|e| e.to_string())?;
 
-            // Set window to physical pixel dimensions
-            // Tauri will create a window of exact physical size
-            // The webview will be scaled internally based on system DPI
-            if let Err(e) =
-                window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                    x: mon_x,
-                    y: mon_y,
-                }))
+            #[cfg(target_os = "macos")]
             {
-                println!("[ocr] Failed to set window position: {}", e);
+                if let Err(e) =
+                    window.set_position(tauri::Position::Logical(tauri::LogicalPosition {
+                        x: mon_x as f64,
+                        y: mon_y as f64,
+                    }))
+                {
+                    println!("[ocr] Failed to set window position: {}", e);
+                }
+
+                if let Err(e) = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                    width: mon_width as f64,
+                    height: mon_height as f64,
+                })) {
+                    println!("[ocr] Failed to set window size: {}", e);
+                }
             }
 
-            if let Err(e) = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                width: img_width,
-                height: img_height,
-            })) {
-                println!("[ocr] Failed to set window size: {}", e);
+            #[cfg(not(target_os = "macos"))]
+            {
+                // Set window to physical pixel dimensions
+                // Tauri will create a window of exact physical size
+                // The webview will be scaled internally based on system DPI
+                if let Err(e) =
+                    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                        x: mon_x,
+                        y: mon_y,
+                    }))
+                {
+                    println!("[ocr] Failed to set window position: {}", e);
+                }
+
+                if let Err(e) = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                    width: img_width,
+                    height: img_height,
+                })) {
+                    println!("[ocr] Failed to set window size: {}", e);
+                }
             }
 
             // SHOW the window now that it's sized correctly

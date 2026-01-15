@@ -5125,6 +5125,7 @@ name = "tauri-apphowlingual"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "core-graphics 0.22.3",
  "image",
  "mouse_position",
  "ndarray",

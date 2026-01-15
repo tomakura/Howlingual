@@ -204,13 +204,21 @@
 		);
 
 		// Verify DPI scaling is working as expected
-		// The window should be sized to physical pixels, and the webview should scale to CSS pixels
-		// Expected: innerWidth ≈ outerWidth / devicePixelRatio (allowing for small differences)
+		// Some platforms size capture windows in logical points, others in physical pixels.
+		// Accept whichever expected size is closer to the actual inner size.
 		const scale = getDevicePixelRatio();
-		const expectedInnerWidth = Math.round(window.outerWidth / scale);
-		const expectedInnerHeight = Math.round(window.outerHeight / scale);
-		const widthDiff = Math.abs(window.innerWidth - expectedInnerWidth);
-		const heightDiff = Math.abs(window.innerHeight - expectedInnerHeight);
+		const expectedInnerWidthPhysical = Math.round(window.outerWidth / scale);
+		const expectedInnerHeightPhysical = Math.round(window.outerHeight / scale);
+		const expectedInnerWidthLogical = Math.round(window.outerWidth);
+		const expectedInnerHeightLogical = Math.round(window.outerHeight);
+		const widthDiff = Math.min(
+			Math.abs(window.innerWidth - expectedInnerWidthPhysical),
+			Math.abs(window.innerWidth - expectedInnerWidthLogical),
+		);
+		const heightDiff = Math.min(
+			Math.abs(window.innerHeight - expectedInnerHeightPhysical),
+			Math.abs(window.innerHeight - expectedInnerHeightLogical),
+		);
 
 		if (
 			widthDiff > SCALING_TOLERANCE_PX ||

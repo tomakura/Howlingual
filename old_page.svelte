@@ -39,23 +39,18 @@
     gemini: "",
     openai: "",
     anthropic: "",
-    groq: "",
-    cerebras: "",
   });
   let defaultTargetLang = $state("日本語");
   let theme = $state<"dark" | "light">("dark");
   let appLanguage = $state<"ja" | "en" | "zh" | "ko">("ja");
   let translationCount = $state<1 | 2 | 3>(3); // 翻訳案の個数（1〜3）
   let allowRewrite = $state(false);
-  type AiProvider = "openai" | "gemini" | "anthropic" | "groq" | "cerebras";
-  let selectedProvider = $state<AiProvider>("openai");
+  let selectedProvider = $state<"openai" | "gemini" | "anthropic">("openai");
   // プロバイダごとの最後に選択したモデルを記憶
   let lastSelectedModels = $state<Record<string, string>>({
     openai: "gpt-5-mini",
     gemini: "gemini-2.5-flash",
     anthropic: "claude-sonnet-4.5",
-    groq: "llama-3.1-70b-versatile",
-    cerebras: "llama3.1-70b",
   });
   // Initialize mode synchronously from URL to prevent flash of wrong UI
   const initialParams = new URLSearchParams(window.location.search);
@@ -71,7 +66,6 @@
   let autoRunQuick = $state(true); // Auto-run setting - default ON for backward compatibility
   let autoStartEnabled = $state(false);
   let startMinimized = $state(false);
-  let ocrEngine = $state<"paddle" | "windows">("paddle");
 
   let historyAnimating = $state(false);
   let historyAnimTimer: ReturnType<typeof setTimeout> | null = null;
@@ -85,21 +79,6 @@
   // ====== Window Fade Animation ======
   let isWindowVisible = $state(false);
   let isWindows = $state(false);
-  let isMac = $state(false);
-
-  async function toggleAutoStart() {
-    const next = !autoStartEnabled;
-    try {
-      if (next) {
-        await enableAutostart();
-      } else {
-        await disableAutostart();
-      }
-      autoStartEnabled = next;
-    } catch (e) {
-      console.warn("Failed to update autostart", e);
-    }
-  }
 
   async function hideWindow() {
     isWindowVisible = false;
@@ -116,7 +95,6 @@
       // Detect OS
       if (typeof navigator !== "undefined") {
         isWindows = navigator.userAgent.includes("Windows");
-        isMac = navigator.userAgent.includes("Mac");
       }
 
       // Listen for window_shown event from Rust
@@ -290,138 +268,6 @@
         value: "claude-haiku-4.5",
         provider: "anthropic",
       },
-      // Groq (OpenAI-compatible)
-      {
-        label: "Llama 4 Maverick 17B",
-        value: "meta-llama/llama-4-maverick-17b-128e-instruct",
-        provider: "groq",
-      },
-      {
-        label: "Llama 4 Scout 17B",
-        value: "meta-llama/llama-4-scout-17b-16e-instruct",
-        provider: "groq",
-      },
-      {
-        label: "Llama Guard 4 12B",
-        value: "meta-llama/llama-guard-4-12b",
-        provider: "groq",
-      },
-      {
-        label: "Llama 3.3 70B Versatile",
-        value: "llama-3.3-70b-versatile",
-        provider: "groq",
-      },
-      {
-        label: "Llama 3.1 70B Versatile",
-        value: "llama-3.1-70b-versatile",
-        provider: "groq",
-      },
-      {
-        label: "Llama 3.1 8B Instant",
-        value: "llama-3.1-8b-instant",
-        provider: "groq",
-      },
-      {
-        label: "Llama Guard 3 8B",
-        value: "llama-guard-3-8b",
-        provider: "groq",
-      },
-      {
-        label: "Llama 3 70B 8192",
-        value: "llama3-70b-8192",
-        provider: "groq",
-      },
-      {
-        label: "Llama 3 8B 8192",
-        value: "llama3-8b-8192",
-        provider: "groq",
-      },
-      {
-        label: "GPT-OSS 120B",
-        value: "openai/gpt-oss-120b",
-        provider: "groq",
-      },
-      {
-        label: "GPT-OSS 20B",
-        value: "openai/gpt-oss-20b",
-        provider: "groq",
-      },
-      {
-        label: "Kimi K2 Instruct",
-        value: "moonshotai/kimi-k2-instruct",
-        provider: "groq",
-      },
-      {
-        label: "Kimi K2 Instruct 0905",
-        value: "moonshotai/kimi-k2-instruct-0905",
-        provider: "groq",
-      },
-      {
-        label: "Qwen 3 32B",
-        value: "qwen/qwen3-32b",
-        provider: "groq",
-      },
-      {
-        label: "Qwen QwQ 32B",
-        value: "qwen-qwq-32b",
-        provider: "groq",
-      },
-      {
-        label: "Mistral Saba 24B",
-        value: "mistral-saba-24b",
-        provider: "groq",
-      },
-      {
-        label: "Gemma 2 9B IT",
-        value: "gemma2-9b-it",
-        provider: "groq",
-      },
-      {
-        label: "DeepSeek R1 Distill Llama 70B",
-        value: "deepseek-r1-distill-llama-70b",
-        provider: "groq",
-      },
-      // Cerebras (OpenAI-compatible)
-      {
-        label: "Llama 4 Scout 17B",
-        value: "llama-4-scout-17b-16e-instruct",
-        provider: "cerebras",
-      },
-      {
-        label: "Llama 3.3 70B",
-        value: "llama-3.3-70b",
-        provider: "cerebras",
-      },
-      {
-        label: "Llama 3.1 8B",
-        value: "llama3.1-8b",
-        provider: "cerebras",
-      },
-      {
-        label: "GPT-OSS 120B",
-        value: "gpt-oss-120b",
-        provider: "cerebras",
-      },
-      {
-        label: "Qwen 3 32B",
-        value: "qwen-3-32b",
-        provider: "cerebras",
-      },
-      {
-        label: "Qwen 3 235B Instruct (Preview)",
-        value: "qwen-3-235b-a22b-instruct-2507",
-        provider: "cerebras",
-      },
-      {
-        label: "Z.ai GLM 4.6 (Preview)",
-        value: "zai-glm-4.6",
-        provider: "cerebras",
-      },
-      {
-        label: "Z.ai GLM 4.7 (Preview)",
-        value: "zai-glm-4.7",
-        provider: "cerebras",
-      },
     ];
 
   let filteredModels = $derived(
@@ -499,7 +345,6 @@
             ...lastSelectedModels,
             ...parsed.lastSelectedModels,
           };
-        if (parsed.ocrEngine) ocrEngine = parsed.ocrEngine;
         if (
           parsed.translationCount &&
           [1, 2, 3].includes(parsed.translationCount)
@@ -628,6 +473,27 @@
       console.log("[UI] Requesting Sync State...");
       await emit("request_sync_state");
 
+      // Listen for OCR handover data
+      const unlistenHandover = await listen<string>(
+        "handover_data",
+        async (event) => {
+          const text = event.payload;
+          if (text && text.trim()) {
+            await handleHandover(text);
+          }
+        },
+      );
+
+      // Check for pending handover text (in case we missed the event during load)
+      try {
+        const pending = await invoke<string | null>("get_handover_text");
+        if (pending && pending.trim()) {
+          await handleHandover(pending);
+        }
+      } catch (e) {
+        console.warn("Failed to check handover text:", e);
+      }
+
       unlisten = await listen<any>("translation_update", (event) => {
         const p = event.payload;
 
@@ -635,14 +501,10 @@
         // Ignore updates for old input text to prevent "jumpy" UI when typing fast.
         // During active detection or translation, the service might echo old states.
         if (p.inputQuery !== undefined && p.inputQuery !== inputQuery) {
-          // If this window is focused/typing, ignore stale echoes unless real translation is flowing.
-          const hasResults =
-            Array.isArray(p.translations) &&
-            p.translations.some((t: any) => t?.text);
+          // If this window is the one being focused/typed in, ignore external content updates.
+          // This prevents stale echoes from the's service from reverting our local input.
           if (textareaEl && document.activeElement === textareaEl) {
-            if (!p.isTranslating && !hasResults) {
-              return;
-            }
+            return;
           }
         }
 
@@ -673,13 +535,6 @@
             localStorage.setItem("howlingual_history", JSON.stringify(history));
 
             persistLastResult(); // Helper function
-
-            const usageTokens = Math.max(
-              0,
-              (p.techMetrics?.inputTokens ?? 0) +
-                (p.techMetrics?.outputTokens ?? 0),
-            );
-            recordUsage(1, usageTokens);
           }
           lastTranslatedText = p.inputQuery || inputQuery;
         }
@@ -767,13 +622,9 @@
           console.log("[pending-text] Received:", text.length, "chars");
           hasReceivedText = true;
 
-          // Use applyQuickText for compact mode, full handover for main mode
+          // Use applyQuickText which respects autoRunQuick setting
           syncShowTechInfoFromStorage();
-          if (isCompactMode) {
-            await applyQuickText(text);
-          } else {
-            await handleHandover(text);
-          }
+          await applyQuickText(text);
 
           // Stop polling once we got text
           if (intervalId) {
@@ -884,7 +735,77 @@
         "chars",
       );
 
-      void handleHandover(event.payload);
+      // Parse JSON payload with full translation state
+      try {
+        const payload = JSON.parse(event.payload);
+        console.log("[handover] Parsed payload:", payload);
+
+        // Restore source text
+        inputQuery = payload.sourceText || "";
+        lastTranslatedText = inputQuery;
+
+        // Restore translations
+        if (payload.translations && Array.isArray(payload.translations)) {
+          translations = payload.translations.map((t: any, i: number) => ({
+            id: i + 1,
+            text: t.text || "",
+            reason: t.reason || "",
+          }));
+        }
+
+        // Restore explanation
+        if (payload.detailedExplanation) {
+          detailedExplanation = payload.detailedExplanation;
+          showExplanation = true;
+        } else {
+          detailedExplanation = null;
+          showExplanation = false;
+        }
+
+        // Restore language settings
+        if (payload.sourceLang) {
+          applySourceLangFromSync(payload.sourceLang, payload.detectedLang);
+        }
+        if (payload.targetLang) {
+          targetLang = payload.targetLang;
+        }
+
+        // Restore style levels
+        if (payload.styleLevels) {
+          styleLevels = normalizeStyleLevels(
+            { ...styleLevels, ...payload.styleLevels },
+            customStyles,
+          );
+        }
+
+        // Restore techMetrics
+        if (payload.techMetrics) {
+          techMetrics = { ...techMetrics, ...payload.techMetrics };
+        }
+
+        // Restore showTechInfo
+        if (typeof payload.showTechInfo === "boolean") {
+          showTechInfo = payload.showTechInfo;
+        }
+
+        console.log("[handover] Restored state:", {
+          translations: translations.length,
+          techMetrics: techMetrics.time,
+          showTechInfo: showTechInfo, // Debug log
+          isTranslating: payload.isTranslating,
+        });
+
+        isTranslating = Boolean(payload.isTranslating);
+
+        void tick().then(async () => {
+          autoResize();
+          await emit("request_sync_state");
+        });
+      } catch (e) {
+        // Fallback: treat as plain text (old behavior)
+        console.log("[handover] Fallback to plain text:", e);
+        void applyQuickText(event.payload);
+      }
     });
 
     return async () => {
@@ -929,10 +850,6 @@
     window.addEventListener("storage", handleStorageChange);
   });
 
-  onMount(() => {
-    refreshUsageStats();
-  });
-
   // Auto-save settings when changed
   $effect(() => {
     const settings = {
@@ -949,19 +866,11 @@
       startMinimized: startMinimized,
       lastSelectedModels: lastSelectedModels,
       translationCount: translationCount,
-      ocrEngine: ocrEngine,
     };
     localStorage.setItem("howlingual_settings", JSON.stringify(settings));
 
     // Apply theme immediately
     document.documentElement.setAttribute("data-theme", theme);
-
-    // Sync OCR Engine to Backend (Windows only)
-    if (isWindows) {
-      invoke("set_ocr_engine", { engine: ocrEngine }).catch((e) =>
-        console.warn("Failed to set OCR engine", e),
-      );
-    }
 
     // console.log("[Settings] Auto-saved");
   });
@@ -1058,7 +967,7 @@
     };
   });
 
-  function selectProvider(provider: AiProvider) {
+  function selectProvider(provider: "openai" | "gemini" | "anthropic") {
     // 現在のモデルを現在のプロバイダに保存
     lastSelectedModels[selectedProvider] = selectedModel;
 
@@ -1114,35 +1023,6 @@
       "howlingual_custom_styles",
       JSON.stringify(customStyles),
     );
-  }
-
-  function getApiKeyLabel(provider: AiProvider) {
-    switch (provider) {
-      case "openai":
-        return t(appLanguage, "openaiApiKey");
-      case "gemini":
-        return t(appLanguage, "geminiApiKey");
-      case "anthropic":
-        return t(appLanguage, "anthropicApiKey");
-      case "groq":
-        return t(appLanguage, "groqApiKey");
-      case "cerebras":
-        return t(appLanguage, "cerebrasApiKey");
-    }
-  }
-
-  function getApiKeyPlaceholder(provider: AiProvider) {
-    switch (provider) {
-      case "gemini":
-        return "AIza...";
-      case "anthropic":
-        return "sk-ant-...";
-      case "groq":
-      case "cerebras":
-      case "openai":
-      default:
-        return "sk-...";
-    }
   }
 
   function changeTab(
@@ -1379,44 +1259,24 @@
       if (typeof data === "object" && data !== null && "sourceText" in data) {
         console.log("[Handover] Restoring full state");
         inputQuery = data.sourceText || "";
-        lastTranslatedText = inputQuery;
         // Map translations to ensure reactive updates if needed
-        if (data.translations && Array.isArray(data.translations)) {
-          translations = data.translations.map((t: any, i: number) => ({
-            id: i + 1,
-            text: t?.text || "",
-            reason: t?.reason || "",
-          }));
-        } else {
-          translations = [];
-        }
+        translations = data.translations || [];
         detailedExplanation = data.detailedExplanation || null;
         showExplanation = !!detailedExplanation;
 
-        if (data.sourceLang) {
-          applySourceLangFromSync(data.sourceLang, data.detectedLang);
-        }
-        if (data.targetLang) {
-          targetLang = data.targetLang;
-        }
+        sourceLang = data.sourceLang || sourceLang;
+        targetLang = data.targetLang || targetLang;
+        detectedLang = data.detectedLang || "";
 
-        if (data.styleLevels) {
-          styleLevels = normalizeStyleLevels(
-            { ...styleLevels, ...data.styleLevels },
-            customStyles,
-          );
-        }
-        if (data.techMetrics) techMetrics = { ...techMetrics, ...data.techMetrics };
-        if (typeof data.showTechInfo === "boolean") {
-          showTechInfo = data.showTechInfo;
-        }
+        if (data.styleLevels) styleLevels = data.styleLevels;
+        if (data.techMetrics) techMetrics = data.techMetrics;
+        if (data.showTechInfo !== undefined) showTechInfo = data.showTechInfo;
 
         // Restore translating state if it was interrupted
         isTranslating = data.isTranslating || false;
 
         await tick();
         await autoResize();
-        await emit("request_sync_state");
       } else {
         // Valid JSON but not our state object? Treat as text.
         await applyQuickText(typeof data === "string" ? data : payload);
@@ -1496,7 +1356,6 @@
       isDetecting,
       targetLang,
       styles: $state.snapshot(styleLevels),
-      candidateCount: translationCount,
       resetTranslations,
     });
   }
@@ -1571,67 +1430,6 @@
     selectedModel ||
       ((import.meta.env.VITE_PREFERRED_MODEL || "gemini-1.5-flash") as AiModel),
   );
-
-  // Streaming-compatible models by provider
-  const streamingModels: Record<string, string[]> = {
-    groq: [
-      "meta-llama/llama-4-maverick-17b-128e-instruct",
-      "meta-llama/llama-4-scout-17b-16e-instruct",
-      "llama-3.3-70b-versatile",
-      "llama-3.1-70b-versatile",
-      "llama-3.1-8b-instant",
-      "llama3-70b-8192",
-      "llama3-8b-8192",
-      "openai/gpt-oss-120b",
-      "openai/gpt-oss-20b",
-      "moonshotai/kimi-k2-instruct",
-      "moonshotai/kimi-k2-instruct-0905",
-      "qwen/qwen3-32b",
-      "qwen-qwq-32b",
-      "mistral-saba-24b",
-      "gemma2-9b-it",
-      "deepseek-r1-distill-llama-70b",
-    ],
-    cerebras: [
-      "llama-4-scout-17b-16e-instruct",
-      "llama-3.3-70b",
-      "llama3.1-8b",
-      "gpt-oss-120b",
-      "qwen-3-32b",
-      "qwen-3-235b-a22b-instruct-2507",
-      "zai-glm-4.6",
-      "zai-glm-4.7",
-    ],
-    openai: [
-      "gpt-5.2",
-      "gpt-5.2-pro",
-      "gpt-5.1",
-      "gpt-5-mini",
-      "gpt-5-nano",
-      "gpt-4.1",
-      "gpt-4.1-mini",
-      "gpt-4.1-nano",
-      "o3-pro",
-    ],
-    gemini: [
-      "gemini-2.5-pro",
-      "gemini-2.5-flash",
-      "gemini-2.5-flash-lite",
-      "gemini-3-pro",
-      "gemini-3-flash",
-    ],
-    anthropic: [
-      "claude-opus-4.5",
-      "claude-sonnet-4.5",
-      "claude-haiku-4.5",
-    ],
-  };
-
-  function isStreamingModel(): boolean {
-    const provider = selectedProvider;
-    const models = streamingModels[provider] || [];
-    return models.includes(selectedModel as string);
-  }
 
   let inputQuery = $state("");
 
@@ -2410,165 +2208,10 @@
     isReal: false,
     firstTokenReceived: false,
   });
+  let timerInterval: any;
+  let initialTokens = 0;
+  let firstTokenTime = 0;
 
-  type DailyUsage = {
-    date: string;
-    count: number;
-    tokens: number;
-  };
-
-  const USAGE_STORAGE_KEY = "howlingual_usage_daily_v1";
-  let usageToday = $state<DailyUsage>({ date: "", count: 0, tokens: 0 });
-  let weeklyUsage = $state<DailyUsage[]>([]);
-  let usageReady = $state(false);
-
-  const usageChartConfig = {
-    width: 320,
-    height: 200,
-    paddingX: 18,
-    paddingTop: 18,
-    baseline: 140,
-    gap: 22,
-    barMaxHeight: 92,
-    labelY: 186,
-  };
-
-  const pad2 = (n: number) => String(n).padStart(2, "0");
-
-  function getDateKey(date: Date) {
-    return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(
-      date.getDate(),
-    )}`;
-  }
-
-  function buildEmptyDay(dateKey: string): DailyUsage {
-    return { date: dateKey, count: 0, tokens: 0 };
-  }
-
-  function loadUsageMap(): Record<string, DailyUsage> {
-    try {
-      const raw = localStorage.getItem(USAGE_STORAGE_KEY);
-      if (!raw) return {};
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") return parsed;
-    } catch (e) {
-      console.warn("[Usage] Failed to load usage stats", e);
-    }
-    return {};
-  }
-
-  function saveUsageMap(map: Record<string, DailyUsage>) {
-    localStorage.setItem(USAGE_STORAGE_KEY, JSON.stringify(map));
-  }
-
-  function refreshUsageStats() {
-    const map = loadUsageMap();
-    const todayKey = getDateKey(new Date());
-    if (!map[todayKey]) {
-      map[todayKey] = buildEmptyDay(todayKey);
-      saveUsageMap(map);
-    }
-
-    usageToday = map[todayKey];
-
-    const days: DailyUsage[] = [];
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date();
-      date.setDate(date.getDate() - i);
-      const key = getDateKey(date);
-      days.push(map[key] || buildEmptyDay(key));
-    }
-    weeklyUsage = days;
-    usageReady = true;
-  }
-
-  function recordUsage(countIncrement: number, tokenIncrement: number) {
-    const map = loadUsageMap();
-    const todayKey = getDateKey(new Date());
-    const current = map[todayKey] || buildEmptyDay(todayKey);
-    current.count += countIncrement;
-    current.tokens += tokenIncrement;
-    map[todayKey] = current;
-    saveUsageMap(map);
-    refreshUsageStats();
-  }
-
-  const shortDate = (dateKey: string) => {
-    const [_, m, d] = dateKey.split("-");
-    if (!m || !d) return dateKey;
-    return `${m}/${d}`;
-  };
-
-  let weeklyMaxCount = $derived(
-    Math.max(1, ...weeklyUsage.map((d) => d.count)),
-  );
-  let weeklyMaxTokens = $derived(
-    Math.max(1, ...weeklyUsage.map((d) => d.tokens)),
-  );
-
-  let usageChartWrapper = $state<HTMLDivElement | null>(null);
-  let usageChartViewportWidth = $state(usageChartConfig.width);
-  let usageChartMetrics = $derived.by(() => {
-    const width = Math.max(
-      usageChartConfig.width,
-      Math.floor(usageChartViewportWidth || usageChartConfig.width),
-    );
-    const paddingX = usageChartConfig.paddingX;
-    const gap = usageChartConfig.gap;
-    const barWidth = Math.max(
-      10,
-      (width - paddingX * 2 - gap * 6) / 7,
-    );
-    return { width, paddingX, gap, barWidth };
-  });
-  let usageHover = $state<{
-    x: number;
-    y: number;
-    day: DailyUsage;
-  } | null>(null);
-
-  $effect(() => {
-    if (!usageChartWrapper) return;
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const nextWidth = entry.contentRect.width;
-        if (nextWidth) {
-          usageChartViewportWidth = nextWidth;
-        }
-      }
-    });
-    observer.observe(usageChartWrapper);
-    return () => observer.disconnect();
-  });
-
-  function getTokenLinePoints() {
-    return weeklyUsage
-      .map((day, i) => {
-        const x =
-          usageChartMetrics.paddingX +
-          i * (usageChartMetrics.barWidth + usageChartMetrics.gap) +
-          usageChartMetrics.barWidth / 2;
-        const y =
-          usageChartConfig.baseline -
-          (day.tokens / weeklyMaxTokens) * usageChartConfig.barMaxHeight;
-        return `${x},${y}`;
-      })
-      .join(" ");
-  }
-
-  function showUsageHover(event: MouseEvent, day: DailyUsage) {
-    if (!usageChartWrapper) return;
-    const rect = usageChartWrapper.getBoundingClientRect();
-    usageHover = {
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-      day,
-    };
-  }
-
-  function clearUsageHover() {
-    usageHover = null;
-  }
   async function startTranslation() {
     if (isTranslating || !inputQuery.trim()) return;
     syncShowTechInfoFromStorage();
@@ -2607,7 +2250,7 @@
     }
 
     try {
-      // Use service-based translation to keep quick/main in sync
+      // Dispatch Command to Service
       const styleMeta = Object.fromEntries(
         customStyles.map((s) => [s.id, { name: s.name, prompt: s.prompt }]),
       );
@@ -2618,7 +2261,6 @@
         styles: styleLevels,
         styleMeta,
         model: currentModel,
-        provider: selectedProvider,
         explanationLang: getLanguageName(appLanguage),
         apiKeys: $state.snapshot(apiKeys),
         initialTokens: Math.ceil(inputQuery.length / 1.5) + 40,
@@ -2626,19 +2268,8 @@
       });
     } catch (error) {
       console.error("Translation failed:", error);
-      errorMessage = "Translation failed: " + String(error);
+      errorMessage = "Translation failed to start.";
       isTranslating = false;
-    } finally {
-      // Ensure isTranslating is properly reset
-      if (isTranslating) {
-        // Wait a bit to ensure all streaming is complete
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-      
-      // Mark translation as complete and update tracking variable
-      isTranslating = false;
-      lastTranslatedText = inputQuery;
-      showExplanation = Boolean(detailedExplanation?.points?.length);
     }
   }
 
@@ -2775,6 +2406,7 @@
             class="icon-btn compact-action-btn"
             onclick={() => (inputQuery = "")}
             title={t(appLanguage, "clearText") || "テキストをクリア"}
+            style="width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; color: var(--text-color);"
           >
             <svg
               width="16"
@@ -2803,6 +2435,7 @@
             }}
             title={t(appLanguage, "pasteFromClipboard") ||
               "クリップボードから貼り付け"}
+            style="width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; color: var(--text-color);"
           >
             <svg
               width="16"
@@ -2827,6 +2460,7 @@
           class="icon-btn compact-ocr-btn"
           onclick={startOCR}
           title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
+          style="width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; color: var(--text-color);"
         >
           <svg
             width="16"
@@ -3185,60 +2819,57 @@
 
         {#if showTechInfo && (isTranslating || techMetrics.time > 0)}
           <div class="tech-info-display" transition:fade>
-            <div class="tech-row">
-              <span class="tech-item">
-                <span class="tech-label">Wait:</span>
-                {#if isTranslating && !techMetrics.firstTokenReceived}
-                  {techMetrics.time.toFixed(1)}s
-                {:else}
-                  {techMetrics.waitTime.toFixed(2)}s
-                {/if}
-              </span>
-              <span class="tech-divider">→</span>
-              <span class="tech-item">
-                <span class="tech-label">Gen:</span>
-                {#if isTranslating}
-                  {techMetrics.genTime.toFixed(1)}s
-                {:else}
-                  {techMetrics.genTime.toFixed(2)}s
-                {/if}
-              </span>
-              <span class="tech-divider">=</span>
-              <span class="tech-item">
-                <span class="tech-label">Total:</span>
+            <span class="tech-item">
+              <span class="tech-label">Wait:</span>
+              {#if isTranslating && !techMetrics.firstTokenReceived}
                 {techMetrics.time.toFixed(1)}s
+              {:else}
+                {techMetrics.waitTime.toFixed(2)}s
+              {/if}
+            </span>
+            <span class="tech-divider">→</span>
+            <span class="tech-item">
+              <span class="tech-label">Gen:</span>
+              {#if isTranslating}
+                {techMetrics.genTime.toFixed(1)}s
+              {:else}
+                {techMetrics.genTime.toFixed(2)}s
+              {/if}
+            </span>
+            <span class="tech-divider">=</span>
+            <span class="tech-item">
+              <span class="tech-label">Total:</span>
+              {techMetrics.time.toFixed(1)}s
+            </span>
+            <span class="tech-divider">|</span>
+            <span class="tech-item">
+              <span class="tech-label">Model:</span>
+              {techMetrics.model}
+            </span>
+            <span class="tech-divider">|</span>
+            <span class="tech-item tech-tokens">
+              <span class="token-row">
+                <span class="tech-label">↑</span>
+                {#if isTranslating && !techMetrics.isReal}
+                  <span class="loading-dots-inline">...</span>
+                {:else}
+                  {techMetrics.inputTokens}
+                {/if}
               </span>
-            </div>
-            <div class="tech-row">
-              <span class="tech-item">
-                <span class="tech-label">Model:</span>
-                {techMetrics.model}
+              <span class="token-row">
+                <span class="tech-label">↓</span>
+                {#if isTranslating && !techMetrics.isReal}
+                  <span class="loading-dots-inline">...</span>
+                {:else}
+                  {techMetrics.outputTokens}
+                {/if}
+                {#if techMetrics.tokensPerSec > 0}
+                  <span style="opacity: 0.6; margin-left: 4px;"
+                    >({techMetrics.tokensPerSec.toFixed(1)}/s)</span
+                  >
+                {/if}
               </span>
-              <span class="tech-divider">|</span>
-              <span class="tech-item tech-tokens">
-                <span class="token-row">
-                  <span class="tech-label">↑</span>
-                  {#if isTranslating && !techMetrics.isReal}
-                    <span class="loading-dots-inline">...</span>
-                  {:else}
-                    {techMetrics.inputTokens}
-                  {/if}
-                </span>
-                <span class="token-row">
-                  <span class="tech-label">↓</span>
-                  {#if isTranslating && !techMetrics.isReal}
-                    <span class="loading-dots-inline">...</span>
-                  {:else}
-                    {techMetrics.outputTokens}
-                  {/if}
-                  {#if techMetrics.tokensPerSec > 0}
-                    <span style="opacity: 0.6; margin-left: 4px;"
-                      >({techMetrics.tokensPerSec.toFixed(1)}/s)</span
-                    >
-                  {/if}
-                </span>
-              </span>
-            </div>
+            </span>
           </div>
         {/if}
 
@@ -3608,7 +3239,7 @@
   <main class="container" class:visible={isWindowVisible}>
     <!-- App Header -->
     <!-- App Header -->
-    <header class="app-header" class:mac-padding={isMac} data-tauri-drag-region>
+    <header class="app-header" data-tauri-drag-region>
       <div class="header-left" data-tauri-drag-region>
         <img
           src={theme === "light" ? "/icon-light.svg" : "/icon-dark.svg"}
@@ -3621,6 +3252,49 @@
       <!-- Spacer that acts as the main drag handle -->
       <div class="header-drag-spacer" data-tauri-drag-region></div>
     </header>
+
+    <!-- Fixed Favorite Button - Right Edge (moved outside of header-actions-row) -->
+    {#if translations.some((t) => t.text) && !isTranslating}
+      <button
+        class="save-favorite-btn-fixed"
+        class:active={isFavorited(inputQuery)}
+        class:animating={starAnimatingId === "current"}
+        onclick={() => {
+          const itemToSave = {
+            id: crypto.randomUUID(),
+            timestamp: Date.now(),
+            sourceText: inputQuery,
+            sourceLang: detectedLang || sourceLang,
+            targetLang: targetLang,
+            translations: translations.map((t) => ({
+              text: t.text,
+              reason: t.reason,
+            })),
+            detailedExplanation: detailedExplanation
+              ? $state.snapshot(detailedExplanation)
+              : undefined,
+            styleLevels: $state.snapshot(styleLevels),
+          };
+          toggleFavorite(itemToSave);
+          if (starAnimatingId === "") triggerStarAnim("current");
+        }}
+        title={t(appLanguage, "saveToFavorites") || "お気に入りに保存"}
+      >
+        <svg
+          class="save-star-icon"
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill={isFavorited(inputQuery) ? "currentColor" : "none"}
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <polygon
+            points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"
+          ></polygon>
+        </svg>
+      </button>
+    {/if}
 
     <!-- Header Right Actions -->
     <div class="header-right-standalone">
@@ -3742,228 +3416,6 @@
       {/if}
     </div>
 
-    <!-- Language Selector Row - Moved outside of scroll area -->
-    <div
-      class="header-actions-row"
-      style="position: relative; display: flex; justify-content: center; align-items: center; margin: 10px 0px 0px 0px;"
-    >
-      <!-- Clipboard / Clear Button -->
-      <div style="position: absolute; left: 15px; z-index: 10;">
-        {#if inputQuery.trim()}
-          <button
-            class="icon-btn"
-            onclick={() => (inputQuery = "")}
-            title={t(appLanguage, "clearText") || "テキストをクリア"}
-            style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); color: var(--text-color);"
-          >
-            <!-- Close Icon -->
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <line x1="18" y1="6" x2="6" y2="18"></line>
-              <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
-          </button>
-        {:else}
-          <button
-            class="icon-btn"
-            onclick={async () => {
-              try {
-                const text = await navigator.clipboard.readText();
-                if (text) inputQuery = text;
-              } catch (e) {
-                console.error("Failed to read clipboard:", e);
-              }
-            }}
-            title={t(appLanguage, "pasteFromClipboard") ||
-              "クリップボードから貼り付け"}
-            style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); color: var(--text-color);"
-          >
-            <!-- Clipboard Icon -->
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path
-                d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
-              ></path>
-              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
-            </svg>
-          </button>
-        {/if}
-      </div>
-
-      <div
-        class="lang-selector-group"
-        style="display: flex; align-items: center; gap: 8px;"
-      >
-        <div class="lang-selector">
-          <button
-            class="lang-btn"
-            class:open={showSourceLangMenu}
-            disabled={isTranslating}
-            onclick={(e) => {
-              e.stopPropagation();
-              showSourceLangMenu = !showSourceLangMenu;
-              showTargetLangMenu = false;
-            }}
-          >
-            {#if isAutoDetect}
-              <svg
-                class="sparkle-icon"
-                class:is-active={isSparkling}
-                class:is-detecting={isDetecting}
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-              >
-                <path
-                  class="star-1"
-                  d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
-                ></path>
-                <path
-                  class="star-2"
-                  d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
-                ></path>
-                <path
-                  class="star-3"
-                  d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
-                ></path>
-              </svg>
-            {/if}
-            {#if isAutoDetect && detectedLang}
-              {detectedLang} - {t(appLanguage, "detected")}
-            {:else if isAutoDetect && isDetecting}
-              <span class="detecting-label">
-                {t(appLanguage, "detecting")}
-              </span>
-            {:else if isAutoDetect}
-              {t(appLanguage, "autoDetect")}
-            {:else}
-              {sourceLang}
-            {/if}
-            <svg
-              class="chevron-icon"
-              width="10"
-              height="10"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path d="M6 9l6 6 6-6"></path>
-            </svg>
-          </button>
-          {#if showSourceLangMenu}
-            <div
-              class="lang-menu"
-              in:fly={{ y: -5, duration: 200 }}
-              out:fade={{ duration: 150 }}
-            >
-              <button
-                class="lang-option auto-detect {isAutoDetect ? 'active' : ''}"
-                onclick={() => selectSourceLang(null)}
-              >
-                <svg
-                  class="sparkle-icon"
-                  class:is-active={isSparkling}
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                >
-                  <path
-                    class="star-1"
-                    d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
-                  ></path>
-                  <path
-                    class="star-2"
-                    d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
-                  ></path>
-                  <path
-                    class="star-3"
-                    d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
-                  ></path>
-                </svg>
-                自動検出
-              </button>
-              <div class="menu-divider"></div>
-              {#each languages as lang}
-                <button
-                  class="lang-option {!isAutoDetect && lang === sourceLang
-                    ? 'active'
-                    : ''}"
-                  onclick={() => selectSourceLang(lang)}>{lang}</button
-                >
-              {/each}
-            </div>
-          {/if}
-        </div>
-
-        <svg
-          class="arrow-icon"
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <path d="M5 12h14M12 5l7 7-7 7"></path>
-        </svg>
-
-        <div class="lang-selector">
-          <button
-            class="lang-btn"
-            class:open={showTargetLangMenu}
-            disabled={isTranslating}
-            onclick={(e) => {
-              e.stopPropagation();
-              showTargetLangMenu = !showTargetLangMenu;
-              showSourceLangMenu = false;
-            }}
-          >
-            {targetLang}
-            <svg
-              class="chevron-icon"
-              width="10"
-              height="10"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path d="M6 9l6 6 6-6"></path>
-            </svg>
-          </button>
-          {#if showTargetLangMenu}
-            <div
-              class="lang-menu"
-              in:fly={{ y: -5, duration: 200 }}
-              out:fade={{ duration: 150 }}
-            >
-              {#each languages as lang}
-                <button
-                  class="lang-option {lang === targetLang ? 'active' : ''}"
-                  onclick={() => selectTargetLang(lang)}>{lang}</button
-                >
-              {/each}
-            </div>
-          {/if}
-        </div>
-      </div>
-    </div>
-
     <!-- Unified Scroll Container -->
     <div class="scroll-wrapper" class:at-bottom={isAtBottom}>
       <section
@@ -3972,6 +3424,232 @@
         bind:this={scrollContainerEl}
         onscroll={onMainScroll}
       >
+        <!-- Language Selector Row -->
+        <div
+          class="header-actions-row"
+          style="position: relative; display: flex; justify-content: center; align-items: center;"
+        >
+          <!-- Clipboard / Clear Button -->
+          <div style="position: absolute; left: 15px; z-index: 10;">
+            {#if inputQuery.trim()}
+              <button
+                class="icon-btn"
+                onclick={() => (inputQuery = "")}
+                title={t(appLanguage, "clearText") || "テキストをクリア"}
+                style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); color: var(--text-color);"
+              >
+                <!-- Close Icon -->
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            {:else}
+              <button
+                class="icon-btn"
+                onclick={async () => {
+                  try {
+                    const text = await navigator.clipboard.readText();
+                    if (text) inputQuery = text;
+                  } catch (e) {
+                    console.error("Failed to read clipboard:", e);
+                  }
+                }}
+                title={t(appLanguage, "pasteFromClipboard") ||
+                  "クリップボードから貼り付け"}
+                style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); color: var(--text-color);"
+              >
+                <!-- Clipboard Icon -->
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path
+                    d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
+                  ></path>
+                  <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+                </svg>
+              </button>
+            {/if}
+          </div>
+
+          <div
+            class="lang-selector-group"
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <div class="lang-selector">
+              <button
+                class="lang-btn"
+                class:open={showSourceLangMenu}
+                disabled={isTranslating}
+                onclick={(e) => {
+                  e.stopPropagation();
+                  showSourceLangMenu = !showSourceLangMenu;
+                  showTargetLangMenu = false;
+                }}
+              >
+                {#if isAutoDetect}
+                  <svg
+                    class="sparkle-icon"
+                    class:is-active={isSparkling}
+                    class:is-detecting={isDetecting}
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                  >
+                    <path
+                      class="star-1"
+                      d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
+                    ></path>
+                    <path
+                      class="star-2"
+                      d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
+                    ></path>
+                    <path
+                      class="star-3"
+                      d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
+                    ></path>
+                  </svg>
+                {/if}
+                {#if isAutoDetect && detectedLang}
+                  {detectedLang} - {t(appLanguage, "detected")}
+                {:else if isAutoDetect && isDetecting}
+                  <span class="detecting-label">
+                    {t(appLanguage, "detecting")}
+                  </span>
+                {:else if isAutoDetect}
+                  {t(appLanguage, "autoDetect")}
+                {:else}
+                  {sourceLang}
+                {/if}
+                <svg
+                  class="chevron-icon"
+                  width="10"
+                  height="10"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path d="M6 9l6 6 6-6"></path>
+                </svg>
+              </button>
+              {#if showSourceLangMenu}
+                <div
+                  class="lang-menu"
+                  in:fly={{ y: -5, duration: 200 }}
+                  out:fade={{ duration: 150 }}
+                >
+                  <button
+                    class="lang-option auto-detect {isAutoDetect
+                      ? 'active'
+                      : ''}"
+                    onclick={() => selectSourceLang(null)}
+                  >
+                    <svg
+                      class="sparkle-icon"
+                      class:is-active={isSparkling}
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="currentColor"
+                    >
+                      <path
+                        class="star-1"
+                        d="M14 2C14 2 15 8 19 9C15 10 14 16 14 16C14 16 13 10 9 9C13 8 14 2 14 2Z"
+                      ></path>
+                      <path
+                        class="star-2"
+                        d="M6 10C6 10 6.5 13 10 14C6.5 15 6 18 6 18C6 18 5.5 15 2 14C5.5 13 6 10 6 10Z"
+                      ></path>
+                      <path
+                        class="star-3"
+                        d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
+                      ></path>
+                    </svg>
+                    自動検出
+                  </button>
+                  <div class="menu-divider"></div>
+                  {#each languages as lang}
+                    <button
+                      class="lang-option {!isAutoDetect && lang === sourceLang
+                        ? 'active'
+                        : ''}"
+                      onclick={() => selectSourceLang(lang)}>{lang}</button
+                    >
+                    >
+                  {/each}
+                </div>
+              {/if}
+            </div>
+
+            <svg
+              class="arrow-icon"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M5 12h14M12 5l7 7-7 7"></path>
+            </svg>
+
+            <div class="lang-selector">
+              <button
+                class="lang-btn"
+                class:open={showTargetLangMenu}
+                disabled={isTranslating}
+                onclick={(e) => {
+                  e.stopPropagation();
+                  showTargetLangMenu = !showTargetLangMenu;
+                  showSourceLangMenu = false;
+                }}
+              >
+                {targetLang}
+                <svg
+                  class="chevron-icon"
+                  width="10"
+                  height="10"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path d="M6 9l6 6 6-6"></path>
+                </svg>
+              </button>
+              {#if showTargetLangMenu}
+                <div
+                  class="lang-menu"
+                  in:fly={{ y: -5, duration: 200 }}
+                  out:fade={{ duration: 150 }}
+                >
+                  {#each languages as lang}
+                    <button
+                      class="lang-option {lang === targetLang ? 'active' : ''}"
+                      onclick={() => selectTargetLang(lang)}>{lang}</button
+                    >
+                    >
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </div>
+        </div>
+
         <!-- Original Text Input -->
         <div class="input-area">
           <div class="textarea-container" class:has-overflow={showFade}>
@@ -5094,7 +4772,19 @@
                           "OS 起動時にアプリを自動で起動します"}
                       </span>
                       <button
-                        onclick={toggleAutoStart}
+                        onclick={async () => {
+                          const next = !autoStartEnabled;
+                          try {
+                            if (next) {
+                              await enableAutostart();
+                            } else {
+                              await disableAutostart();
+                            }
+                            autoStartEnabled = next;
+                          } catch (e) {
+                            console.warn("Failed to update autostart", e);
+                          }
+                        }}
                         style="
                         width: 44px; 
                         height: 24px; 
@@ -5124,19 +4814,17 @@
                       </button>
                     </div>
                   </div>
-
-                  <!-- Start Minimized -->
                   <div class="settings-section">
                     <div class="settings-label">
                       {t(appLanguage, "startMinimized") ||
-                        "起動時はメイン画面を最小化"}
+                        "起動時にトレイに格納"}
                     </div>
                     <div class="settings-card-row">
                       <span
                         style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
                       >
                         {t(appLanguage, "startMinimizedDesc") ||
-                          "起動時にメイン画面を最小化して開始します"}
+                          "起動時にメイン画面を表示せず、タスクトレイに常駐します"}
                       </span>
                       <button
                         onclick={() => (startMinimized = !startMinimized)}
@@ -5169,66 +4857,6 @@
                       </button>
                     </div>
                   </div>
-
-                  {#if isWindows}
-                    <!-- OCR Engine -->
-                    <div class="settings-section">
-                      <div class="settings-label">
-                        {t(appLanguage, "ocrEngine")}
-                      </div>
-                      <div
-                        class="settings-card-row"
-                        style="flex-direction: column; gap: 12px; align-items: flex-start;"
-                      >
-                        <label
-                          style="display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%;"
-                        >
-                          <input
-                            type="radio"
-                            name="ocrEngine"
-                            value="paddle"
-                            bind:group={ocrEngine}
-                            style="cursor: pointer;"
-                          />
-                          <span style="flex: 1;">
-                            <div
-                              style="font-size: 14px; color: var(--text-main); font-weight: 500;"
-                            >
-                              {t(appLanguage, "ocrHighAccuracy")}
-                            </div>
-                            <div
-                              style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"
-                            >
-                              {t(appLanguage, "ocrHighAccuracyDesc")}
-                            </div>
-                          </span>
-                        </label>
-                        <label
-                          style="display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%;"
-                        >
-                          <input
-                            type="radio"
-                            name="ocrEngine"
-                            value="windows"
-                            bind:group={ocrEngine}
-                            style="cursor: pointer;"
-                          />
-                          <span style="flex: 1;">
-                            <div
-                              style="font-size: 14px; color: var(--text-main); font-weight: 500;"
-                            >
-                              {t(appLanguage, "ocrFast")}
-                            </div>
-                            <div
-                              style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"
-                            >
-                              {t(appLanguage, "ocrFastDesc")}
-                            </div>
-                          </span>
-                        </label>
-                      </div>
-                    </div>
-                  {/if}
 
                   <!-- Quick Shortcut -->
                   <div class="settings-section">
@@ -5333,33 +4961,27 @@
                     >
                       Anthropic
                     </button>
-                    <button
-                      class="provider-btn"
-                      class:active={selectedProvider === "groq"}
-                      onclick={() => selectProvider("groq")}
-                    >
-                      Groq
-                    </button>
-                    <button
-                      class="provider-btn"
-                      class:active={selectedProvider === "cerebras"}
-                      onclick={() => selectProvider("cerebras")}
-                    >
-                      Cerebras
-                    </button>
                   </div>
 
                   <!-- API Key for Selected Provider -->
                   <div class="settings-section">
                     <label class="settings-label" for="api-key-input">
-                      {getApiKeyLabel(selectedProvider)}
+                      {selectedProvider === "openai"
+                        ? t(appLanguage, "openaiApiKey")
+                        : selectedProvider === "gemini"
+                          ? t(appLanguage, "geminiApiKey")
+                          : t(appLanguage, "anthropicApiKey")}
                     </label>
                     <input
                       id="api-key-input"
                       type="password"
                       class="settings-input"
                       bind:value={apiKeys[selectedProvider]}
-                      placeholder={getApiKeyPlaceholder(selectedProvider)}
+                      placeholder={selectedProvider === "gemini"
+                        ? "AIza..."
+                        : selectedProvider === "anthropic"
+                          ? "sk-ant-..."
+                          : "sk-..."}
                     />
                   </div>
 
@@ -5520,175 +5142,34 @@
                   <!-- About Tab -->
                   <div
                     class="about-tab-content"
+                    style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center; gap: 20px; padding: 40px 0;"
                   >
-                    <div class="about-brand-section">
-                      <div class="about-logo-wrapper">
-                        <img
-                          src={theme === "light"
-                            ? "icon-full-light.svg"
-                            : "icon-full-dark.svg"}
-                          alt="Howlingual Logo"
-                          style="width: 100px; height: 100px; filter: drop-shadow(0 4px 12px rgba(0,0,0,0.2));"
-                        />
-                      </div>
-                      <div class="about-text-content">
-                        <h2>Howlingual</h2>
-                        <p>Version {appVersion}</p>
-                      </div>
-                      <div class="about-footer-info">
-                        <p>© 2026 tomakura</p>
-                      </div>
+                    <div class="about-logo-wrapper">
+                      <img
+                        src={theme === "light"
+                          ? "icon-full-light.svg"
+                          : "icon-full-dark.svg"}
+                        alt="Howlingual Logo"
+                        style="width: 100px; height: 100px; filter: drop-shadow(0 4px 12px rgba(0,0,0,0.2));"
+                      />
                     </div>
-
-                    <div class="about-usage-section">
-                      <div class="usage-cards">
-                        <div class="usage-card">
-                          <span class="usage-label">
-                            {t(appLanguage, "usageToday") || "今日の使用回数"}
-                          </span>
-                          <span class="usage-value">{usageToday.count}</span>
-                        </div>
-                        <div class="usage-card">
-                          <span class="usage-label">
-                            {t(appLanguage, "usageTokensToday") ||
-                              "今日のトークン"}
-                          </span>
-                          <span class="usage-value">
-                            {usageToday.tokens.toLocaleString()}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div class="usage-chart-card">
-                        <div class="usage-chart-header">
-                          {t(appLanguage, "usageWeeklyTrend") ||
-                            "1週間の推移"}
-                        </div>
-                        <div
-                          class="usage-chart-wrapper"
-                          bind:this={usageChartWrapper}
-                        >
-                          {#if usageReady}
-                            <svg
-                              class="usage-chart"
-                              viewBox={`0 0 ${usageChartMetrics.width} ${usageChartConfig.height}`}
-                              preserveAspectRatio="xMidYMid meet"
-                              role="img"
-                              aria-label="Weekly usage trend"
-                              onmouseleave={clearUsageHover}
-                            >
-                              <line
-                                class="usage-chart-baseline"
-                                x1="12"
-                                x2={usageChartMetrics.width - 12}
-                                y1={usageChartConfig.baseline}
-                                y2={usageChartConfig.baseline}
-                              />
-                              {#each weeklyUsage as day, i}
-                                <g class="usage-day">
-                                  <rect
-                                    class="usage-hover-hit"
-                                    x={usageChartMetrics.paddingX +
-                                      i *
-                                        (usageChartMetrics.barWidth +
-                                          usageChartMetrics.gap) -
-                                      usageChartMetrics.gap}
-                                    y="0"
-                                    width={usageChartMetrics.barWidth +
-                                      usageChartMetrics.gap * 2}
-                                    height={usageChartConfig.height}
-                                    rx="0"
-                                    role="presentation"
-                                    aria-hidden="true"
-                                    onmousemove={(event) =>
-                                      showUsageHover(event, day)}
-                                    onmouseleave={clearUsageHover}
-                                  />
-                                  <rect
-                                    class="usage-bar"
-                                    x={usageChartMetrics.paddingX +
-                                      i *
-                                        (usageChartMetrics.barWidth +
-                                          usageChartMetrics.gap)}
-                                    y={usageChartConfig.baseline -
-                                      (day.count / weeklyMaxCount) *
-                                        usageChartConfig.barMaxHeight}
-                                    width={usageChartMetrics.barWidth}
-                                    height={(day.count / weeklyMaxCount) *
-                                      usageChartConfig.barMaxHeight}
-                                    rx="4"
-                                  />
-                                  <circle
-                                    class="usage-line-dot"
-                                    cx={usageChartMetrics.paddingX +
-                                      i *
-                                        (usageChartMetrics.barWidth +
-                                          usageChartMetrics.gap) +
-                                      usageChartMetrics.barWidth / 2}
-                                    cy={usageChartConfig.baseline -
-                                      (day.tokens / weeklyMaxTokens) *
-                                        usageChartConfig.barMaxHeight}
-                                    r="3"
-                                  />
-                                  <text
-                                    class="usage-chart-label"
-                                    x={usageChartMetrics.paddingX +
-                                      i *
-                                        (usageChartMetrics.barWidth +
-                                          usageChartMetrics.gap) +
-                                      usageChartMetrics.barWidth / 2}
-                                    y={usageChartConfig.labelY}
-                                    text-anchor="middle"
-                                  >
-                                    {shortDate(day.date)}
-                                  </text>
-                                </g>
-                              {/each}
-                              <polyline
-                                class="usage-line"
-                                points={getTokenLinePoints()}
-                              />
-                            </svg>
-                            {#if usageHover}
-                              <div
-                                class="usage-tooltip"
-                                style={`left: ${usageHover.x}px; top: ${usageHover.y}px;`}
-                              >
-                                <div class="usage-tooltip-date">
-                                  {shortDate(usageHover.day.date)}
-                                </div>
-                                <div class="usage-tooltip-row">
-                                  <span class="legend-dot count"></span>
-                                  <span>
-                                    {t(appLanguage, "usageCountLabel") ||
-                                      "回数"}: {usageHover.day.count}
-                                  </span>
-                                </div>
-                                <div class="usage-tooltip-row">
-                                  <span class="legend-dot tokens"></span>
-                                  <span>
-                                    {t(appLanguage, "usageTokensLabel") ||
-                                      "トークン"}: {usageHover.day.tokens.toLocaleString()}
-                                  </span>
-                                </div>
-                              </div>
-                            {/if}
-                          {:else}
-                            <div class="usage-chart-skeleton"></div>
-                          {/if}
-                        </div>
-                        <div class="usage-chart-legend">
-                          <span class="legend-item">
-                            <span class="legend-dot count"></span>
-                            {t(appLanguage, "usageCountLabel") || "回数"}
-                          </span>
-                          <span class="legend-item">
-                            <span class="legend-dot tokens"></span>
-                            {t(appLanguage, "usageTokensLabel") ||
-                              "トークン"}
-                          </span>
-                        </div>
-                      </div>
+                    <div class="about-text-content">
+                      <h2
+                        style="font-size: 32px; font-weight: 700; margin: 0; color: var(--text-main);"
+                      >
+                        Howlingual
+                      </h2>
+                      <p
+                        style="font-size: 14px; color: var(--text-muted); margin-top: 8px;"
+                      >
+                        Version {appVersion}
+                      </p>
+                    </div>
+                    <div
+                      class="about-footer-info"
+                      style="margin-top: auto; font-size: 12px; color: var(--text-muted); opacity: 0.6;"
+                    >
+                      <p>© 2026 tomakura</p>
                     </div>
                   </div>
                 {/if}
@@ -6127,8 +5608,6 @@
     font-size: 26px;
     font-weight: 600;
     letter-spacing: 0.5px;
-    color: var(--text-main);
-    background: none;
   }
 
   .compact-main-btn {
@@ -6161,18 +5640,6 @@
     width: 100%;
     box-sizing: border-box;
     height: 32px; /* Ensure height for absolute positioning context */
-  }
-
-  .compact-left-actions {
-    transition:
-      opacity 0.25s ease,
-      transform 0.25s ease;
-  }
-
-  .compact-left-actions.hidden {
-    opacity: 0;
-    transform: translateY(6px);
-    pointer-events: none;
   }
 
   .compact-lang-group {
@@ -6380,26 +5847,6 @@
     gap: 10px;
   }
 
-  .compact-action-btn,
-  .compact-ocr-btn {
-    width: 32px;
-    height: 32px;
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.1);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-main);
-    border: none;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-
-  .compact-action-btn:hover,
-  .compact-ocr-btn:hover {
-    background: rgba(255, 255, 255, 0.2);
-  }
-
   /* App Header & Layout */
   .app-header {
     display: flex;
@@ -6430,7 +5877,15 @@
     font-weight: 600;
     font-size: 26px;
     color: var(--text-main);
-    background: none;
+    letter-spacing: -0.02em;
+    background: linear-gradient(
+      135deg,
+      var(--text-main) 0%,
+      var(--text-secondary) 100%
+    );
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
   }
 
   .header-right {
@@ -6459,29 +5914,51 @@
     width: 100%;
   }
 
-  @keyframes starPop {
-    0% {
-      transform: scale(1) rotate(0deg);
-    }
-    50% {
-      transform: scale(1.35) rotate(-8deg);
-    }
-    100% {
-      transform: scale(1) rotate(0deg);
-    }
+  /* Fixed Favorite Button - Right Edge */
+  .save-favorite-btn-fixed {
+    position: absolute;
+    right: 15px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--border-color);
+    background: var(--surface-color);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    z-index: 100;
   }
 
-  @keyframes sparkleFloat {
+  .save-favorite-btn-fixed:hover {
+    background: rgba(255, 215, 0, 0.15);
+    border-color: rgba(255, 215, 0, 0.3);
+    color: #ffd700;
+  }
+
+  .save-favorite-btn-fixed.active {
+    color: #ffd700;
+    background: rgba(255, 215, 0, 0.2);
+    border-color: rgba(255, 215, 0, 0.4);
+  }
+
+  .save-favorite-btn-fixed.animating .save-star-icon {
+    animation: starPop 0.4s ease;
+  }
+
+  @keyframes starPop {
     0% {
-      transform: translateY(0) scale(0.6);
-      opacity: 0;
+      transform: scale(1);
     }
-    30% {
-      opacity: 1;
+    50% {
+      transform: scale(1.3);
     }
     100% {
-      transform: translateY(-10px) scale(1.1);
-      opacity: 0;
+      transform: scale(1);
     }
   }
 
@@ -6505,35 +5982,44 @@
   }
 
   .win-btn-inline {
-    width: 32px;
-    height: 32px;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.06);
+    width: 36px;
+    height: 28px;
+    border-radius: 6px;
+    border: none;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     transition: all 0.2s ease;
     padding: 0;
-    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .win-btn-inline.minimize {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .win-btn-inline.maximize {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .win-btn-inline.close {
+    background: rgba(255, 255, 255, 0.08);
   }
 
   .win-btn-inline svg {
-    opacity: 1;
-    transition: all 0.2s ease;
+    opacity: 0.7;
+    transition: opacity 0.2s ease;
+    color: rgba(255, 255, 255, 0.8);
   }
 
   .win-btn-inline:hover {
-    background: rgba(255, 255, 255, 0.12);
-    border-color: rgba(255, 255, 255, 0.2);
-    color: rgba(255, 255, 255, 0.9);
+    background: rgba(255, 255, 255, 0.15);
+  }
+
+  .win-btn-inline:hover svg {
+    opacity: 1;
   }
 
   .win-btn-inline.close:hover {
-    background: rgba(239, 68, 68, 0.2);
-    border-color: rgba(239, 68, 68, 0.3);
-    color: #f87171;
+    background: #e85d5d;
   }
 
   .win-btn-inline:active {
@@ -6925,20 +6411,6 @@
       transform 0.25s var(--easing-bounce),
       background 0.3s var(--easing),
       box-shadow 0.3s var(--easing);
-  }
-
-  .ocr-main-btn {
-    transition:
-      opacity 0.25s ease,
-      transform 0.25s var(--easing-bounce),
-      background 0.3s var(--easing),
-      box-shadow 0.3s var(--easing);
-  }
-
-  .ocr-main-btn.hidden {
-    opacity: 0;
-    transform: translateY(6px) scale(0.98);
-    pointer-events: none;
   }
 
   .action-btn:hover {
@@ -8166,8 +7638,6 @@
     font-size: 12px;
     cursor: pointer;
     transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    position: relative;
-    overflow: visible;
   }
 
   .save-favorite-btn:hover {
@@ -8190,17 +7660,6 @@
     background: rgba(255, 235, 59, 0.15);
     border-color: rgba(255, 235, 59, 0.4);
     box-shadow: 0 0 15px rgba(255, 235, 59, 0.2);
-  }
-  .save-favorite-btn.animating::after {
-    content: "✦";
-    position: absolute;
-    right: -6px;
-    top: -8px;
-    font-size: 12px;
-    color: #fdd835;
-    opacity: 0;
-    animation: sparkleFloat 0.8s ease-out;
-    pointer-events: none;
   }
 
   .save-label {
@@ -8709,13 +8168,6 @@
     opacity: 0.8;
     align-items: center;
   }
-  .tech-row {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
   .tech-item {
     display: flex;
     gap: 4px;
@@ -8746,7 +8198,6 @@
     align-items: center;
     white-space: normal;
     overflow: visible;
-    flex-direction: column;
   }
 
   .compact-shell .tech-divider {
@@ -8995,30 +8446,6 @@
     color: #1a1a1a;
   }
 
-  /* Ensure App Title is visible in Light Mode */
-  :global([data-theme="light"]) .app-title,
-  :global([data-theme="light"]) .compact-name {
-    color: var(--text-main);
-  }
-
-  :global([data-theme="light"]) .win-btn-inline {
-    border-color: rgba(0, 0, 0, 0.1);
-    background: rgba(0, 0, 0, 0.05);
-    color: rgba(0, 0, 0, 0.6);
-  }
-
-  :global([data-theme="light"]) .win-btn-inline:hover {
-    background: rgba(0, 0, 0, 0.1);
-    border-color: rgba(0, 0, 0, 0.2);
-    color: rgba(0, 0, 0, 0.8);
-  }
-
-  :global([data-theme="light"]) .win-btn-inline.close:hover {
-    background: rgba(239, 68, 68, 0.1);
-    border-color: rgba(239, 68, 68, 0.2);
-    color: #dc2626;
-  }
-
   :global([data-theme="light"]) .compact-shell {
     background: var(--bg-color);
   }
@@ -9116,212 +8543,6 @@
     }
   }
 
-  .about-tab-content {
-    display: flex;
-    flex-direction: column;
-    gap: 24px;
-    padding: 24px;
-    height: 100%;
-  }
-
-  .about-usage-section {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  .usage-cards {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-  }
-
-  .usage-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: 14px;
-    padding: 14px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .usage-label {
-    font-size: 12px;
-    color: var(--text-muted);
-  }
-
-  .usage-value {
-    font-size: 26px;
-    font-weight: 700;
-    color: var(--text-main);
-  }
-
-  .usage-sub {
-    font-size: 11px;
-    color: var(--text-muted);
-    opacity: 0.8;
-  }
-
-  .usage-chart-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: 16px;
-    padding: 16px;
-    margin-bottom: 16px;
-  }
-
-  .usage-chart-header {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-main);
-    margin-bottom: 10px;
-  }
-
-  .usage-chart-wrapper {
-    width: 100%;
-    padding-bottom: 8px;
-    position: relative;
-  }
-
-  .usage-chart {
-    width: 100%;
-    height: 200px;
-  }
-
-  .usage-chart-baseline {
-    stroke: var(--border-color);
-    stroke-width: 1;
-    opacity: 0.7;
-  }
-
-  .usage-bar {
-    fill: rgba(99, 102, 241, 0.35);
-    pointer-events: none;
-  }
-
-  .usage-line {
-    fill: none;
-    stroke: #22d3ee;
-    stroke-width: 2;
-    pointer-events: none;
-  }
-
-  .usage-line-dot {
-    fill: #22d3ee;
-    pointer-events: none;
-  }
-
-  .usage-hover-hit {
-    fill: transparent;
-    pointer-events: all;
-  }
-
-  .usage-chart-label {
-    font-size: 12px;
-    fill: var(--text-muted);
-  }
-
-  .usage-tooltip {
-    position: absolute;
-    pointer-events: none;
-    transform: translate(-50%, -120%);
-    background: rgba(24, 24, 27, 0.92);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 10px;
-    padding: 8px 10px;
-    color: var(--text-main);
-    font-size: 12px;
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
-    white-space: nowrap;
-    z-index: 1;
-  }
-
-  .usage-tooltip-date {
-    font-weight: 600;
-    margin-bottom: 4px;
-    font-size: 12px;
-  }
-
-  .usage-tooltip-row {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--text-muted);
-    margin-bottom: 2px;
-  }
-
-  .usage-tooltip-row:last-child {
-    margin-bottom: 0;
-  }
-
-  .usage-chart-legend {
-    display: flex;
-    gap: 12px;
-    align-items: center;
-    font-size: 11px;
-    color: var(--text-muted);
-    margin-top: 8px;
-  }
-
-  .legend-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .legend-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    display: inline-block;
-  }
-
-  .legend-dot.count {
-    background: rgba(99, 102, 241, 0.6);
-  }
-
-  .legend-dot.tokens {
-    background: #22d3ee;
-  }
-
-  .usage-chart-skeleton {
-    width: 100%;
-    height: 200px;
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px dashed rgba(255, 255, 255, 0.12);
-  }
-
-  .about-brand-section {
-    margin-top: auto;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    text-align: center;
-    gap: 8px;
-  }
-
-  .about-text-content h2 {
-    font-size: 30px;
-    font-weight: 700;
-    margin: 0;
-    color: var(--text-main);
-  }
-
-  .about-text-content p {
-    font-size: 14px;
-    color: var(--text-muted);
-    margin: 0;
-  }
-
-  .about-footer-info {
-    font-size: 12px;
-    color: var(--text-muted);
-    opacity: 0.6;
-  }
-
   /* Prevent logo from being dragged */
   .about-logo-wrapper img,
   img[alt*="Logo"],
@@ -9403,11 +8624,10 @@
   }
 
   .compact-header .compact-name {
-    font-size: 20px;
-    font-weight: 700;
-    margin-left: 0px;
-    opacity: 1;
-    color: var(--text-main);
+    font-size: 11px;
+    font-weight: 500;
+    margin-left: 6px;
+    opacity: 0.8;
   }
   /* Custom Window Controls */
   .app-header {
@@ -9544,33 +8764,5 @@
   .collapse-btn:hover {
     background: rgba(255, 255, 255, 0.05);
     color: var(--text-main);
-  }
-  /* Quick Screen Light Mode Overrides */
-  :global([data-theme="light"]) .compact-close-btn {
-    border-color: rgba(0, 0, 0, 0.1);
-    background: rgba(0, 0, 0, 0.05);
-    color: rgba(0, 0, 0, 0.6);
-  }
-
-  :global([data-theme="light"]) .compact-close-btn:hover {
-    background: rgba(239, 68, 68, 0.15);
-    border-color: rgba(239, 68, 68, 0.2);
-    color: #dc2626;
-  }
-
-  :global([data-theme="light"]) .compact-action-btn,
-  :global([data-theme="light"]) .compact-ocr-btn {
-    background: rgba(0, 0, 0, 0.05);
-    color: rgba(0, 0, 0, 0.7);
-  }
-
-  :global([data-theme="light"]) .compact-action-btn:hover,
-  :global([data-theme="light"]) .compact-ocr-btn:hover {
-    background: rgba(0, 0, 0, 0.1);
-    color: rgba(0, 0, 0, 0.9);
-  }
-
-  :global([data-theme="light"]) .lang-btn:hover {
-    background: rgba(0, 0, 0, 0.05);
   }
 </style>

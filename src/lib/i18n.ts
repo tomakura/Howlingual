@@ -48,6 +48,8 @@ interface Translations {
 	openaiApiKey: string;
 	geminiApiKey: string;
 	anthropicApiKey: string;
+	groqApiKey: string;
+	cerebrasApiKey: string;
 	translationCount: string;
 	defaultTargetLang: string;
 	theme: string;
@@ -111,6 +113,12 @@ interface Translations {
 	ocrHighAccuracyDesc: string;
 	ocrFast: string;
 	ocrFastDesc: string;
+	usageToday: string;
+	usageTokensToday: string;
+	usageWeeklyTrend: string;
+	usageCountLabel: string;
+	usageTokensLabel: string;
+	usageReset: string;
 }
 
 const translations: Record<AppLanguage, Translations> = {
@@ -136,6 +144,12 @@ const translations: Record<AppLanguage, Translations> = {
 		ocrHighAccuracyDesc: "精度を最優先します。少し時間がかかる場合があります。",
 		ocrFast: "Windows標準 (高速)",
 		ocrFastDesc: "OS標準機能を使用します。非常に高速ですが、精度は劣る場合があります。",
+		usageToday: "今日の使用回数",
+		usageTokensToday: "今日のトークン",
+		usageWeeklyTrend: "1週間の推移",
+		usageCountLabel: "回数",
+		usageTokensLabel: "トークン",
+		usageReset: "0時更新",
 		explanation: "解説",
 		settingsTitle: "設定",
 		tabGeneral: "一般",
@@ -156,6 +170,8 @@ const translations: Record<AppLanguage, Translations> = {
 		openaiApiKey: "OpenAI API Key",
 		geminiApiKey: "Gemini API Key",
 		anthropicApiKey: "Anthropic API Key",
+		groqApiKey: "Groq API Key",
+		cerebrasApiKey: "Cerebras API Key",
 		translationCount: "翻訳案の数",
 		defaultTargetLang: "デフォルト翻訳先言語",
 		theme: "テーマ",
@@ -234,6 +250,12 @@ const translations: Record<AppLanguage, Translations> = {
 		ocrHighAccuracyDesc: "Prioritizes accuracy. May take slightly longer.",
 		ocrFast: "Windows Standard (Fast)",
 		ocrFastDesc: "Uses OS native feature. Very fast, but may be less accurate.",
+		usageToday: "Today's usage",
+		usageTokensToday: "Today's tokens",
+		usageWeeklyTrend: "Weekly trend",
+		usageCountLabel: "Count",
+		usageTokensLabel: "Tokens",
+		usageReset: "Resets at 00:00",
 		explanation: "Explanation",
 		settingsTitle: "Settings",
 		tabGeneral: "General",
@@ -332,6 +354,12 @@ const translations: Record<AppLanguage, Translations> = {
 		ocrHighAccuracyDesc: "优先考虑准确性。可能需要稍长时间。",
 		ocrFast: "Windows标准 (快速)",
 		ocrFastDesc: "使用系统原生功能。速度很快，但准确性可能较低。",
+		usageToday: "今日使用次数",
+		usageTokensToday: "今日代币",
+		usageWeeklyTrend: "一周趋势",
+		usageCountLabel: "次数",
+		usageTokensLabel: "代币",
+		usageReset: "0点更新",
 		explanation: "解说",
 		settingsTitle: "设置",
 		tabGeneral: "常规",
@@ -430,6 +458,12 @@ const translations: Record<AppLanguage, Translations> = {
 		ocrHighAccuracyDesc: "정확도를 최우선으로 합니다. 시간이 조금 걸릴 수 있습니다.",
 		ocrFast: "Windows 표준 (고속)",
 		ocrFastDesc: "OS 표준 기능을 사용합니다. 매우 빠르지만 정확도가 떨어질 수 있습니다.",
+		usageToday: "오늘 사용 횟수",
+		usageTokensToday: "오늘 토큰",
+		usageWeeklyTrend: "1주 추이",
+		usageCountLabel: "횟수",
+		usageTokensLabel: "토큰",
+		usageReset: "0시 갱신",
 		explanation: "설명",
 		settingsTitle: "설정",
 		tabGeneral: "일반",

@@ -30,7 +30,27 @@ function getAnthropicClient(apiKey?: string) {
 	return new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true });
 }
 
-export type AiModel = "gemini-1.5-flash" | "gpt-4o" | "gpt-4o-mini" | "claude-3-5-sonnet-20240620";
+function getGroqClient(apiKey?: string) {
+	const key = apiKey || ENV.VITE_GROQ_API_KEY;
+	if (!key) throw new Error("Groq API Key missing");
+	return new OpenAI({
+		apiKey: key,
+		baseURL: "https://api.groq.com/openai/v1",
+		dangerouslyAllowBrowser: true
+	});
+}
+
+function getCerebrasClient(apiKey?: string) {
+	const key = apiKey || ENV.VITE_CEREBRAS_API_KEY;
+	if (!key) throw new Error("Cerebras API Key missing");
+	return new OpenAI({
+		apiKey: key,
+		baseURL: "https://api.cerebras.ai/v1",
+		dangerouslyAllowBrowser: true
+	});
+}
+
+export type AiModel = string;
 
 export interface TranslationResult {
 	id?: number;
@@ -53,15 +73,18 @@ export interface AiResponse {
 }
 
 // Build system prompt with configurable explanation language
-function buildSystemPrompt(explanationLang: string = "日本語"): string {
+function buildSystemPrompt(
+	explanationLang: string = "日本語",
+	candidateCount: number = 3,
+): string {
 	return `
 あなたはプロの翻訳者です。
 ユーザーから提供された原文を、指定された言語へ翻訳してください。
 
 [翻訳のルール]
-1. **厳密に3つの翻訳案**を作成すること。
-   - 1つ目: 文脈を考慮した、最も最適で自然な翻訳。
-   - 2つ目・3つ目: ニュアンスや表現を変えたバリエーション。
+1. **厳密に${candidateCount}つの翻訳案**を作成すること。
+	- 1つ目: 文脈を考慮した、最も最適で自然な翻訳。
+	- 2つ目以降: ニュアンスや表現を変えたバリエーション。
 2. **detected_source_language**: 原文の言語を判定し、${explanationLang}で出力すること。
 3. 各翻訳案の「reason」と「detailed_explanation」は**${explanationLang}で**書くこと。
 4. **detailed_explanation**: 重要な単語や文法ポイントを3つ程度ピックアップし、${explanationLang}で詳しく解説すること。
@@ -90,7 +113,7 @@ function buildSystemPrompt(explanationLang: string = "日本語"): string {
 }
 
 // Legacy constant for backward compatibility
-const SYSTEM_PROMPT = buildSystemPrompt("日本語");
+const SYSTEM_PROMPT = buildSystemPrompt("日本語", 3);
 
 // Helper to construct user prompt
 function buildUserPrompt(
@@ -120,7 +143,7 @@ function buildUserPrompt(
 }
 
 // Gemini Implementation
-async function callGemini(prompt: string): Promise<AiResponse> {
+async function callGemini(prompt: string, systemPrompt: string = SYSTEM_PROMPT): Promise<AiResponse> {
 	if (!genAI) throw new Error("Gemini API Key missing");
 
 	const schema = {
@@ -161,7 +184,7 @@ async function callGemini(prompt: string): Promise<AiResponse> {
 
 	const model = genAI.getGenerativeModel({
 		model: "gemini-1.5-flash",
-		systemInstruction: SYSTEM_PROMPT,
+		systemInstruction: systemPrompt,
 		generationConfig: {
 			responseMimeType: "application/json",
 			responseSchema: schema as any
@@ -173,13 +196,17 @@ async function callGemini(prompt: string): Promise<AiResponse> {
 }
 
 // OpenAI Implementation
-async function callOpenAI(modelName: string, prompt: string): Promise<AiResponse> {
+async function callOpenAI(
+	modelName: string,
+	prompt: string,
+	systemPrompt: string = SYSTEM_PROMPT,
+): Promise<AiResponse> {
 	if (!openai) throw new Error("OpenAI API Key missing");
 
 	const completion = await openai.chat.completions.create({
 		model: modelName,
 		messages: [
-			{ role: "system", content: SYSTEM_PROMPT },
+			{ role: "system", content: systemPrompt },
 			{ role: "user", content: prompt }
 		],
 		response_format: { type: "json_object" },
@@ -200,7 +227,11 @@ async function callOpenAI(modelName: string, prompt: string): Promise<AiResponse
 }
 
 // Anthropic Implementation
-async function callAnthropic(modelName: string, prompt: string): Promise<AiResponse> {
+async function callAnthropic(
+	modelName: string,
+	prompt: string,
+	systemPrompt: string = SYSTEM_PROMPT,
+): Promise<AiResponse> {
 	if (!anthropic) throw new Error("Anthropic API Key missing");
 
 	// Anthropic doesn't support JSON mode natively like OpenAI/Gemini yet in the same way,
@@ -208,7 +239,7 @@ async function callAnthropic(modelName: string, prompt: string): Promise<AiRespo
 	const msg = await anthropic.messages.create({
 		model: modelName,
 		max_tokens: 1024,
-		system: SYSTEM_PROMPT + "\n\nOutput strictly valid JSON.",
+		system: systemPrompt + "\n\nOutput strictly valid JSON.",
 		messages: [{ role: "user", content: prompt }]
 	});
 
@@ -275,24 +306,46 @@ export async function translateTextStream(
 	onUpdate: (partial: Partial<AiResponse>, usage?: UsageMetadata) => void,
 	explanationLang: string = "日本語",
 	styleMeta: Record<string, { name: string; prompt?: string }> = {},
-	apiKeys: Record<string, string> = {}
+	apiKeys: Record<string, string> = {},
+	options: { provider?: string; signal?: AbortSignal } = {},
+	candidateCount: number = 3,
 ): Promise<void> {
 	const userPrompt = buildUserPrompt(text, sourceLang, targetLang, styles, styleMeta);
-	const systemPrompt = buildSystemPrompt(explanationLang);
+	const systemPrompt = buildSystemPrompt(explanationLang, candidateCount);
+	const provider = options.provider;
+	const signal = options.signal;
 
-	if (model.startsWith("gemini")) {
-		await streamGemini(model, userPrompt, onUpdate, systemPrompt, apiKeys.google?.trim() || apiKeys.gemini?.trim()); // handle both key names if needed
-	} else if (model.startsWith("gpt") || model.startsWith("o3")) {
-		await streamOpenAI(model, userPrompt, onUpdate, systemPrompt, apiKeys.openai?.trim());
-	} else if (model.startsWith("claude")) {
-		await streamAnthropic(model, userPrompt, onUpdate, systemPrompt, apiKeys.anthropic?.trim());
+	if (provider === "gemini" || model.startsWith("gemini")) {
+		await streamGemini(
+			model,
+			userPrompt,
+			onUpdate,
+			systemPrompt,
+			apiKeys.google?.trim() || apiKeys.gemini?.trim(),
+			signal
+		);
+	} else if (provider === "groq") {
+		await streamGroq(model, userPrompt, onUpdate, systemPrompt, apiKeys.groq?.trim(), signal);
+	} else if (provider === "cerebras") {
+		await streamCerebras(model, userPrompt, onUpdate, systemPrompt, apiKeys.cerebras?.trim(), signal);
+	} else if (provider === "anthropic" || model.startsWith("claude")) {
+		await streamAnthropic(model, userPrompt, onUpdate, systemPrompt, apiKeys.anthropic?.trim(), signal);
+	} else if (provider === "openai" || model.startsWith("gpt") || model.startsWith("o3")) {
+		await streamOpenAI(model, userPrompt, onUpdate, systemPrompt, apiKeys.openai?.trim(), signal);
 	} else {
 		throw new Error(`Unsupported model: ${model}`);
 	}
 }
 
 // Gemini Streaming
-async function streamGemini(modelName: string, prompt: string, onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void, systemPrompt: string, apiKey?: string) {
+async function streamGemini(
+	modelName: string,
+	prompt: string,
+	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void,
+	systemPrompt: string,
+	apiKey?: string,
+	signal?: AbortSignal
+) {
 	const genAI = getGeminiClient(apiKey);
 	// Check schema definition from previous code... assuming it's available or re-defined here
 	// For brevity re-using the logic conceptually.
@@ -326,11 +379,13 @@ async function streamGemini(modelName: string, prompt: string, onUpdate: (data: 
 		}
 	});
 
-	const result = await model.generateContentStream(prompt);
+	// @ts-expect-error - SDK typing does not include AbortSignal yet
+	const result = await model.generateContentStream(prompt, { signal });
 
 	let accumulatedText = "";
 
 	for await (const chunk of result.stream) {
+		if (signal?.aborted) return;
 		const chunkText = chunk.text();
 		// console.log("Gemini Stream Chunk:", chunkText);
 		accumulatedText += chunkText;
@@ -342,6 +397,7 @@ async function streamGemini(modelName: string, prompt: string, onUpdate: (data: 
 	}
 	// Final safe parse to ensure everything is correct
 	try {
+		if (signal?.aborted) return;
 		const final = JSON.parse(accumulatedText);
 		const response = await result.response;
 		const usage = response.usageMetadata ? {
@@ -357,10 +413,23 @@ async function streamGemini(modelName: string, prompt: string, onUpdate: (data: 
 }
 
 // OpenAI Streaming
-async function streamOpenAI(modelName: string, prompt: string, onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void, systemPrompt: string, apiKey?: string) {
-	const openai = getOpenAIClient(apiKey);
-
-	const stream = await openai.chat.completions.create({
+async function streamOpenAICompatible(
+	openai: OpenAI,
+	modelName: string,
+	prompt: string,
+	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void,
+	systemPrompt: string,
+	signal?: AbortSignal
+) {
+	// Check if model supports reasoning parameters
+	const isReasoningModel = modelName.includes('gpt-oss') || 
+	                         modelName.includes('o1') || 
+	                         modelName.includes('o3') ||
+	                         modelName.includes('qwq') ||
+	                         modelName.includes('deepseek-r1') ||
+	                         modelName.includes('k2-instruct');
+	
+	const requestParams: any = {
 		model: modelName,
 		messages: [
 			{ role: "system", content: systemPrompt },
@@ -368,14 +437,19 @@ async function streamOpenAI(modelName: string, prompt: string, onUpdate: (data: 
 		],
 		response_format: { type: "json_object" },
 		stream: true,
-		// @ts-ignore
-		reasoning_effort: "low",
-		// @ts-ignore
 		stream_options: { include_usage: true }
-	});
+	};
+
+	// Only add reasoning_effort for models that support it
+	if (isReasoningModel) {
+		requestParams.reasoning_effort = "low";
+	}
+
+	const stream = await openai.chat.completions.create(requestParams, { signal });
 
 	let accumulatedText = "";
 	for await (const chunk of stream) {
+		if (signal?.aborted) return;
 		const content = chunk.choices[0]?.delta?.content || "";
 
 		if (chunk.usage) {
@@ -409,22 +483,69 @@ async function streamOpenAI(modelName: string, prompt: string, onUpdate: (data: 
 	}
 }
 
+async function streamOpenAI(
+	modelName: string,
+	prompt: string,
+	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void,
+	systemPrompt: string,
+	apiKey?: string,
+	signal?: AbortSignal
+) {
+	const openai = getOpenAIClient(apiKey);
+	await streamOpenAICompatible(openai, modelName, prompt, onUpdate, systemPrompt, signal);
+}
+
+async function streamGroq(
+	modelName: string,
+	prompt: string,
+	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void,
+	systemPrompt: string,
+	apiKey?: string,
+	signal?: AbortSignal
+) {
+	const groq = getGroqClient(apiKey);
+	await streamOpenAICompatible(groq, modelName, prompt, onUpdate, systemPrompt, signal);
+}
+
+async function streamCerebras(
+	modelName: string,
+	prompt: string,
+	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void,
+	systemPrompt: string,
+	apiKey?: string,
+	signal?: AbortSignal
+) {
+	const cerebras = getCerebrasClient(apiKey);
+	await streamOpenAICompatible(cerebras, modelName, prompt, onUpdate, systemPrompt, signal);
+}
+
 // Anthropic Streaming
-async function streamAnthropic(modelName: string, prompt: string, onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void, systemPrompt: string, apiKey?: string) {
+async function streamAnthropic(
+	modelName: string,
+	prompt: string,
+	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void,
+	systemPrompt: string,
+	apiKey?: string,
+	signal?: AbortSignal
+) {
 	const anthropic = getAnthropicClient(apiKey);
 
-	const stream = await anthropic.messages.create({
-		model: modelName,
-		max_tokens: 1024,
-		system: systemPrompt + "\n\nOutput strictly valid JSON.",
-		messages: [{ role: "user", content: prompt }],
-		stream: true
-	});
+	const stream = await anthropic.messages.create(
+		{
+			model: modelName,
+			max_tokens: 1024,
+			system: systemPrompt + "\n\nOutput strictly valid JSON.",
+			messages: [{ role: "user", content: prompt }],
+			stream: true
+		},
+		{ signal }
+	);
 
 	let accumulatedText = "";
 	let currentUsage: UsageMetadata = { input_tokens: 0, output_tokens: 0 };
 
 	for await (const chunk of stream) {
+		if (signal?.aborted) return;
 		if (chunk.type === 'message_start') {
 			currentUsage.input_tokens = chunk.message.usage.input_tokens;
 			currentUsage.output_tokens = chunk.message.usage.output_tokens;
@@ -460,18 +581,20 @@ export async function translateText(
 	targetLang: string,
 	styles: Record<string, number>,
 	model: AiModel = "gemini-1.5-flash",
-	styleMeta: Record<string, { name: string; prompt?: string }> = {}
+	styleMeta: Record<string, { name: string; prompt?: string }> = {},
+	candidateCount: number = 3,
 ): Promise<AiResponse> {
 	const userPrompt = buildUserPrompt(text, sourceLang, targetLang, styles, styleMeta);
+	const systemPrompt = buildSystemPrompt("日本語", candidateCount);
 
 	let response: AiResponse;
 
 	if (model.startsWith("gemini")) {
-		response = await callGemini(userPrompt);
+		response = await callGemini(userPrompt, systemPrompt);
 	} else if (model.startsWith("gpt")) {
-		response = await callOpenAI(model, userPrompt);
+		response = await callOpenAI(model, userPrompt, systemPrompt);
 	} else if (model.startsWith("claude")) {
-		response = await callAnthropic(model, userPrompt);
+		response = await callAnthropic(model, userPrompt, systemPrompt);
 	} else {
 		throw new Error(`Unsupported model: ${model}`);
 	}
@@ -480,5 +603,4 @@ export async function translateText(
 	response.candidates = response.candidates.map((c, i) => ({ ...c, id: i + 1 }));
 	return response;
 }
-
 

@@ -30,7 +30,19 @@
 		isReal: false,
 		firstTokenReceived: false,
 	};
+	let candidateCount = 3;
 	let timerInterval: any = null;
+	let activeRunId = 0;
+	let currentAbortController: AbortController | null = null;
+
+	function buildEmptyTranslations(count: number): TranslationResult[] {
+		const safeCount = Math.max(1, Math.min(6, Number(count) || 3));
+		return Array.from({ length: safeCount }, (_, i) => ({
+			id: i + 1,
+			text: "",
+			reason: "",
+		}));
+	}
 
 	// Listeners
 	onMount(async () => {
@@ -43,11 +55,28 @@
 			await startTranslation(payload);
 		});
 
+		await listen("stop_translation_command", async () => {
+			if (currentAbortController) {
+				currentAbortController.abort();
+				currentAbortController = null;
+			}
+			activeRunId += 1;
+			isTranslating = false;
+			if (timerInterval) clearInterval(timerInterval);
+			await broadcastUpdate();
+		});
+
 		// Listen for partial state updates (input, styles)
 		await listen("sync_input_command", async (event: any) => {
 			const payload = event.payload;
 			// console.log("[Service] Sync input:", payload);
 			const shouldReset = Boolean(payload.resetTranslations);
+			if (payload.candidateCount !== undefined) {
+				candidateCount = Math.max(
+					1,
+					Math.min(6, Number(payload.candidateCount) || 3),
+				);
+			}
 			if (payload.text !== undefined) inputQuery = payload.text;
 			if (payload.sourceLang !== undefined)
 				sourceLang = payload.sourceLang;
@@ -62,11 +91,7 @@
 			if (shouldReset && !isTranslating) {
 				isTranslating = false;
 				detectedLang = "";
-				translations = [
-					{ id: 1, text: "", reason: "" },
-					{ id: 2, text: "", reason: "" },
-					{ id: 3, text: "", reason: "" },
-				];
+				translations = buildEmptyTranslations(candidateCount);
 				detailedExplanation = null;
 				techMetrics = {
 					time: 0,
@@ -114,6 +139,14 @@
 			console.log("[Service] Restarting translation...");
 		}
 
+		if (currentAbortController) {
+			currentAbortController.abort();
+		}
+		const runId = activeRunId + 1;
+		activeRunId = runId;
+		const abortController = new AbortController();
+		currentAbortController = abortController;
+
 		isTranslating = true;
 		inputQuery = params.text;
 		sourceLang = params.sourceLang;
@@ -121,12 +154,12 @@
 		targetLang = params.targetLang;
 		styleLevels = params.styles;
 		currentModel = params.model;
+		candidateCount = Math.max(
+			1,
+			Math.min(6, Number(params.candidateCount) || candidateCount),
+		);
 
-		translations = [
-			{ id: 1, text: "", reason: "" },
-			{ id: 2, text: "", reason: "" },
-			{ id: 3, text: "", reason: "" },
-		];
+		translations = buildEmptyTranslations(candidateCount);
 		detailedExplanation = null;
 
 		// Tech info reset
@@ -145,6 +178,7 @@
 		const startTime = Date.now();
 		if (timerInterval) clearInterval(timerInterval);
 		timerInterval = setInterval(() => {
+			if (runId !== activeRunId) return;
 			techMetrics.time = (Date.now() - startTime) / 1000;
 			if (techMetrics.firstTokenReceived) {
 				techMetrics.genTime = techMetrics.time - techMetrics.waitTime;
@@ -170,6 +204,7 @@
 				params.styles,
 				params.model,
 				(partial, usage) => {
+					if (runId !== activeRunId) return;
 					if (!techMetrics.firstTokenReceived) {
 						techMetrics.firstTokenReceived = true;
 					}
@@ -204,14 +239,20 @@
 				params.explanationLang,
 				params.styleMeta, // pass style metadata (id -> {name, prompt})
 				params.apiKeys,
+				{ provider: params.provider, signal: abortController.signal },
+				candidateCount,
 			);
 		} catch (e) {
-			console.error("[Service] Translation error:", e);
+			if (!abortController.signal.aborted) {
+				console.error("[Service] Translation error:", e);
+			}
 			// Ensure we stop translating state in case of error?
 		} finally {
-			isTranslating = false;
-			if (timerInterval) clearInterval(timerInterval);
-			await broadcastUpdate();
+			if (runId === activeRunId) {
+				isTranslating = false;
+				if (timerInterval) clearInterval(timerInterval);
+				await broadcastUpdate();
+			}
 		}
 	}
 </script>
