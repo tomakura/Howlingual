@@ -12,44 +12,6 @@
   "app": {
     "windows": [
       {
-        "label": "main",
-        "title": "Howlingual",
-        "url": "/?view=main",
-        "width": 800,
-        "height": 600,
-        "minHeight": 500,
-        "minWidth": 600,
-        "decorations": false,
-        "transparent": true,
-        "visible": false
-      },
-      {
-        "label": "tray",
-        "title": "Howlingual Tray",
-        "url": "/tray",
-        "width": 180,
-        "height": 110,
-        "decorations": false,
-        "transparent": true,
-        "resizable": false,
-        "skipTaskbar": true,
-        "alwaysOnTop": true,
-        "visible": false,
-        "center": false
-      },
-      {
-        "label": "capture",
-        "title": "Howlingual Capture",
-        "url": "/?view=capture",
-        "decorations": false,
-        "fullscreen": false,
-        "resizable": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "visible": false,
-        "skipTaskbar": true
-      },
-      {
         "label": "service",
         "title": "Howlingual Service",
         "url": "/service",
@@ -83,10 +45,16 @@
     },
     "windows": {
       "wix": {
-        "language": ["en-US", "ja-JP"]
+        "language": [
+          "en-US",
+          "ja-JP"
+        ]
       },
       "nsis": {
-        "languages": ["English", "Japanese"],
+        "languages": [
+          "English",
+          "Japanese"
+        ],
         "displayLanguageSelector": true
       }
     }

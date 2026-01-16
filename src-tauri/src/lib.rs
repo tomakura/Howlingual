@@ -1535,19 +1535,8 @@ pub fn run() {
             set_ocr_engine
         ])
         .setup(|app| {
-            #[cfg(target_os = "macos")]
-            check_screen_capture_permission();
-
-            let _app_handle = app.handle();
-
-            #[cfg(target_os = "macos")]
-            if let Some(window) = app.get_webview_window("main") {
-                // Enable native traffic lights (red/yellow/green)
-                let _ = window.set_decorations(true);
-                // Hide actual title text by setting empty string
-                let _ = window.set_title("");
-            }
-
+            // CRITICAL: Initialize all states FIRST before any other operations
+            // to prevent "state() called before manage()" errors
             app.manage(ExitState::default());
             app.manage(ShortcutConfig::default());
             app.manage(PendingText::default());
@@ -1560,6 +1549,20 @@ pub fn run() {
                 app.manage(PaddleOcrState(Mutex::new(None)));
                 app.manage(WindowsOcrState(Mutex::new(None)));
                 app.manage(OcrEngineConfig::default());
+            }
+
+            // Now perform platform-specific initialization
+            #[cfg(target_os = "macos")]
+            check_screen_capture_permission();
+
+            let _app_handle = app.handle();
+
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                // Enable native traffic lights (red/yellow/green)
+                let _ = window.set_decorations(true);
+                // Hide actual title text by setting empty string
+                let _ = window.set_title("");
             }
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
