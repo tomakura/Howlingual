@@ -512,10 +512,12 @@ fn capture_selected_text() -> Option<String> {
     #[cfg(all(not(windows), not(target_os = "macos")))]
     send_copy_shortcut();
 
-    // Poll for text - use shorter timeout for responsiveness, but more retries
+    // Poll for text - allow more time on macOS for slower app response
     let mut result = None;
-    let max_retries = 10; // 10 * 20ms = 200ms timeout
-    let sleep_ms = 20;
+    #[cfg(target_os = "macos")]
+    let (max_retries, sleep_ms) = (20, 20); // 20 * 20ms = 400ms timeout (macOS apps can be slow)
+    #[cfg(not(target_os = "macos"))]
+    let (max_retries, sleep_ms) = (10, 20); // 10 * 20ms = 200ms timeout
 
     for i in 0..max_retries {
         std::thread::sleep(Duration::from_millis(sleep_ms));
@@ -600,7 +602,10 @@ fn update_shortcut(
     state: State<'_, ShortcutConfig>,
     shortcut: String,
 ) -> Result<(), String> {
-    register_shortcut(&app, state.inner(), &shortcut).map_err(|err| err.0)
+    register_shortcut(&app, state.inner(), &shortcut).map_err(|err| err.0)?;
+    // Persist to config file so it's available on next startup (before webview loads)
+    save_shortcut_to_config(&app, &shortcut);
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -976,12 +981,66 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+// --- Config persistence for shortcuts ---
+// This allows shortcuts to work immediately on app startup without waiting for the webview.
+const CONFIG_FILE_NAME: &str = "howlingual_config.json";
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct AppConfig {
+    shortcut: Option<String>,
+}
+
+fn get_config_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|p| p.join(CONFIG_FILE_NAME))
+}
+
+fn load_config(app: &AppHandle) -> AppConfig {
+    if let Some(path) = get_config_path(app) {
+        if path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(config) = serde_json::from_str(&content) {
+                    return config;
+                }
+            }
+        }
+    }
+    AppConfig::default()
+}
+
+fn save_shortcut_to_config(app: &AppHandle, shortcut: &str) {
+    if let Some(path) = get_config_path(app) {
+        // Ensure directory exists
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let config = AppConfig {
+            shortcut: Some(shortcut.to_string()),
+        };
+        if let Ok(json) = serde_json::to_string_pretty(&config) {
+            if let Err(e) = std::fs::write(&path, json) {
+                println!("[config] Failed to save config: {}", e);
+            } else {
+                println!("[config] Saved shortcut to config file");
+            }
+        }
+    }
+}
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn setup_global_shortcut(
     app: &AppHandle,
     state: &ShortcutConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    register_shortcut(app, state, DEFAULT_SHORTCUT)
+    // Try to load shortcut from config file first (for Windows startup without webview)
+    let config = load_config(app);
+    let shortcut_to_use = config.shortcut.as_deref().unwrap_or(DEFAULT_SHORTCUT);
+
+    println!("[shortcut] Using shortcut from config: {}", shortcut_to_use);
+
+    register_shortcut(app, state, shortcut_to_use)
         .map_err(|err| Box::new(err) as Box<dyn std::error::Error>)?;
     Ok(())
 }
@@ -1489,25 +1548,9 @@ async fn ocr_windows(app: AppHandle, image: image::RgbaImage) -> Result<String, 
     }
 }
 
-#[cfg(target_os = "macos")]
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGPreflightScreenCaptureAccess() -> bool;
-    fn CGRequestScreenCaptureAccess() -> bool;
-}
-
-#[cfg(target_os = "macos")]
-fn check_screen_capture_permission() {
-    unsafe {
-        let has_access = CGPreflightScreenCaptureAccess();
-        println!("[main] Screen Capture Access Preflight: {}", has_access);
-        if !has_access {
-            println!("[main] Requesting Screen Capture Access...");
-            let requested = CGRequestScreenCaptureAccess();
-            println!("[main] Screen Capture Access Requested: {}", requested);
-        }
-    }
-}
+// NOTE: Screen capture permission check was previously here.
+// Removed because it caused an annoying permission dialog on every app launch.
+// The OS will naturally prompt for permission when xcap attempts to capture.
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -1551,9 +1594,9 @@ pub fn run() {
                 app.manage(OcrEngineConfig::default());
             }
 
-            // Now perform platform-specific initialization
-            #[cfg(target_os = "macos")]
-            check_screen_capture_permission();
+            // NOTE: Removed check_screen_capture_permission() call.
+            // The OS will prompt for permission naturally when xcap attempts capture.
+            // This avoids the annoying permission dialog appearing on every app launch.
 
             let _app_handle = app.handle();
 
