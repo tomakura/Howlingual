@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Allow screen capture access (required for OCR feature) -->
+    <key>com.apple.security.device.audio-input</key>
+    <false/>
+    
+    <!-- Network access for AI API calls -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    
+    <!-- Allow reading user selected files -->
+    <key>com.apple.security.files.user-selected.read-only</key>
+    <true/>
+    
+    <!-- Required for clipboard access and key event simulation -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+</dict>
+</plist>
