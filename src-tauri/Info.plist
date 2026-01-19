@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Hide from Dock (menu bar only app) -->
+    <key>LSUIElement</key>
+    <true/>
+    
+    <!-- Screen recording access description -->
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Howlingual needs screen capture access for OCR text recognition.</string>
+    
+    <!-- Accessibility access for keyboard simulation -->
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Howlingual needs accessibility access to copy selected text.</string>
+</dict>
+</plist>

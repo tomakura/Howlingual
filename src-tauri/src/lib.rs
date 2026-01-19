@@ -1077,6 +1077,14 @@ fn handover_to_main(app: AppHandle, text: String) {
 async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(), String> {
     println!("[ocr] start_selection_ocr called, origin: {:?}", origin);
 
+    // Check screen capture permission on macOS before attempting capture
+    #[cfg(target_os = "macos")]
+    {
+        if !check_screen_capture_permission() {
+            return Err("Screen recording permission not granted. Please enable it in System Settings > Privacy & Security > Screen Recording.".into());
+        }
+    }
+
     // Default to Main if not specific
     let origin_enum = match origin.as_deref() {
         Some("compact") => WindowOrigin::Compact,
@@ -1548,9 +1556,45 @@ async fn ocr_windows(app: AppHandle, image: image::RgbaImage) -> Result<String, 
     }
 }
 
-// NOTE: Screen capture permission check was previously here.
-// Removed because it caused an annoying permission dialog on every app launch.
-// The OS will naturally prompt for permission when xcap attempts to capture.
+// --- macOS Screen Capture Permission Handling ---
+// We check permission status before attempting capture to avoid repeated prompts.
+// CGPreflightScreenCaptureAccess returns true if already granted.
+// CGRequestScreenCaptureAccess triggers the prompt (only call once when needed).
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGRequestScreenCaptureAccess() -> bool;
+}
+
+#[cfg(target_os = "macos")]
+static PERMISSION_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Check if we have screen capture permission. Returns true if granted.
+/// Only requests permission once per app session to avoid spamming the user.
+#[cfg(target_os = "macos")]
+fn check_screen_capture_permission() -> bool {
+    unsafe {
+        let has_access = CGPreflightScreenCaptureAccess();
+        if has_access {
+            return true;
+        }
+
+        // Only request once per session
+        if !PERMISSION_REQUESTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            println!("[permission] Requesting screen capture access (one-time)...");
+            let granted = CGRequestScreenCaptureAccess();
+            println!("[permission] Request result: {}", granted);
+            return granted;
+        }
+
+        // Already requested but not granted
+        println!("[permission] Screen capture not granted (already requested this session)");
+        false
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
