@@ -736,8 +736,8 @@ fn show_main_window(app: &AppHandle, cursor_pos: Option<(i32, i32)>) -> tauri::R
                 .title("Howlingual")
                 .inner_size(800.0, 600.0)
                 .min_inner_size(600.0, 400.0)
-                .title_bar_style(tauri::TitleBarStyle::Overlay)
-                .transparent(true);
+                .title_bar_style(tauri::TitleBarStyle::Transparent)
+                .hidden_title(true);
         }
 
         #[cfg(target_os = "windows")]
@@ -831,6 +831,7 @@ fn show_main_window(app: &AppHandle, cursor_pos: Option<(i32, i32)>) -> tauri::R
 
     window.show()?;
     window.set_focus()?;
+
     let _ = app.emit("window_shown", "main");
     Ok(())
 }
@@ -994,7 +995,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 let rgba = img.to_rgba8();
                 let (width, height) = rgba.dimensions();
                 let icon = tauri::image::Image::new_owned(rgba.into_raw(), width, height);
-                tray = tray.icon(icon);
+                tray = tray.icon(icon).icon_as_template(true);
             }
             Err(e) => {
                 println!("[tray] Failed to load template icon: {}, using default", e);
@@ -1597,14 +1598,6 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             check_screen_capture_permission();
 
-            #[cfg(target_os = "macos")]
-            if let Some(window) = app.get_webview_window("main") {
-                // Enable native traffic lights (red/yellow/green)
-                let _ = window.set_decorations(true);
-                // Hide actual title text by setting empty string
-                let _ = window.set_title("");
-            }
-
             app.manage(ExitState::default());
             app.manage(ShortcutConfig::default());
             app.manage(PendingText::default());
@@ -1619,26 +1612,15 @@ pub fn run() {
                 app.manage(OcrEngineConfig::default());
             }
 
-            // NOTE: Removed check_screen_capture_permission() call.
-            // The OS will prompt for permission naturally when xcap attempts capture.
-            // This avoids the annoying permission dialog appearing on every app launch.
-
-            let _app_handle = app.handle();
-
-            #[cfg(target_os = "macos")]
-            if let Some(window) = app.get_webview_window("main") {
-                // Enable native traffic lights (red/yellow/green)
-                let _ = window.set_decorations(true);
-                // Hide actual title text by setting empty string
-                let _ = window.set_title("");
-            }
-
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 let shortcut_state = app.state::<ShortcutConfig>();
                 ensure_compact_window(&app.handle())?;
                 setup_tray(&app.handle())?;
                 setup_global_shortcut(&app.handle(), shortcut_state.inner())?;
+
+                // Show main window on startup (frontend will handle startMinimized setting)
+                let _ = show_main_window(&app.handle(), None);
             }
 
             Ok(())

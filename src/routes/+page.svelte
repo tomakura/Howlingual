@@ -594,6 +594,10 @@
             await window.show();
             // Ensure focus if not starting minimized
             await window.setFocus();
+            // Set visible to trigger fade-in animation
+            setTimeout(() => {
+              isWindowVisible = true;
+            }, 50);
           }
         } catch (e) {
           console.warn("Failed to handle startup visibility", e);
