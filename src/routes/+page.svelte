@@ -1,4 +1,6 @@
 <script lang="ts">
+  import SettingsPanel from "$lib/components/SettingsPanel.svelte";
+  import HistoryPanel from "$lib/components/HistoryPanel.svelte";
   import { tick, onMount, onDestroy, untrack } from "svelte";
   import { fade, scale, fly, crossfade } from "svelte/transition";
   import { flip } from "svelte/animate";
@@ -33,7 +35,9 @@
   let settingsTab = $state<
     "appearance" | "translation" | "system" | "api" | "styles" | "about"
   >("appearance");
-  const appVersion = "1.0";
+  declare const __APP_VERSION__: string;
+  const appVersion = __APP_VERSION__;
+
   let selectedModel = $state<AiModel>("gpt-5-mini" as AiModel);
   let apiKeys = $state({
     gemini: "",
@@ -143,7 +147,10 @@
     // Handle Escape key globally
     const handleKeydown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        hideWindow();
+        // Only hide window in compact or capture mode, not in main mode
+        if (isCompactMode || isCaptureMode) {
+          hideWindow();
+        }
       }
     };
     window.addEventListener("keydown", handleKeydown);
@@ -1086,16 +1093,6 @@
     }
   }
 
-  let slideDirection = $state(1);
-  const settingsTabOrder = [
-    "appearance",
-    "translation",
-    "system",
-    "api",
-    "styles",
-    "about",
-  ];
-
   function moveStyle(index: number, direction: "up" | "down") {
     const newStyles = [...customStyles];
     if (direction === "up" && index > 0) {
@@ -1143,21 +1140,6 @@
       default:
         return "sk-...";
     }
-  }
-
-  function changeTab(
-    newTab:
-      | "appearance"
-      | "translation"
-      | "system"
-      | "api"
-      | "styles"
-      | "about",
-  ) {
-    const currentIndex = settingsTabOrder.indexOf(settingsTab);
-    const newIndex = settingsTabOrder.indexOf(newTab);
-    slideDirection = newIndex > currentIndex ? 1 : -1;
-    settingsTab = newTab;
   }
 
   function openSettingsModal() {
@@ -1304,10 +1286,6 @@
     showSettings = true;
   }
 
-  function closeSettings() {
-    showSettings = false;
-  }
-
   async function startOCR() {
     try {
       console.log("[UI] Starting OCR selection...");
@@ -1406,7 +1384,8 @@
             customStyles,
           );
         }
-        if (data.techMetrics) techMetrics = { ...techMetrics, ...data.techMetrics };
+        if (data.techMetrics)
+          techMetrics = { ...techMetrics, ...data.techMetrics };
         if (typeof data.showTechInfo === "boolean") {
           showTechInfo = data.showTechInfo;
         }
@@ -1620,11 +1599,7 @@
       "gemini-3-pro",
       "gemini-3-flash",
     ],
-    anthropic: [
-      "claude-opus-4.5",
-      "claude-sonnet-4.5",
-      "claude-haiku-4.5",
-    ],
+    anthropic: ["claude-opus-4.5", "claude-sonnet-4.5", "claude-haiku-4.5"],
   };
 
   function isStreamingModel(): boolean {
@@ -2170,15 +2145,6 @@
   let favorites: HistoryItem[] = $state([]);
   let showHistory = $state(false);
   let historyTab = $state("recent"); // "recent" | "saved"
-  let historySlideDirection = $state(1);
-  const historyTabOrder = ["recent", "saved"];
-
-  function changeHistoryTab(newTab: string) {
-    const currentIndex = historyTabOrder.indexOf(historyTab);
-    const newIndex = historyTabOrder.indexOf(newTab);
-    historySlideDirection = newIndex > currentIndex ? 1 : -1;
-    historyTab = newTab;
-  }
 
   let starAnimatingId = $state("");
 
@@ -2515,10 +2481,7 @@
     );
     const paddingX = usageChartConfig.paddingX;
     const gap = usageChartConfig.gap;
-    const barWidth = Math.max(
-      10,
-      (width - paddingX * 2 - gap * 6) / 7,
-    );
+    const barWidth = Math.max(10, (width - paddingX * 2 - gap * 6) / 7);
     return { width, paddingX, gap, barWidth };
   });
   let usageHover = $state<{
@@ -2632,9 +2595,9 @@
       // Ensure isTranslating is properly reset
       if (isTranslating) {
         // Wait a bit to ensure all streaming is complete
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      
+
       // Mark translation as complete and update tracking variable
       isTranslating = false;
       lastTranslatedText = inputQuery;
@@ -4642,1313 +4605,72 @@
 {/if}
 
 <!-- Settings Modal -->
-{#if showSettings && !isCompactMode && !isCaptureMode}
-  <div
-    class="settings-overlay"
-    transition:fade={{ duration: 200 }}
-    onclick={closeSettings}
-    onkeydown={(e) => (e.key === "Enter" || e.key === " ") && closeSettings()}
-    role="button"
-    tabindex="0"
-    aria-label="Close settings"
-  >
-    <div
-      class="settings-panel glass history-panel"
-      class:style-editor-mode={!!editingStyle}
-      transition:fly={{ y: 20, duration: 300 }}
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="settings-title"
-      tabindex="-1"
-    >
-      {#if editingStyle}
-        <!-- Dedicated Style Editor View -->
-        <div class="settings-header">
-          <button
-            class="back-btn"
-            onclick={cancelEditStyle}
-            aria-label={t(appLanguage, "back")}
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <line x1="19" y1="12" x2="5" y2="12"></line>
-              <polyline points="12 19 5 12 12 5"></polyline>
-            </svg>
-          </button>
-          <h2 id="settings-title">
-            {editingStyle.id !== "" &&
-            customStyles.some((s) => s.id === editingStyle?.id)
-              ? t(appLanguage, "editStyle") || "文体を編集"
-              : t(appLanguage, "addStyle")}
-          </h2>
-          <div style="width: 20px;"></div>
-        </div>
+<SettingsPanel
+  bind:showSettings
+  {isCompactMode}
+  {isCaptureMode}
+  bind:settingsTab
+  bind:appLanguage
+  bind:theme
+  {customStyles}
+  {moveStyle}
+  {deleteStyle}
+  {openStyleEditor}
+  {triggerResetStyles}
+  bind:apiKeys
+  {selectedProvider}
+  {selectProvider}
+  bind:selectedModel
+  {filteredModels}
+  {usageToday}
+  {weeklyUsage}
+  {usageReady}
+  {usageChartMetrics}
+  {usageChartConfig}
+  {weeklyMaxCount}
+  {weeklyMaxTokens}
+  {shortDate}
+  {getTokenLinePoints}
+  {showUsageHover}
+  {clearUsageHover}
+  {usageHover}
+  bind:usageChartWrapper
+  {appVersion}
+  bind:autoRunQuick
+  bind:showTechInfo
+  {autoStartEnabled}
+  {toggleAutoStart}
+  bind:startMinimized
+  {isWindows}
+  bind:ocrEngine
+  bind:defaultTargetLang
+  bind:allowRewrite
+  bind:translationCount
+  {quickShortcut}
+  bind:shortcutDraft
+  {applyShortcut}
+  {shortcutSaving}
+  {shortcutError}
+  {getApiKeyLabel}
+  {getApiKeyPlaceholder}
+/>
 
-        <div class="settings-content style-editor-content">
-          <div class="settings-section">
-            <label class="settings-label" for="edit-style-name">
-              {t(appLanguage, "styleName")}
-            </label>
-            <input
-              id="edit-style-name"
-              type="text"
-              class="settings-input"
-              bind:value={editingStyle.name}
-              placeholder={t(appLanguage, "styleName")}
-              oninput={() => {
-                if (editingStyle) editingStyle.isDefault = false;
-              }}
-            />
-          </div>
-
-          <div class="settings-section full-height">
-            <label class="settings-label" for="edit-style-prompt">
-              {t(appLanguage, "stylePrompt")}
-            </label>
-            <textarea
-              id="edit-style-prompt"
-              class="settings-textarea"
-              bind:value={editingStyle.prompt}
-              placeholder={t(appLanguage, "stylePrompt")}
-              oninput={() => {
-                if (editingStyle) editingStyle.isDefault = false;
-              }}
-            ></textarea>
-            <p class="input-hint">
-              {t(appLanguage, "stylePromptHint")}
-            </p>
-          </div>
-        </div>
-
-        <div class="settings-footer" style="justify-content: flex-end;">
-          <button
-            class="save-btn primary"
-            style="width: auto; min-width: 120px;"
-            onclick={saveStyle}
-          >
-            {t(appLanguage, "save") || "保存"}
-          </button>
-        </div>
-      {:else}
-        <div class="settings-header">
-          <h2 id="settings-title">{t(appLanguage, "settingsTitle")}</h2>
-          <button
-            class="close-btn"
-            onclick={closeSettings}
-            aria-label={t(appLanguage, "close")}
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <line x1="18" y1="6" x2="6" y2="18"></line>
-              <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
-          </button>
-        </div>
-
-        <div class="settings-body-container">
-          <!-- Sidebar Tabs -->
-          <div class="settings-sidebar">
-            <button
-              class="settings-tab vertical"
-              class:active={settingsTab === "appearance"}
-              onclick={() => changeTab("appearance")}
-            >
-              {t(appLanguage, "tabAppearance")}
-            </button>
-            <button
-              class="settings-tab vertical"
-              class:active={settingsTab === "translation"}
-              onclick={() => changeTab("translation")}
-            >
-              {t(appLanguage, "tabTranslation")}
-            </button>
-            <button
-              class="settings-tab vertical"
-              class:active={settingsTab === "system"}
-              onclick={() => changeTab("system")}
-            >
-              {t(appLanguage, "tabSystem")}
-            </button>
-            <button
-              class="settings-tab vertical"
-              class:active={settingsTab === "api"}
-              onclick={() => changeTab("api")}
-            >
-              {t(appLanguage, "tabAi")}
-            </button>
-            <button
-              class="settings-tab vertical"
-              class:active={settingsTab === "styles"}
-              onclick={() => changeTab("styles")}
-            >
-              {t(appLanguage, "tabStyles")}
-            </button>
-            <div style="flex: 1;"></div>
-            <button
-              class="settings-tab vertical"
-              class:active={settingsTab === "about"}
-              onclick={() => changeTab("about")}
-            >
-              {t(appLanguage, "tabAbout")}
-            </button>
-          </div>
-
-          <!-- Content with Transitions -->
-          <div class="settings-main-content">
-            {#key settingsTab}
-              <div
-                class="tab-content-wrapper"
-                in:fly={{
-                  y: slideDirection * 20,
-                  duration: 250,
-                  delay: 20,
-                  opacity: 0,
-                  easing: quintOut,
-                }}
-                out:fly={{
-                  y: -slideDirection * 20,
-                  duration: 200,
-                  opacity: 0,
-                  easing: quintOut,
-                }}
-              >
-                {#if settingsTab === "appearance"}
-                  <!-- App Language -->
-                  <div class="settings-section">
-                    <label class="settings-label" for="app-lang-select"
-                      >{t(appLanguage, "appLanguage")}</label
-                    >
-                    <select
-                      id="app-lang-select"
-                      class="settings-select"
-                      bind:value={appLanguage}
-                    >
-                      <option value="ja">日本語</option>
-                      <option value="en">English</option>
-                      <option value="zh">中文</option>
-                      <option value="ko">한국어</option>
-                    </select>
-                  </div>
-
-                  <!-- Theme -->
-                  <div class="settings-section">
-                    <div class="settings-label">{t(appLanguage, "theme")}</div>
-                    <div class="theme-toggle">
-                      <button
-                        class="theme-btn"
-                        class:active={theme === "dark"}
-                        onclick={() => (theme = "dark")}
-                      >
-                        {t(appLanguage, "themeDark")}
-                      </button>
-                      <button
-                        class="theme-btn"
-                        class:active={theme === "light"}
-                        onclick={() => (theme = "light")}
-                      >
-                        {t(appLanguage, "themeLight")}
-                      </button>
-                    </div>
-                  </div>
-                {:else if settingsTab === "translation"}
-                  <!-- Default Target Language -->
-                  <div class="settings-section">
-                    <label class="settings-label" for="target-lang-select"
-                      >{t(appLanguage, "defaultTargetLang")}</label
-                    >
-                    <select
-                      id="target-lang-select"
-                      class="settings-select"
-                      bind:value={defaultTargetLang}
-                    >
-                      <option value="日本語"
-                        >{getTargetLanguageName(appLanguage, "日本語")}</option
-                      >
-                      <option value="英語"
-                        >{getTargetLanguageName(appLanguage, "英語")}</option
-                      >
-                      <option value="中国語"
-                        >{getTargetLanguageName(appLanguage, "中国語")}</option
-                      >
-                      <option value="韓国語"
-                        >{getTargetLanguageName(appLanguage, "韓国語")}</option
-                      >
-                      <option value="フランス語"
-                        >{getTargetLanguageName(
-                          appLanguage,
-                          "フランス語",
-                        )}</option
-                      >
-                      <option value="ドイツ語"
-                        >{getTargetLanguageName(
-                          appLanguage,
-                          "ドイツ語",
-                        )}</option
-                      >
-                      <option value="スペイン語"
-                        >{getTargetLanguageName(
-                          appLanguage,
-                          "スペイン語",
-                        )}</option
-                      >
-                    </select>
-                  </div>
-
-                  <!-- Allow Rewrite -->
-                  <div class="settings-section">
-                    <div class="settings-label">
-                      {t(appLanguage, "allowRewrite")}
-                    </div>
-                    <div class="settings-card-row">
-                      <span
-                        id="allow-rewrite-label"
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
-                      >
-                        {t(appLanguage, "allowRewriteDescription")}
-                      </span>
-                      <button
-                        onclick={() => (allowRewrite = !allowRewrite)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {allowRewrite
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 99px; 
-                        position: relative; 
-                        border: none; 
-                        cursor: pointer;
-                        transition: background 0.2s;"
-                        aria-labelledby="allow-rewrite-label"
-                      >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {allowRewrite ? '23px' : '3px'}; 
-                          transition: left 0.2s;"
-                        ></div>
-                      </button>
-                    </div>
-                  </div>
-
-                  <!-- Translation Count -->
-                  <div class="settings-section">
-                    <div class="settings-label">
-                      {t(appLanguage, "translationCount") || "翻訳案の個数"}
-                    </div>
-                    <div class="settings-card-row">
-                      <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
-                      >
-                        {t(appLanguage, "translationCountDesc") ||
-                          "1回の翻訳で生成する翻訳案の数"}
-                      </span>
-                      <div style="display: flex; gap: 4px;">
-                        {#each [1, 2, 3] as count}
-                          <button
-                            onclick={() =>
-                              (translationCount = count as 1 | 2 | 3)}
-                            style="
-                              width: 36px;
-                              height: 28px;
-                              background: {translationCount === count
-                              ? '#3b82f6'
-                              : 'rgba(255,255,255,0.1)'};
-                              border: 1px solid {translationCount === count
-                              ? '#3b82f6'
-                              : 'rgba(255,255,255,0.2)'};
-                              border-radius: 6px;
-                              color: {translationCount === count
-                              ? 'white'
-                              : 'var(--text-muted)'};
-                              font-size: 13px;
-                              font-weight: 500;
-                              cursor: pointer;
-                              transition: all 0.2s;
-                            "
-                          >
-                            {count}
-                          </button>
-                        {/each}
-                      </div>
-                    </div>
-                  </div>
-
-                  <!-- Auto Run Quick Translate -->
-                  <div class="settings-section">
-                    <div class="settings-label">
-                      {t(appLanguage, "autoRunQuick") ||
-                        "クイック翻訳の自動実行"}
-                    </div>
-                    <div class="settings-card-row">
-                      <span
-                        id="auto-run-label"
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
-                      >
-                        {t(appLanguage, "autoRunQuickDesc") ||
-                          "ショートカット呼出時に自動で翻訳を開始します"}
-                      </span>
-                      <button
-                        onclick={() => (autoRunQuick = !autoRunQuick)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {autoRunQuick
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 99px; 
-                        position: relative; 
-                        border: none; 
-                        cursor: pointer;
-                        transition: background 0.2s;"
-                        aria-labelledby="auto-run-label"
-                      >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {autoRunQuick ? '23px' : '3px'}; 
-                          transition: left 0.2s;"
-                        ></div>
-                      </button>
-                    </div>
-                  </div>
-
-                  <!-- Technical Info -->
-                  <div class="settings-section">
-                    <div class="settings-label">
-                      {t(appLanguage, "showTechInfo") || "技術情報を表示"}
-                    </div>
-                    <div class="settings-card-row">
-                      <span
-                        id="tech-info-label"
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
-                      >
-                        {t(appLanguage, "showTechInfoDesc") ||
-                          "翻訳時に処理時間やトークン数を表示します"}
-                      </span>
-                      <button
-                        onclick={() => (showTechInfo = !showTechInfo)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {showTechInfo
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 99px; 
-                        position: relative; 
-                        border: none; 
-                        cursor: pointer;
-                        transition: background 0.2s;"
-                        aria-labelledby="tech-info-label"
-                      >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {showTechInfo ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
-                      </button>
-                    </div>
-                  </div>
-                {:else if settingsTab === "system"}
-                  <!-- Auto Start -->
-                  <div class="settings-section">
-                    <div class="settings-label">
-                      {t(appLanguage, "autoStart") || "スタートアップ起動"}
-                    </div>
-                    <div class="settings-card-row">
-                      <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
-                      >
-                        {t(appLanguage, "autoStartDesc") ||
-                          "OS 起動時にアプリを自動で起動します"}
-                      </span>
-                      <button
-                        onclick={toggleAutoStart}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {autoStartEnabled
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 20px; 
-                        border: none;
-                        cursor: pointer;
-                        position: relative;
-                        transition: background 0.2s;
-                      "
-                        aria-label="Toggle autostart"
-                      >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {autoStartEnabled ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
-                      </button>
-                    </div>
-                  </div>
-
-                  <!-- Start Minimized -->
-                  <div class="settings-section">
-                    <div class="settings-label">
-                      {t(appLanguage, "startMinimized") ||
-                        "起動時はメイン画面を最小化"}
-                    </div>
-                    <div class="settings-card-row">
-                      <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
-                      >
-                        {t(appLanguage, "startMinimizedDesc") ||
-                          "起動時にメイン画面を最小化して開始します"}
-                      </span>
-                      <button
-                        onclick={() => (startMinimized = !startMinimized)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {startMinimized
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 20px; 
-                        border: none;
-                        cursor: pointer;
-                        position: relative;
-                        transition: background 0.2s;
-                      "
-                        aria-label="Toggle start minimized"
-                      >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {startMinimized ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
-                      </button>
-                    </div>
-                  </div>
-
-                  {#if isWindows}
-                    <!-- OCR Engine -->
-                    <div class="settings-section">
-                      <div class="settings-label">
-                        {t(appLanguage, "ocrEngine")}
-                      </div>
-                      <div
-                        class="settings-card-row"
-                        style="flex-direction: column; gap: 12px; align-items: flex-start;"
-                      >
-                        <label
-                          style="display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%;"
-                        >
-                          <input
-                            type="radio"
-                            name="ocrEngine"
-                            value="paddle"
-                            bind:group={ocrEngine}
-                            style="cursor: pointer;"
-                          />
-                          <span style="flex: 1;">
-                            <div
-                              style="font-size: 14px; color: var(--text-main); font-weight: 500;"
-                            >
-                              {t(appLanguage, "ocrHighAccuracy")}
-                            </div>
-                            <div
-                              style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"
-                            >
-                              {t(appLanguage, "ocrHighAccuracyDesc")}
-                            </div>
-                          </span>
-                        </label>
-                        <label
-                          style="display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%;"
-                        >
-                          <input
-                            type="radio"
-                            name="ocrEngine"
-                            value="windows"
-                            bind:group={ocrEngine}
-                            style="cursor: pointer;"
-                          />
-                          <span style="flex: 1;">
-                            <div
-                              style="font-size: 14px; color: var(--text-main); font-weight: 500;"
-                            >
-                              {t(appLanguage, "ocrFast")}
-                            </div>
-                            <div
-                              style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"
-                            >
-                              {t(appLanguage, "ocrFastDesc")}
-                            </div>
-                          </span>
-                        </label>
-                      </div>
-                    </div>
-                  {/if}
-
-                  <!-- Quick Shortcut -->
-                  <div class="settings-section">
-                    <label class="settings-label" for="quick-shortcut-input"
-                      >{t(appLanguage, "quickShortcut")}</label
-                    >
-                    <div class="shortcut-row">
-                      <input
-                        id="quick-shortcut-input"
-                        class="settings-input"
-                        bind:value={shortcutDraft}
-                        placeholder={t(appLanguage, "quickShortcutHint")}
-                        onkeydown={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-
-                          // Ignore standalone modifier keys
-                          if (
-                            ["Control", "Shift", "Alt", "Meta"].includes(e.key)
-                          ) {
-                            return;
-                          }
-
-                          // Reset current draft
-                          let parts = [];
-                          const isMac = navigator.userAgent.includes("Mac");
-
-                          if (e.metaKey) {
-                            if (isMac) parts.push("Command");
-                            else parts.push("Super");
-                          }
-                          if (e.ctrlKey) parts.push("Ctrl");
-                          if (e.altKey) parts.push("Alt");
-                          if (e.shiftKey) parts.push("Shift");
-
-                          // Handle key
-                          let key = e.key.toUpperCase();
-                          if (key === " ") key = "Space";
-                          // Function keys
-                          if (
-                            key.length > 1 &&
-                            !key.startsWith("F") &&
-                            key !== "Space" &&
-                            key !== "ENTER" &&
-                            key !== "TAB"
-                          ) {
-                            // E.g. "PageUp"
-                            // Just use as is
-                          }
-
-                          parts.push(key);
-                          shortcutDraft = parts.join("+");
-                        }}
-                      />
-                      <button
-                        class="save-btn apply-shortcut-btn"
-                        onclick={() => void applyShortcut()}
-                        disabled={shortcutSaving ||
-                          shortcutDraft.trim() === "" ||
-                          shortcutDraft === quickShortcut}
-                      >
-                        {t(appLanguage, "applyShortcut")}
-                      </button>
-                    </div>
-                    <div class="shortcut-hint">
-                      {t(appLanguage, "quickShortcutHint")}
-                    </div>
-                    {#if shortcutError}
-                      <div class="shortcut-error">{shortcutError}</div>
-                    {/if}
-                  </div>
-                {:else if settingsTab === "api"}
-                  <!-- AI Settings Tab -->
-                  <p
-                    class="settings-description"
-                    style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;"
-                  >
-                    {t(appLanguage, "aiTabDescription") ||
-                      "選択したAIプロバイダーのモデルが有効になります。"}
-                  </p>
-
-                  <!-- Provider Switcher -->
-                  <div class="provider-switcher">
-                    <button
-                      class="provider-btn"
-                      class:active={selectedProvider === "openai"}
-                      onclick={() => selectProvider("openai")}
-                    >
-                      OpenAI
-                    </button>
-                    <button
-                      class="provider-btn"
-                      class:active={selectedProvider === "gemini"}
-                      onclick={() => selectProvider("gemini")}
-                    >
-                      Gemini
-                    </button>
-                    <button
-                      class="provider-btn"
-                      class:active={selectedProvider === "anthropic"}
-                      onclick={() => selectProvider("anthropic")}
-                    >
-                      Anthropic
-                    </button>
-                    <button
-                      class="provider-btn"
-                      class:active={selectedProvider === "groq"}
-                      onclick={() => selectProvider("groq")}
-                    >
-                      Groq
-                    </button>
-                    <button
-                      class="provider-btn"
-                      class:active={selectedProvider === "cerebras"}
-                      onclick={() => selectProvider("cerebras")}
-                    >
-                      Cerebras
-                    </button>
-                  </div>
-
-                  <!-- API Key for Selected Provider -->
-                  <div class="settings-section">
-                    <label class="settings-label" for="api-key-input">
-                      {getApiKeyLabel(selectedProvider)}
-                    </label>
-                    <input
-                      id="api-key-input"
-                      type="password"
-                      class="settings-input"
-                      bind:value={apiKeys[selectedProvider]}
-                      placeholder={getApiKeyPlaceholder(selectedProvider)}
-                    />
-                  </div>
-
-                  <!-- Model Selection (Filtered) -->
-                  <div class="settings-section">
-                    <label class="settings-label" for="model-select"
-                      >{t(appLanguage, "aiModel")}</label
-                    >
-                    <select
-                      id="model-select"
-                      class="settings-select"
-                      bind:value={selectedModel}
-                    >
-                      {#each filteredModels as model}
-                        <option value={model.value}>{model.label}</option>
-                      {/each}
-                    </select>
-                  </div>
-                {:else if settingsTab === "styles"}
-                  <!-- Styles Tab -->
-                  <div class="styles-actions-top">
-                    <button
-                      class="rich-btn primary"
-                      onclick={() => openStyleEditor()}
-                    >
-                      <svg
-                        width="18"
-                        height="18"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        class="btn-icon-left"
-                        stroke="currentColor"
-                        stroke-width="2"
-                      >
-                        <line x1="12" y1="5" x2="12" y2="19"></line>
-                        <line x1="5" y1="12" x2="19" y2="12"></line>
-                      </svg>
-                      {t(appLanguage, "addStyle")}
-                    </button>
-                    <button
-                      class="rich-btn danger"
-                      onclick={triggerResetStyles}
-                    >
-                      <svg
-                        width="18"
-                        height="18"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        class="btn-icon-left"
-                        stroke="currentColor"
-                        stroke-width="2"
-                      >
-                        <path
-                          d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
-                        ></path>
-                        <path d="M3 3v5h5"></path>
-                      </svg>
-                      {t(appLanguage, "resetStyles")}
-                    </button>
-                  </div>
-
-                  <div class="styles-list-container">
-                    {#each customStyles as style, i (style.id)}
-                      <div class="style-item-card">
-                        <div class="style-header-row">
-                          <span class="style-name-display">{style.name}</span>
-                          <div class="style-header-actions">
-                            <div
-                              class="move-actions"
-                              style="display: flex; gap: 2px; margin-right: 8px; border-right: 1px solid rgba(255,255,255,0.1); padding-right: 8px;"
-                            >
-                              <button
-                                class="icon-btn-small"
-                                onclick={() => moveStyle(i, "up")}
-                                disabled={i === 0}
-                                title="Move Up"
-                              >
-                                <svg
-                                  width="16"
-                                  height="16"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2"
-                                >
-                                  <polyline points="18 15 12 9 6 15"></polyline>
-                                </svg>
-                              </button>
-                              <button
-                                class="icon-btn-small"
-                                onclick={() => moveStyle(i, "down")}
-                                disabled={i === customStyles.length - 1}
-                                title="Move Down"
-                              >
-                                <svg
-                                  width="16"
-                                  height="16"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2"
-                                >
-                                  <polyline points="6 9 12 15 18 9"></polyline>
-                                </svg>
-                              </button>
-                            </div>
-                            <div
-                              style="display: flex; flex-direction: column; gap: 4px;"
-                            >
-                              <button
-                                class="icon-btn-small"
-                                title={t(appLanguage, "editStyle")}
-                                onclick={() => openStyleEditor(style)}
-                              >
-                                <svg
-                                  width="16"
-                                  height="16"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2"
-                                >
-                                  <path
-                                    d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"
-                                  ></path>
-                                  <path
-                                    d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"
-                                  ></path>
-                                </svg>
-                              </button>
-                              <button
-                                class="icon-btn-small danger"
-                                title={t(appLanguage, "delete")}
-                                onclick={() => deleteStyle(style.id)}
-                              >
-                                <svg
-                                  width="16"
-                                  height="16"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2"
-                                >
-                                  <polyline points="3 6 5 6 21 6"></polyline>
-                                  <path
-                                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
-                                  ></path>
-                                </svg>
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                        <p class="style-prompt-text">{style.prompt}</p>
-                      </div>
-                    {/each}
-                  </div>
-                {:else if settingsTab === "about"}
-                  <!-- About Tab -->
-                  <div
-                    class="about-tab-content"
-                  >
-                    <div class="about-brand-section">
-                      <div class="about-logo-wrapper">
-                        <img
-                          src={theme === "light"
-                            ? "icon-full-light.svg"
-                            : "icon-full-dark.svg"}
-                          alt="Howlingual Logo"
-                          style="width: 100px; height: 100px; filter: drop-shadow(0 4px 12px rgba(0,0,0,0.2));"
-                        />
-                      </div>
-                      <div class="about-text-content">
-                        <h2>Howlingual</h2>
-                        <p>Version {appVersion}</p>
-                      </div>
-                      <div class="about-footer-info">
-                        <p>© 2026 tomakura</p>
-                      </div>
-                    </div>
-
-                    <div class="about-usage-section">
-                      <div class="usage-cards">
-                        <div class="usage-card">
-                          <span class="usage-label">
-                            {t(appLanguage, "usageToday") || "今日の使用回数"}
-                          </span>
-                          <span class="usage-value">{usageToday.count}</span>
-                        </div>
-                        <div class="usage-card">
-                          <span class="usage-label">
-                            {t(appLanguage, "usageTokensToday") ||
-                              "今日のトークン"}
-                          </span>
-                          <span class="usage-value">
-                            {usageToday.tokens.toLocaleString()}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div class="usage-chart-card">
-                        <div class="usage-chart-header">
-                          {t(appLanguage, "usageWeeklyTrend") ||
-                            "1週間の推移"}
-                        </div>
-                        <div
-                          class="usage-chart-wrapper"
-                          bind:this={usageChartWrapper}
-                        >
-                          {#if usageReady}
-                            <svg
-                              class="usage-chart"
-                              viewBox={`0 0 ${usageChartMetrics.width} ${usageChartConfig.height}`}
-                              preserveAspectRatio="xMidYMid meet"
-                              role="img"
-                              aria-label="Weekly usage trend"
-                              onmouseleave={clearUsageHover}
-                            >
-                              <line
-                                class="usage-chart-baseline"
-                                x1="12"
-                                x2={usageChartMetrics.width - 12}
-                                y1={usageChartConfig.baseline}
-                                y2={usageChartConfig.baseline}
-                              />
-                              {#each weeklyUsage as day, i}
-                                <g class="usage-day">
-                                  <rect
-                                    class="usage-hover-hit"
-                                    x={usageChartMetrics.paddingX +
-                                      i *
-                                        (usageChartMetrics.barWidth +
-                                          usageChartMetrics.gap) -
-                                      usageChartMetrics.gap}
-                                    y="0"
-                                    width={usageChartMetrics.barWidth +
-                                      usageChartMetrics.gap * 2}
-                                    height={usageChartConfig.height}
-                                    rx="0"
-                                    role="presentation"
-                                    aria-hidden="true"
-                                    onmousemove={(event) =>
-                                      showUsageHover(event, day)}
-                                    onmouseleave={clearUsageHover}
-                                  />
-                                  <rect
-                                    class="usage-bar"
-                                    x={usageChartMetrics.paddingX +
-                                      i *
-                                        (usageChartMetrics.barWidth +
-                                          usageChartMetrics.gap)}
-                                    y={usageChartConfig.baseline -
-                                      (day.count / weeklyMaxCount) *
-                                        usageChartConfig.barMaxHeight}
-                                    width={usageChartMetrics.barWidth}
-                                    height={(day.count / weeklyMaxCount) *
-                                      usageChartConfig.barMaxHeight}
-                                    rx="4"
-                                  />
-                                  <circle
-                                    class="usage-line-dot"
-                                    cx={usageChartMetrics.paddingX +
-                                      i *
-                                        (usageChartMetrics.barWidth +
-                                          usageChartMetrics.gap) +
-                                      usageChartMetrics.barWidth / 2}
-                                    cy={usageChartConfig.baseline -
-                                      (day.tokens / weeklyMaxTokens) *
-                                        usageChartConfig.barMaxHeight}
-                                    r="3"
-                                  />
-                                  <text
-                                    class="usage-chart-label"
-                                    x={usageChartMetrics.paddingX +
-                                      i *
-                                        (usageChartMetrics.barWidth +
-                                          usageChartMetrics.gap) +
-                                      usageChartMetrics.barWidth / 2}
-                                    y={usageChartConfig.labelY}
-                                    text-anchor="middle"
-                                  >
-                                    {shortDate(day.date)}
-                                  </text>
-                                </g>
-                              {/each}
-                              <polyline
-                                class="usage-line"
-                                points={getTokenLinePoints()}
-                              />
-                            </svg>
-                            {#if usageHover}
-                              <div
-                                class="usage-tooltip"
-                                style={`left: ${usageHover.x}px; top: ${usageHover.y}px;`}
-                              >
-                                <div class="usage-tooltip-date">
-                                  {shortDate(usageHover.day.date)}
-                                </div>
-                                <div class="usage-tooltip-row">
-                                  <span class="legend-dot count"></span>
-                                  <span>
-                                    {t(appLanguage, "usageCountLabel") ||
-                                      "回数"}: {usageHover.day.count}
-                                  </span>
-                                </div>
-                                <div class="usage-tooltip-row">
-                                  <span class="legend-dot tokens"></span>
-                                  <span>
-                                    {t(appLanguage, "usageTokensLabel") ||
-                                      "トークン"}: {usageHover.day.tokens.toLocaleString()}
-                                  </span>
-                                </div>
-                              </div>
-                            {/if}
-                          {:else}
-                            <div class="usage-chart-skeleton"></div>
-                          {/if}
-                        </div>
-                        <div class="usage-chart-legend">
-                          <span class="legend-item">
-                            <span class="legend-dot count"></span>
-                            {t(appLanguage, "usageCountLabel") || "回数"}
-                          </span>
-                          <span class="legend-item">
-                            <span class="legend-dot tokens"></span>
-                            {t(appLanguage, "usageTokensLabel") ||
-                              "トークン"}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                {/if}
-              </div>
-            {/key}
-          </div>
-        </div>
-      {/if}
-    </div>
-  </div>
-{/if}
-
-{#if showHistory && !isCompactMode}
-  <div
-    class="settings-overlay"
-    transition:fade={{ duration: 200 }}
-    onclick={() => (showHistory = false)}
-    role="button"
-    tabindex="0"
-    onkeydown={(e) => {
-      if (e.key === "Enter") {
-        showHistory = false;
-      }
-    }}
-  >
-    <div
-      class="settings-panel glass"
-      transition:fly={{ y: 20, duration: 300 }}
-      onclick={(e) => e.stopPropagation()}
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      onkeydown={(e) => e.stopPropagation()}
-    >
-      <div class="settings-header">
-        <h2>{t(appLanguage, "history")}</h2>
-        <button
-          class="close-btn"
-          onclick={() => (showHistory = false)}
-          aria-label={t(appLanguage, "close")}
-        >
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
-      </div>
-
-      <div class="settings-body-container">
-        <!-- Sidebar Tabs -->
-        <div class="settings-sidebar">
-          <button
-            class="settings-tab vertical"
-            class:active={historyTab === "recent"}
-            onclick={() => changeHistoryTab("recent")}
-          >
-            {t(appLanguage, "tabRecent")}
-          </button>
-          <button
-            class="settings-tab vertical"
-            class:active={historyTab === "saved"}
-            onclick={() => changeHistoryTab("saved")}
-          >
-            {t(appLanguage, "tabFavorites")}
-          </button>
-        </div>
-
-        <!-- Main Content -->
-        <div class="settings-main-content">
-          {#key historyTab}
-            <div
-              class="tab-content-wrapper"
-              in:fly={{
-                y: historySlideDirection * 20,
-                duration: 300,
-                delay: 200,
-              }}
-              out:fly={{ y: -historySlideDirection * 20, duration: 200 }}
-              style="padding: 24px;"
-            >
-              {#if historyTab === "recent"}
-                {#if history.length === 0}
-                  <div class="empty-state">
-                    <p>{t(appLanguage, "noHistory")}</p>
-                  </div>
-                {:else}
-                  <div class="history-actions-top">
-                    <button class="rich-btn danger" onclick={clearHistory}>
-                      {t(appLanguage, "clearHistory")}
-                    </button>
-                  </div>
-                  <div class="history-list">
-                    {#each history as item (item.id)}
-                      <div
-                        class="style-item-card history-item"
-                        in:fly={{ x: 20, duration: 250, delay: 50 }}
-                        out:fly={{ x: -20, duration: 200 }}
-                      >
-                        <button
-                          class="history-item-main"
-                          onclick={() => loadHistory(item)}
-                        >
-                          <div class="history-meta">
-                            <span
-                              >{new Date(item.timestamp).toLocaleString()}</span
-                            >
-                            <span>{item.sourceLang} → {item.targetLang}</span>
-                          </div>
-                          <div class="history-source">{item.sourceText}</div>
-                          <div class="history-preview">
-                            {item.translations[0]?.text}
-                          </div>
-                        </button>
-                        <div class="history-item-actions">
-                          <button
-                            class="star-btn small"
-                            class:active={isFavoritedById(item.id)}
-                            class:animating={starAnimatingId === item.id}
-                            onclick={() => toggleFavorite(item)}
-                            aria-label="Toggle favorite"
-                          >
-                            <svg
-                              width="16"
-                              height="16"
-                              viewBox="0 0 24 24"
-                              fill={isFavoritedById(item.id)
-                                ? "currentColor"
-                                : "none"}
-                              stroke="currentColor"
-                              stroke-width="2"
-                            >
-                              <polygon
-                                points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"
-                              ></polygon>
-                            </svg>
-                          </button>
-                          <button
-                            class="icon-btn-small delete-btn"
-                            onclick={() => deleteHistoryItem(item.id)}
-                            aria-label="Delete"
-                          >
-                            <svg
-                              width="14"
-                              height="14"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              stroke-width="2"
-                              ><polyline points="3 6 5 6 21 6"></polyline><path
-                                d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
-                              ></path></svg
-                            >
-                          </button>
-                        </div>
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
-              {:else if historyTab === "saved"}
-                {#if favorites.length === 0}
-                  <div class="empty-state">
-                    <p>{t(appLanguage, "noFavorites")}</p>
-                  </div>
-                {:else}
-                  <div class="history-list">
-                    {#each favorites as item, i (item.id)}
-                      <div
-                        class="style-item-card history-item"
-                        in:fly={{ x: 20, duration: 250, delay: 50 }}
-                        out:fly={{ x: -20, duration: 200 }}
-                      >
-                        <button
-                          class="history-item-main"
-                          onclick={() => loadHistory(item)}
-                        >
-                          <div class="history-meta">
-                            <span
-                              >{new Date(item.timestamp).toLocaleString()}</span
-                            >
-                            <span>{item.sourceLang} → {item.targetLang}</span>
-                          </div>
-                          <div class="history-source">{item.sourceText}</div>
-                          <div class="history-preview">
-                            {item.translations[0]?.text}
-                          </div>
-                        </button>
-                        <div class="history-item-actions vertical">
-                          <div class="move-actions">
-                            <button
-                              class="icon-btn-small"
-                              onclick={() => moveFavorite(i, "up")}
-                              disabled={i === 0}
-                              aria-label="Move up"
-                            >
-                              <svg
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                ><polyline points="18 15 12 9 6 15"
-                                ></polyline></svg
-                              >
-                            </button>
-                            <button
-                              class="icon-btn-small"
-                              onclick={() => moveFavorite(i, "down")}
-                              disabled={i === favorites.length - 1}
-                              aria-label="Move down"
-                            >
-                              <svg
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                ><polyline points="6 9 12 15 18 9"
-                                ></polyline></svg
-                              >
-                            </button>
-                          </div>
-                          <button
-                            class="icon-btn-small delete-btn"
-                            onclick={() => deleteFavorite(item.id)}
-                            aria-label="Delete favorite"
-                          >
-                            <svg
-                              width="14"
-                              height="14"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              stroke-width="2"
-                              ><polyline points="3 6 5 6 21 6"></polyline><path
-                                d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
-                              ></path></svg
-                            >
-                          </button>
-                        </div>
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
-              {/if}
-            </div>
-          {/key}
-        </div>
-      </div>
-    </div>
-  </div>
-{/if}
+<HistoryPanel
+  bind:showHistory
+  {isCompactMode}
+  {appLanguage}
+  bind:historyTab
+  {history}
+  {favorites}
+  {isFavoritedById}
+  {starAnimatingId}
+  {clearHistory}
+  {loadHistory}
+  {toggleFavorite}
+  {deleteHistoryItem}
+  {moveFavorite}
+  {deleteFavorite}
+/>
 
 {#if showResetConfirmation && !isCaptureMode}
   <div
