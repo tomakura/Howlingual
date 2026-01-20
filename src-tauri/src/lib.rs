@@ -976,10 +976,12 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     // Use template icon on macOS for proper light/dark mode support
     #[cfg(target_os = "macos")]
     {
-        if let Ok(icon_bytes) = include_bytes!("../icons/tray-iconTemplate.png").try_into() {
-            if let Ok(icon) = tauri::image::Image::from_bytes(icon_bytes) {
-                tray = tray.icon(icon);
-            }
+        let icon_bytes = include_bytes!("../icons/tray-iconTemplate.png");
+        if let Ok(img) = image::load_from_memory(icon_bytes) {
+            let rgba = img.to_rgba8();
+            let (width, height) = rgba.dimensions();
+            let icon = tauri::image::Image::new_owned(rgba.into_raw(), width, height);
+            tray = tray.icon(icon);
         }
     }
 
