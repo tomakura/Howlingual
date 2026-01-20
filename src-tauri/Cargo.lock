@@ -5122,7 +5122,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-apphowlingual"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "arboard",
  "core-graphics 0.22.3",

@@ -40,7 +40,7 @@ impl PaddleOcr {
         }
         keys.push(" ".to_string()); // Space at the end
                                     // keys.push("blank".to_string()); // Removed from end
-        println!("[ocr_engine] Loaded dictionary: {} keys", keys.len());
+                                    // println!("[ocr_engine] Loaded dictionary: {} keys", keys.len());
 
         Ok(Self {
             det_session,
@@ -114,11 +114,8 @@ impl PaddleOcr {
         resize_w = (resize_w / 32) * 32;
         resize_h = (resize_h / 32) * 32;
 
-        if resize_w == 0 {
-            resize_w = 32;
-        }
-        if resize_h == 0 {
-            resize_h = 32;
+        if resize_w == 0 || resize_h == 0 {
+            return Err("Invalid image dimensions for detection resizing".into());
         }
 
         let resized = img.resize_exact(resize_w, resize_h, FilterType::Triangle);
@@ -213,7 +210,7 @@ impl PaddleOcr {
                 }
             }
         }
-        println!("[ocr_debug] Detected {} text boxes.", rects.len());
+        // println!("[ocr_debug] Detected {} text boxes.", rects.len());
         rects
     }
 
@@ -268,8 +265,8 @@ impl PaddleOcr {
                 last_idx = max_idx;
             }
         }
-        println!("[ocr_debug] Raw indices: {:?}", raw_indices);
-        println!("[ocr_debug] Decoded text: {}", text);
+        // println!("[ocr_debug] Raw indices: {:?}", raw_indices);
+        // println!("[ocr_debug] Decoded text: {}", text);
         Ok(text)
     }
 

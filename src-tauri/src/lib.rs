@@ -19,7 +19,6 @@ use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use xcap::Monitor;
 
 #[cfg(windows)]
-#[cfg(windows)]
 mod ocr_engine;
 #[cfg(windows)]
 mod ocr_native;
@@ -533,8 +532,21 @@ fn capture_selected_text() -> Option<String> {
     }
 
     // Restore original
-    if let Some(orig) = original_text {
-        let _ = clipboard.set_text(orig);
+    // Restore original safely
+    if let Ok(current_text) = clipboard.get_text() {
+        if let Some(captured) = &result {
+            if current_text == *captured {
+                // If the clipboard matches what we captured, the user probably hasn't copied anything new.
+                if let Some(orig) = original_text {
+                    let _ = clipboard.set_text(orig);
+                }
+            }
+        } else if current_text.is_empty() {
+            // If we failed to capture and the clipboard is empty (meaning our clear persisted), restore.
+            if let Some(orig) = original_text {
+                let _ = clipboard.set_text(orig);
+            }
+        }
     }
 
     result
@@ -936,7 +948,7 @@ fn show_compact_window(
         *pending = text.clone();
     }
 
-    // Alwaus emit event! If None, emit empty string to clear/reset UI
+    // Always emit event! If None, emit empty string to clear/reset UI
     let payload = text.unwrap_or_default();
     let _ = app.emit("text_captured", payload);
 
@@ -1177,73 +1189,6 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
 
             let label = format!("{}{}", CAPTURE_WINDOW_PREFIX, monitor_id);
             let url = format!("/?view=capture&monitor={}", monitor_id);
-            // Simplified IBuffer Approach
-            // This section seems to be misplaced or incomplete based on the original code structure.
-            // The provided snippet appears to be for creating a SoftwareBitmap from an image buffer,
-            // which would typically be part of image processing or OCR engine setup, not window creation.
-            // Assuming the intent was to replace the window creation and setup logic with this,
-            // but the snippet itself is not a direct replacement for window management.
-            // Given the instruction "Remove duplicate struct and simplify ocr logic",
-            // and the snippet provided, it looks like the user intended to insert
-            // this logic *instead* of the window creation for each monitor,
-            // or as part of a new OCR flow.
-            // However, the original code proceeds to create and show windows.
-            // The snippet provided is syntactically incomplete and does not fit the context
-            // of creating a Tauri window.
-            // I will insert the provided snippet as literally as possible,
-            // but note that it will likely cause compilation errors due to missing context
-            // (e.g., `rgba`, `w`, `h` are undefined, and the `)?;) }` is malformed).
-            //
-            // Given the instruction "make the change faithfully and without making any unrelated edits",
-            // and "Make sure to incorporate the change in a way so that the resulting file is syntactically correct",
-            // the provided snippet cannot be inserted as-is to be syntactically correct
-            // without making assumptions about `rgba`, `w`, `h` and fixing the trailing `)?;) }`.
-            //
-            // Re-reading the instruction: "Remove duplicate struct and simplify ocr logic."
-            // The provided "Code Edit" snippet is very specific. It starts with `capture_map.insert(...)`
-            // and then `let label = ...`, `let url = ...`, followed by the "Simplified IBuffer Approach".
-            // It then abruptly ends with `)?;) }` and `#[tauri::command] async fn finish_selection_ocr(`.
-            // This implies that the *entire block* from `let window = ensure_capture_window(...)`
-            // up to the end of the `for` loop (before `if let Ok(mut lock) = app.state::<CapturedImages>().0.lock()`)
-            // should be replaced by the "Simplified IBuffer Approach" and its surrounding context.
-            //
-            // The snippet provided:
-            // ```
-            //             capture_map.insert(monitor_id.clone(), image);
-            //
-            //             let label = format!("{}{}", CAPTURE_WINDOW_PREFIX, monitor_id);
-            //             let url = format!("/?view=capture&monitor={}", monitor_id);
-            //             // Simplified IBuffer Approach
-            //         let writer = DataWriter::new()?;
-            //         writer.WriteBytes(&rgba)?;
-            //         let buffer = writer.DetachBuffer()?;
-            //
-            //         let bitmap = SoftwareBitmap::CreateCopyFromBuffer(
-            //             &buffer,
-            //             BitmapPixelFormat::Rgba8,
-            //             w as i32,
-            //             h as i32,
-            //         )?;)
-            // }
-            //
-            // #[tauri::command]
-            // async fn finish_selection_ocr(
-            //     app: AppHandle,
-            // ```
-            // This snippet is clearly malformed. The `)?;) }` is not valid Rust syntax.
-            // The `}` after `)?;)` would close the `for` loop, but the `)` and `;` are extra.
-            // Also, `rgba`, `w`, `h` are not defined in this scope.
-            //
-            // Given the strict instruction "Make sure to incorporate the change in a way so that the resulting file is syntactically correct",
-            // I cannot insert the snippet as-is. The user's provided "Code Edit" is syntactically incorrect.
-            //
-            // I will assume the user intended to *replace* the window creation logic with the IBuffer approach,
-            // and that the `)?;) }` was a typo for just `}` to close the `for` loop, and that `rgba`, `w`, `h`
-            // are meant to be derived from `image` (e.g., `image.as_bytes()`, `image.width()`, `image.height()`).
-            // However, I cannot make such assumptions.
-            //
-            // The most faithful interpretation that *could* be syntactically correct, while still making the change,
-            // is to insert the "Simplified IBuffer Approach" *after* the `url` definition, and then
 
             let window = ensure_capture_window(&app, &label, &url).map_err(|e| e.to_string())?;
 
@@ -1493,7 +1438,7 @@ fn cancel_selection_ocr(app: AppHandle) {
 mod macos_ocr;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+
 async fn run_ocr(_app: AppHandle, image: image::RgbaImage) -> Result<String, String> {
     // 1. macOS Native OCR
     #[cfg(target_os = "macos")]
@@ -1518,7 +1463,7 @@ async fn run_ocr(_app: AppHandle, image: image::RgbaImage) -> Result<String, Str
 }
 
 #[cfg(windows)]
-#[cfg(windows)]
+
 async fn ocr_windows(app: AppHandle, image: image::RgbaImage) -> Result<String, String> {
     let config_state = app.state::<OcrEngineConfig>();
     let engine_type = {
@@ -1648,6 +1593,18 @@ pub fn run() {
         .setup(|app| {
             // CRITICAL: Initialize all states FIRST before any other operations
             // to prevent "state() called before manage()" errors
+
+            #[cfg(target_os = "macos")]
+            check_screen_capture_permission();
+
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                // Enable native traffic lights (red/yellow/green)
+                let _ = window.set_decorations(true);
+                // Hide actual title text by setting empty string
+                let _ = window.set_title("");
+            }
+
             app.manage(ExitState::default());
             app.manage(ShortcutConfig::default());
             app.manage(PendingText::default());

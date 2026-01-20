@@ -207,8 +207,12 @@
 		// Some platforms size capture windows in logical points, others in physical pixels.
 		// Accept whichever expected size is closer to the actual inner size.
 		const scale = getDevicePixelRatio();
-		const expectedInnerWidthPhysical = Math.round(window.outerWidth / scale);
-		const expectedInnerHeightPhysical = Math.round(window.outerHeight / scale);
+		const expectedInnerWidthPhysical = Math.round(
+			window.outerWidth / scale,
+		);
+		const expectedInnerHeightPhysical = Math.round(
+			window.outerHeight / scale,
+		);
 		const expectedInnerWidthLogical = Math.round(window.outerWidth);
 		const expectedInnerHeightLogical = Math.round(window.outerHeight);
 		const widthDiff = Math.min(
@@ -226,7 +230,8 @@
 		) {
 			console.warn(
 				`[Capture] Warning: Window scaling may not be working as expected! ` +
-					`Expected CSS size: ${expectedInnerWidth} x ${expectedInnerHeight}, ` +
+					`Expected CSS size (physical): ${expectedInnerWidthPhysical} x ${expectedInnerHeightPhysical}, ` +
+					`Expected CSS size (logical): ${expectedInnerWidthLogical} x ${expectedInnerHeightLogical}, ` +
 					`Actual CSS size: ${window.innerWidth} x ${window.innerHeight}, ` +
 					`Difference: ${widthDiff} x ${heightDiff}`,
 			);
