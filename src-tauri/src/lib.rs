@@ -977,11 +977,19 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
     {
         let icon_bytes = include_bytes!("../icons/tray-iconTemplate.png");
-        if let Ok(img) = image::load_from_memory(icon_bytes) {
-            let rgba = img.to_rgba8();
-            let (width, height) = rgba.dimensions();
-            let icon = tauri::image::Image::new_owned(rgba.into_raw(), width, height);
-            tray = tray.icon(icon);
+        match image::load_from_memory(icon_bytes) {
+            Ok(img) => {
+                let rgba = img.to_rgba8();
+                let (width, height) = rgba.dimensions();
+                let icon = tauri::image::Image::new_owned(rgba.into_raw(), width, height);
+                tray = tray.icon(icon);
+            }
+            Err(e) => {
+                println!("[tray] Failed to load template icon: {}, using default", e);
+                if let Some(icon) = app.default_window_icon().cloned() {
+                    tray = tray.icon(icon);
+                }
+            }
         }
     }
 
