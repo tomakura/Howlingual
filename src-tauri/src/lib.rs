@@ -973,8 +973,22 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             }
         });
 
-    if let Some(icon) = app.default_window_icon().cloned() {
-        tray = tray.icon(icon);
+    // Use template icon on macOS for proper light/dark mode support
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(icon_bytes) = include_bytes!("../icons/tray-iconTemplate.png").try_into() {
+            if let Ok(icon) = tauri::image::Image::from_bytes(icon_bytes) {
+                tray = tray.icon(icon);
+            }
+        }
+    }
+
+    // Use default icon on other platforms
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(icon) = app.default_window_icon().cloned() {
+            tray = tray.icon(icon);
+        }
     }
 
     tray.build(app)?;
