@@ -171,6 +171,18 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tauri::command]
+fn show_main_window_cmd(app: AppHandle) -> Result<(), String> {
+    show_main_window(&app, None).map_err(|e| e.to_string())
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[tauri::command]
+fn show_main_window_cmd() -> Result<(), String> {
+    Ok(())
+}
+
 #[tauri::command]
 fn update_pending_text(text: String, state: State<'_, PendingText>) {
     if let Ok(mut g) = state.0.lock() {
@@ -1584,6 +1596,7 @@ pub fn run() {
             update_pending_text,
             replace_selection,
             quit_app,
+            show_main_window_cmd,
             handover_to_main,
             start_selection_ocr,
             finish_selection_ocr,
@@ -1618,9 +1631,6 @@ pub fn run() {
                 ensure_compact_window(&app.handle())?;
                 setup_tray(&app.handle())?;
                 setup_global_shortcut(&app.handle(), shortcut_state.inner())?;
-
-                // Show main window on startup (frontend will handle startMinimized setting)
-                let _ = show_main_window(&app.handle(), None);
             }
 
             Ok(())

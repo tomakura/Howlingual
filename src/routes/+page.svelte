@@ -586,18 +586,14 @@
 
     // Handle startup visibility
     if (viewParam === "main") {
+      // Set visible immediately for main view to avoid flash
+      isWindowVisible = true;
+
       (async () => {
         try {
-          const { getCurrentWindow } = await import("@tauri-apps/api/window");
-          const window = getCurrentWindow();
           if (!startMinimized) {
-            await window.show();
-            // Ensure focus if not starting minimized
-            await window.setFocus();
-            // Set visible to trigger fade-in animation
-            setTimeout(() => {
-              isWindowVisible = true;
-            }, 50);
+            // Call Rust to show main window (creates it if needed)
+            await invoke("show_main_window_cmd");
           }
         } catch (e) {
           console.warn("Failed to handle startup visibility", e);
