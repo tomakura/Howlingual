@@ -7,8 +7,9 @@ const ENV = import.meta.env;
 
 // Initialize clients
 // Clients will be initialized dynamically or via env fallback
-// Clients are initialized dynamically via get*Client functions
-
+const genAI = ENV.VITE_GOOGLE_GENERATIVE_AI_API_KEY ? new GoogleGenerativeAI(ENV.VITE_GOOGLE_GENERATIVE_AI_API_KEY) : null;
+const openai = ENV.VITE_OPENAI_API_KEY ? new OpenAI({ apiKey: ENV.VITE_OPENAI_API_KEY, dangerouslyAllowBrowser: true }) : null;
+const anthropic = ENV.VITE_ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ENV.VITE_ANTHROPIC_API_KEY, dangerouslyAllowBrowser: true }) : null;
 
 // Dynamic Client Getters
 function getGeminiClient(apiKey?: string) {
@@ -143,7 +144,7 @@ function buildUserPrompt(
 
 // Gemini Implementation
 async function callGemini(prompt: string, systemPrompt: string = SYSTEM_PROMPT): Promise<AiResponse> {
-	const genAI = getGeminiClient();
+	if (!genAI) throw new Error("Gemini API Key missing");
 
 	const schema = {
 		type: SchemaType.OBJECT,
@@ -200,7 +201,7 @@ async function callOpenAI(
 	prompt: string,
 	systemPrompt: string = SYSTEM_PROMPT,
 ): Promise<AiResponse> {
-	const openai = getOpenAIClient();
+	if (!openai) throw new Error("OpenAI API Key missing");
 
 	const completion = await openai.chat.completions.create({
 		model: modelName,
@@ -231,7 +232,7 @@ async function callAnthropic(
 	prompt: string,
 	systemPrompt: string = SYSTEM_PROMPT,
 ): Promise<AiResponse> {
-	const anthropic = getAnthropicClient();
+	if (!anthropic) throw new Error("Anthropic API Key missing");
 
 	// Anthropic doesn't support JSON mode natively like OpenAI/Gemini yet in the same way,
 	// so we append "Output JSON only" instruction excessively.
@@ -255,80 +256,31 @@ async function callAnthropic(
 // Helper to safely parse partial JSON with auto-closing attempts
 function tryParsePartialJson(jsonStr: string): Partial<AiResponse> | null {
 	// 0. Pre-process: remove trailing comma if present, as it breaks JSON.parse
-	let trimmed = jsonStr.trim().replace(/,\s*$/, "");
+	const trimmed = jsonStr.trim().replace(/,$/, "");
 
-	// 1. Try naive parse first
+	// 1. Try naive parse
 	try {
 		return JSON.parse(trimmed);
 	} catch (e) {
 		// Continue to repair strategies
 	}
 
-	// 2. Count open brackets to determine structure
-	const countOpen = (str: string, open: string, close: string): number => {
-		let count = 0;
-		let inString = false;
-		let escaped = false;
-		for (const char of str) {
-			if (escaped) { escaped = false; continue; }
-			if (char === '\\') { escaped = true; continue; }
-			if (char === '"') { inString = !inString; continue; }
-			if (!inString) {
-				if (char === open) count++;
-				if (char === close) count--;
-			}
-		}
-		return count;
-	};
+	// 2. Try closing open structures
+	// This is a heuristic approach.
 
-	// Check if we're inside an unclosed string
-	const isInString = (str: string): boolean => {
-		let inString = false;
-		let escaped = false;
-		for (const char of str) {
-			if (escaped) { escaped = false; continue; }
-			if (char === '\\') { escaped = true; continue; }
-			if (char === '"') inString = !inString;
-		}
-		return inString;
-	};
-
-	// 3. Build closing sequence based on actual structure
-	let repaired = trimmed;
-
-	// Close unclosed string first
-	if (isInString(repaired)) {
-		repaired += '"';
-	}
-
-	// Remove trailing comma after string close
-	repaired = repaired.replace(/,\s*$/, "");
-
-	// Close arrays and objects based on count
-	const openBraces = countOpen(repaired, '{', '}');
-	const openBrackets = countOpen(repaired, '[', ']');
-
-	// Append closing tokens in reverse order (arrays inside objects typically)
-	for (let i = 0; i < openBrackets; i++) repaired += ']';
-	for (let i = 0; i < openBraces; i++) repaired += '}';
-
-	try {
-		return JSON.parse(repaired);
-	} catch (e) {
-		// Fallback: try legacy heuristic closing sequences
-	}
-
-	// 4. Fallback: Try closing open structures with common patterns
 	const closingSequences = [
+		// Try closing string and then various nested levels
+		'"}]}}', // Deepest: inside explanation string
+		'"}]}',   // Inside candidate reason/text string
+		'" }',    // General string close
+		'}}',     // Close objects
+		']}',     // Close array and object
+		'}]}',    // Close object in array and object
 		'"}]}}',
-		'"}]}',
-		'" }',
-		'}}',
-		']}',
-		'}]}',
 		'"}',
+		'"]}',
 		'"]}}',
-		'"]',
+		'"}',
 		']',
 		'}'
 	];
@@ -427,6 +379,7 @@ async function streamGemini(
 		}
 	});
 
+	// @ts-expect-error - SDK typing does not include AbortSignal yet
 	const result = await model.generateContentStream(prompt, { signal });
 
 	let accumulatedText = "";
@@ -469,13 +422,13 @@ async function streamOpenAICompatible(
 	signal?: AbortSignal
 ) {
 	// Check if model supports reasoning parameters
-	const isReasoningModel = modelName.includes('gpt-oss') ||
-		modelName.includes('o1') ||
-		modelName.includes('o3') ||
-		modelName.includes('qwq') ||
-		modelName.includes('deepseek-r1') ||
-		modelName.includes('k2-instruct');
-
+	const isReasoningModel = modelName.includes('gpt-oss') || 
+	                         modelName.includes('o1') || 
+	                         modelName.includes('o3') ||
+	                         modelName.includes('qwq') ||
+	                         modelName.includes('deepseek-r1') ||
+	                         modelName.includes('k2-instruct');
+	
 	const requestParams: any = {
 		model: modelName,
 		messages: [
@@ -492,7 +445,7 @@ async function streamOpenAICompatible(
 		requestParams.reasoning_effort = "low";
 	}
 
-	const stream = await openai.chat.completions.create(requestParams, { signal }) as any;
+	const stream = await openai.chat.completions.create(requestParams, { signal });
 
 	let accumulatedText = "";
 	for await (const chunk of stream) {
@@ -599,6 +552,7 @@ async function streamAnthropic(
 			onUpdate({}, currentUsage);
 		} else if (chunk.type === 'message_delta') {
 			// Anthropic provides cumulative usage in delta
+			// Anthropic provides cumulative usage in delta
 			if (chunk.usage) {
 				currentUsage.output_tokens = chunk.usage.output_tokens;
 				onUpdate({}, currentUsage);
@@ -629,10 +583,9 @@ export async function translateText(
 	model: AiModel = "gemini-1.5-flash",
 	styleMeta: Record<string, { name: string; prompt?: string }> = {},
 	candidateCount: number = 3,
-	explanationLang: string = "日本語",
 ): Promise<AiResponse> {
 	const userPrompt = buildUserPrompt(text, sourceLang, targetLang, styles, styleMeta);
-	const systemPrompt = buildSystemPrompt(explanationLang, candidateCount);
+	const systemPrompt = buildSystemPrompt("日本語", candidateCount);
 
 	let response: AiResponse;
 

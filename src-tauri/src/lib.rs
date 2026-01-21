@@ -171,18 +171,6 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[tauri::command]
-fn show_main_window_cmd(app: AppHandle) -> Result<(), String> {
-    show_main_window(&app, None).map_err(|e| e.to_string())
-}
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-#[tauri::command]
-fn show_main_window_cmd() -> Result<(), String> {
-    Ok(())
-}
-
 #[tauri::command]
 fn update_pending_text(text: String, state: State<'_, PendingText>) {
     if let Ok(mut g) = state.0.lock() {
@@ -523,12 +511,10 @@ fn capture_selected_text() -> Option<String> {
     #[cfg(all(not(windows), not(target_os = "macos")))]
     send_copy_shortcut();
 
-    // Poll for text - allow more time on macOS for slower app response
+    // Poll for text - use shorter timeout for responsiveness, but more retries
     let mut result = None;
-    #[cfg(target_os = "macos")]
-    let (max_retries, sleep_ms) = (20, 20); // 20 * 20ms = 400ms timeout (macOS apps can be slow)
-    #[cfg(not(target_os = "macos"))]
-    let (max_retries, sleep_ms) = (10, 20); // 10 * 20ms = 200ms timeout
+    let max_retries = 10; // 10 * 20ms = 200ms timeout
+    let sleep_ms = 20;
 
     for i in 0..max_retries {
         std::thread::sleep(Duration::from_millis(sleep_ms));
@@ -544,21 +530,8 @@ fn capture_selected_text() -> Option<String> {
     }
 
     // Restore original
-    // Restore original safely
-    if let Ok(current_text) = clipboard.get_text() {
-        if let Some(captured) = &result {
-            if current_text == *captured {
-                // If the clipboard matches what we captured, the user probably hasn't copied anything new.
-                if let Some(orig) = original_text {
-                    let _ = clipboard.set_text(orig);
-                }
-            }
-        } else if current_text.is_empty() {
-            // If we failed to capture and the clipboard is empty (meaning our clear persisted), restore.
-            if let Some(orig) = original_text {
-                let _ = clipboard.set_text(orig);
-            }
-        }
+    if let Some(orig) = original_text {
+        let _ = clipboard.set_text(orig);
     }
 
     result
@@ -626,10 +599,7 @@ fn update_shortcut(
     state: State<'_, ShortcutConfig>,
     shortcut: String,
 ) -> Result<(), String> {
-    register_shortcut(&app, state.inner(), &shortcut).map_err(|err| err.0)?;
-    // Persist to config file so it's available on next startup (before webview loads)
-    save_shortcut_to_config(&app, &shortcut);
-    Ok(())
+    register_shortcut(&app, state.inner(), &shortcut).map_err(|err| err.0)
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -843,7 +813,6 @@ fn show_main_window(app: &AppHandle, cursor_pos: Option<(i32, i32)>) -> tauri::R
 
     window.show()?;
     window.set_focus()?;
-
     let _ = app.emit("window_shown", "main");
     Ok(())
 }
@@ -961,7 +930,7 @@ fn show_compact_window(
         *pending = text.clone();
     }
 
-    // Always emit event! If None, emit empty string to clear/reset UI
+    // Alwaus emit event! If None, emit empty string to clear/reset UI
     let payload = text.unwrap_or_default();
     let _ = app.emit("text_captured", payload);
 
@@ -997,7 +966,6 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 let _ = show_main_window(tray.app_handle(), None);
             }
         });
-
     // Use template icon on macOS for proper light/dark mode support
     #[cfg(target_os = "macos")]
     {
@@ -1030,66 +998,12 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-// --- Config persistence for shortcuts ---
-// This allows shortcuts to work immediately on app startup without waiting for the webview.
-const CONFIG_FILE_NAME: &str = "howlingual_config.json";
-
-#[derive(serde::Serialize, serde::Deserialize, Default)]
-struct AppConfig {
-    shortcut: Option<String>,
-}
-
-fn get_config_path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path()
-        .app_data_dir()
-        .ok()
-        .map(|p| p.join(CONFIG_FILE_NAME))
-}
-
-fn load_config(app: &AppHandle) -> AppConfig {
-    if let Some(path) = get_config_path(app) {
-        if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(config) = serde_json::from_str(&content) {
-                    return config;
-                }
-            }
-        }
-    }
-    AppConfig::default()
-}
-
-fn save_shortcut_to_config(app: &AppHandle, shortcut: &str) {
-    if let Some(path) = get_config_path(app) {
-        // Ensure directory exists
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let config = AppConfig {
-            shortcut: Some(shortcut.to_string()),
-        };
-        if let Ok(json) = serde_json::to_string_pretty(&config) {
-            if let Err(e) = std::fs::write(&path, json) {
-                println!("[config] Failed to save config: {}", e);
-            } else {
-                println!("[config] Saved shortcut to config file");
-            }
-        }
-    }
-}
-
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn setup_global_shortcut(
     app: &AppHandle,
     state: &ShortcutConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Try to load shortcut from config file first (for Windows startup without webview)
-    let config = load_config(app);
-    let shortcut_to_use = config.shortcut.as_deref().unwrap_or(DEFAULT_SHORTCUT);
-
-    println!("[shortcut] Using shortcut from config: {}", shortcut_to_use);
-
-    register_shortcut(app, state, shortcut_to_use)
+    register_shortcut(app, state, DEFAULT_SHORTCUT)
         .map_err(|err| Box::new(err) as Box<dyn std::error::Error>)?;
     Ok(())
 }
@@ -1125,14 +1039,6 @@ fn handover_to_main(app: AppHandle, text: String) {
 #[tauri::command]
 async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(), String> {
     println!("[ocr] start_selection_ocr called, origin: {:?}", origin);
-
-    // Check screen capture permission on macOS before attempting capture
-    #[cfg(target_os = "macos")]
-    {
-        if !check_screen_capture_permission() {
-            return Err("Screen recording permission not granted. Please enable it in System Settings > Privacy & Security > Screen Recording.".into());
-        }
-    }
 
     // Default to Main if not specific
     let origin_enum = match origin.as_deref() {
@@ -1451,7 +1357,7 @@ fn cancel_selection_ocr(app: AppHandle) {
 mod macos_ocr;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn run_ocr(_app: AppHandle, image: image::RgbaImage) -> Result<String, String> {
     // 1. macOS Native OCR
     #[cfg(target_os = "macos")]
@@ -1476,7 +1382,7 @@ async fn run_ocr(_app: AppHandle, image: image::RgbaImage) -> Result<String, Str
 }
 
 #[cfg(windows)]
-
+#[cfg(windows)]
 async fn ocr_windows(app: AppHandle, image: image::RgbaImage) -> Result<String, String> {
     let config_state = app.state::<OcrEngineConfig>();
     let engine_type = {
@@ -1538,11 +1444,6 @@ async fn ocr_windows(app: AppHandle, image: image::RgbaImage) -> Result<String, 
     }
 }
 
-// --- macOS Screen Capture Permission Handling ---
-// We check permission status before attempting capture to avoid repeated prompts.
-// CGPreflightScreenCaptureAccess returns true if already granted.
-// CGRequestScreenCaptureAccess triggers the prompt (only call once when needed).
-
 #[cfg(target_os = "macos")]
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
@@ -1551,30 +1452,15 @@ extern "C" {
 }
 
 #[cfg(target_os = "macos")]
-static PERMISSION_REQUESTED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// Check if we have screen capture permission. Returns true if granted.
-/// Only requests permission once per app session to avoid spamming the user.
-#[cfg(target_os = "macos")]
-fn check_screen_capture_permission() -> bool {
+fn check_screen_capture_permission() {
     unsafe {
         let has_access = CGPreflightScreenCaptureAccess();
-        if has_access {
-            return true;
+        println!("[main] Screen Capture Access Preflight: {}", has_access);
+        if !has_access {
+            println!("[main] Requesting Screen Capture Access...");
+            let requested = CGRequestScreenCaptureAccess();
+            println!("[main] Screen Capture Access Requested: {}", requested);
         }
-
-        // Only request once per session
-        if !PERMISSION_REQUESTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            println!("[permission] Requesting screen capture access (one-time)...");
-            let granted = CGRequestScreenCaptureAccess();
-            println!("[permission] Request result: {}", granted);
-            return granted;
-        }
-
-        // Already requested but not granted
-        println!("[permission] Screen capture not granted (already requested this session)");
-        false
     }
 }
 
@@ -1596,7 +1482,6 @@ pub fn run() {
             update_pending_text,
             replace_selection,
             quit_app,
-            show_main_window_cmd,
             handover_to_main,
             start_selection_ocr,
             finish_selection_ocr,
@@ -1605,11 +1490,18 @@ pub fn run() {
             set_ocr_engine
         ])
         .setup(|app| {
-            // CRITICAL: Initialize all states FIRST before any other operations
-            // to prevent "state() called before manage()" errors
-
             #[cfg(target_os = "macos")]
             check_screen_capture_permission();
+
+            let _app_handle = app.handle();
+
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                // Enable native traffic lights (red/yellow/green)
+                let _ = window.set_decorations(true);
+                // Hide actual title text by setting empty string
+                let _ = window.set_title("");
+            }
 
             app.manage(ExitState::default());
             app.manage(ShortcutConfig::default());
