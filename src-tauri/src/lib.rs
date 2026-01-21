@@ -1491,7 +1491,10 @@ pub fn run() {
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
-            check_screen_capture_permission();
+            {
+                check_screen_capture_permission();
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            }
 
             let _app_handle = app.handle();
 

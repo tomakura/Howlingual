@@ -121,6 +121,7 @@
 
       // Listen for window_shown event from Rust
       unlistenShown = await listen("window_shown", () => {
+        console.log("[window] window_shown event received");
         // Slight delay to ensure opacity:0 is applied first
         setTimeout(() => {
           isWindowVisible = true;
@@ -129,9 +130,18 @@
 
       // Fallback: Show on focus if not visible
       const win = getCurrentWindow();
+      
+      // If window already has focus or is visible, make sure isWindowVisible is true
+      const focused = await win.isFocused();
+      const visible = await win.isVisible();
+      if (focused || visible) {
+        console.log("[window] Already focused or visible on mount");
+        isWindowVisible = true;
+      }
+
       unlistenFocus = await win.listen("tauri://focus", () => {
+        console.log("[window] tauri://focus event received");
         // If we get focus, make sure we are visible
-        // This handles cases where show() didn't emit window_shown or we missed it
         if (!isWindowVisible) {
           requestAnimationFrame(() => {
             isWindowVisible = true;
@@ -434,6 +444,9 @@
     if (viewParam === "compact") {
       isCompactMode = true;
       isCaptureMode = false;
+      // If we are starting in compact mode, we should likely be visible
+      // (e.g. triggered by shortcut during app startup)
+      isWindowVisible = true;
       await tick();
       autoResize();
       return;
@@ -564,10 +577,7 @@
     );
 
     shortcutDraft = quickShortcut;
-    const viewParam = new URLSearchParams(window.location.search).get("view");
-    if (viewParam !== "compact") {
-      void syncShortcut();
-    }
+    void syncShortcut();
 
     (async () => {
       try {
@@ -585,8 +595,9 @@
           const window = getCurrentWindow();
           if (!startMinimized) {
             await window.show();
-            // Ensure focus if not starting minimized
             await window.setFocus();
+            // Force visible state if we are intentionally showing main
+            isWindowVisible = true;
           }
         } catch (e) {
           console.warn("Failed to handle startup visibility", e);
