@@ -2780,58 +2780,7 @@
         class:hidden={isScrolledDown}
         style="position: absolute; left: 12px; display: flex; gap: 8px; align-items: center;"
       >
-        <!-- Paste / Clear Button -->
-        {#if inputQuery.trim()}
-          <button
-            class="icon-btn compact-action-btn"
-            onclick={() => (inputQuery = "")}
-            title={t(appLanguage, "clearText") || "テキストをクリア"}
-          >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <line x1="18" y1="6" x2="6" y2="18"></line>
-              <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
-          </button>
-        {:else}
-          <button
-            class="icon-btn compact-action-btn"
-            onclick={async () => {
-              try {
-                const text = await navigator.clipboard.readText();
-                if (text) inputQuery = text;
-              } catch (e) {
-                console.error("Failed to read clipboard:", e);
-              }
-            }}
-            title={t(appLanguage, "pasteFromClipboard") ||
-              "クリップボードから貼り付け"}
-          >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path
-                d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
-              ></path>
-              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
-            </svg>
-          </button>
-        {/if}
+        <!-- (Paste/Clear buttons moved inside textarea) -->
 
         <!-- OCR Button -->
         <button
@@ -3027,6 +2976,59 @@
         <!-- Original Text Input -->
         <div class="input-area compact-input-area">
           <div class="textarea-container" class:has-overflow={showFade}>
+            <div class="textarea-actions">
+              {#if inputQuery.trim()}
+                <button
+                  class="textarea-action-btn"
+                  onclick={() => (inputQuery = "")}
+                  title={t(appLanguage, "clearText") || "テキストをクリア"}
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              {:else}
+                <button
+                  class="textarea-action-btn"
+                  onclick={async () => {
+                    try {
+                      const text = await navigator.clipboard.readText();
+                      if (text) inputQuery = text;
+                    } catch (e) {
+                      console.error("Failed to read clipboard:", e);
+                    }
+                  }}
+                  title={t(appLanguage, "pasteFromClipboard") ||
+                    "クリップボードから貼り付け"}
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path
+                      d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
+                    ></path>
+                    <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+                  </svg>
+                </button>
+              {/if}
+            </div>
             <textarea
               bind:this={textareaEl}
               bind:value={inputQuery}
@@ -3758,60 +3760,7 @@
       class="header-actions-row"
       style="position: relative; display: flex; justify-content: center; align-items: center; margin: 10px 0px 0px 0px;"
     >
-      <!-- Clipboard / Clear Button -->
-      <div style="position: absolute; left: 15px; z-index: 10;">
-        {#if inputQuery.trim()}
-          <button
-            class="icon-btn"
-            onclick={() => (inputQuery = "")}
-            title={t(appLanguage, "clearText") || "テキストをクリア"}
-            style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); color: var(--text-color);"
-          >
-            <!-- Close Icon -->
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <line x1="18" y1="6" x2="6" y2="18"></line>
-              <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
-          </button>
-        {:else}
-          <button
-            class="icon-btn"
-            onclick={async () => {
-              try {
-                const text = await navigator.clipboard.readText();
-                if (text) inputQuery = text;
-              } catch (e) {
-                console.error("Failed to read clipboard:", e);
-              }
-            }}
-            title={t(appLanguage, "pasteFromClipboard") ||
-              "クリップボードから貼り付け"}
-            style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); color: var(--text-color);"
-          >
-            <!-- Clipboard Icon -->
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path
-                d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
-              ></path>
-              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
-            </svg>
-          </button>
-        {/if}
-      </div>
+      <!-- (Clipboard/Clear buttons moved inside textarea) -->
 
       <div
         class="lang-selector-group"
@@ -3986,6 +3935,59 @@
         <!-- Original Text Input -->
         <div class="input-area">
           <div class="textarea-container" class:has-overflow={showFade}>
+            <div class="textarea-actions">
+              {#if inputQuery.trim()}
+                <button
+                  class="textarea-action-btn"
+                  onclick={() => (inputQuery = "")}
+                  title={t(appLanguage, "clearText") || "テキストをクリア"}
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              {:else}
+                <button
+                  class="textarea-action-btn"
+                  onclick={async () => {
+                    try {
+                      const text = await navigator.clipboard.readText();
+                      if (text) inputQuery = text;
+                    } catch (e) {
+                      console.error("Failed to read clipboard:", e);
+                    }
+                  }}
+                  title={t(appLanguage, "pasteFromClipboard") ||
+                    "クリップボードから貼り付け"}
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path
+                      d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
+                    ></path>
+                    <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+                  </svg>
+                </button>
+              {/if}
+            </div>
             <textarea
               bind:this={textareaEl}
               bind:value={inputQuery}
@@ -7047,6 +7049,45 @@
     display: block;
     max-height: 200px;
     padding-bottom: 20px;
+    padding-right: 44px;
+  }
+
+  .textarea-actions {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    display: flex;
+    gap: 4px;
+    z-index: 10;
+  }
+
+  .textarea-action-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-color);
+    transition: all 0.2s;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .textarea-action-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+    transform: scale(1.05);
+  }
+
+  :global([data-theme="light"]) .textarea-action-btn {
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--text-main);
+  }
+
+  :global([data-theme="light"]) .textarea-action-btn:hover {
+    background: rgba(0, 0, 0, 0.1);
   }
 
   /* Fade effect only when overflowing - blur only, no color */
