@@ -76,19 +76,24 @@
    cd Howlingual
    ```
 
-2. **依存関係のインストール**
+2. **依存関係のインストール (Yarn)**
    ```bash
-   npm install
+   # CorepackでYarnを有効化（初回のみ）
+   corepack enable
+   corepack prepare yarn@stable --activate
+
+   # 依存をインストール
+   yarn install
    ```
 
 3. **開発モードで起動**
    ```bash
-   npm run tauri dev
+   yarn tauri dev
    ```
 
 4. **本番用ビルド**
    ```bash
-   npm run tauri build
+   yarn tauri build
    ```
 
    プラットフォーム別のビルド方法は [BUILD.md](BUILD.md) を参照してください。

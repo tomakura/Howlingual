@@ -23,13 +23,21 @@ jobs:
         with:
           node-version: 20
 
-      - name: Cache npm dependencies
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Cache Yarn dependencies
         uses: actions/cache@v3
         with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          path: |
+            .yarn/cache
+            .yarn/unplugged
+            .yarn/build-state.yml
+            .yarn/install-state.gz
+            ~/.yarn/berry
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
           restore-keys: |
-            ${{ runner.os }}-node-
+            ${{ runner.os }}-yarn-
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -42,10 +50,10 @@ jobs:
           workspaces: src-tauri
 
       - name: Install dependencies
-        run: npm ci
+        run: yarn install --immutable
 
       - name: Build for macOS (universal)
-        run: npm run tauri:build:mac
+        run: yarn tauri:build:mac
 
       - name: Upload macOS DMG
         uses: actions/upload-artifact@v4
@@ -71,13 +79,21 @@ jobs:
         with:
           node-version: 20
 
-      - name: Cache npm dependencies
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Cache Yarn dependencies
         uses: actions/cache@v3
         with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          path: |
+            .yarn/cache
+            .yarn/unplugged
+            .yarn/build-state.yml
+            .yarn/install-state.gz
+            ~/.yarn/berry
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
           restore-keys: |
-            ${{ runner.os }}-node-
+            ${{ runner.os }}-yarn-
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -91,10 +107,10 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Install dependencies
-        run: npm ci
+        run: yarn install --immutable
 
       - name: Build for Windows (${{ matrix.target }})
-        run: npm run tauri build -- --target ${{ matrix.target }}
+        run: yarn tauri build -- --target ${{ matrix.target }}
 
       - name: Upload Windows installer (NSIS)
         uses: actions/upload-artifact@v4

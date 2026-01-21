@@ -21,19 +21,19 @@
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
 # ビルド実行
-npm run tauri:build:mac
+yarn tauri:build:mac
 ```
 
 #### 2. 特定のアーキテクチャのみ
 
 **Intel (x86_64) のみ:**
 ```bash
-npm run tauri build --target x86_64-apple-darwin
+yarn tauri build --target x86_64-apple-darwin
 ```
 
 **Apple Silicon (ARM64) のみ:**
 ```bash
-npm run tauri build --target aarch64-apple-darwin
+yarn tauri build --target aarch64-apple-darwin
 ```
 
 ### 成果物
@@ -44,7 +44,7 @@ npm run tauri build --target aarch64-apple-darwin
 src-tauri/target/universal-apple-darwin/release/
 ├── bundle/
 │   ├── dmg/
-│   │   └── Howlingual_0.1.0_universal.dmg  # インストーラー
+│   │   └── Howlingual_1.2.0_universal.dmg  # インストーラー
 │   └── macos/
 │       └── Howlingual.app                   # アプリケーションバンドル
 ```
@@ -92,7 +92,7 @@ src-tauri/target/universal-apple-darwin/release/
 rustup target add x86_64-pc-windows-msvc
 
 # ビルド実行
-npm run tauri:build:win
+yarn tauri:build:win
 ```
 
 #### Windows ARM64
@@ -102,7 +102,7 @@ npm run tauri:build:win
 rustup target add aarch64-pc-windows-msvc
 
 # ビルド実行
-npm run tauri:build:win-arm
+yarn tauri:build:win-arm
 ```
 
 ### 成果物
@@ -113,9 +113,9 @@ npm run tauri:build:win-arm
 src-tauri/target/x86_64-pc-windows-msvc/release/
 ├── bundle/
 │   ├── nsis/
-│   │   └── Howlingual_0.1.0_x64-setup.exe   # NSISインストーラー（推奨）
+│   │   └── Howlingual_1.2.0_x64-setup.exe   # NSISインストーラー（推奨）
 │   └── msi/
-│       └── Howlingual_0.1.0_x64_en-US.msi   # MSIインストーラー
+│       └── Howlingual_1.2.0_x64_en-US.msi   # MSIインストーラー
 ```
 
 ### 配布
@@ -143,7 +143,7 @@ sudo apt-get install -y \
     librsvg2-dev
 
 # ビルド
-npm run tauri build
+yarn tauri build
 ```
 
 ---
@@ -173,7 +173,7 @@ export APPLE_PASSWORD=<app-specific-password>
 export APPLE_TEAM_ID=<team-id>
 
 # ビルド
-npm run tauri:build:mac
+yarn tauri:build:mac
 ```
 
 詳細は[Tauri公式ドキュメント](https://tauri.app/v2/guides/distribution/)を参照してください。

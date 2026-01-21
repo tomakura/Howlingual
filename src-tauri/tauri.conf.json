@@ -4,9 +4,9 @@
   "version": "1.2.0",
   "identifier": "com.howlingual.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "yarn dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "yarn build",
     "frontendDist": "../build"
   },
   "app": {
