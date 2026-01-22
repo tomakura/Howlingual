@@ -33,7 +33,7 @@
   let settingsTab = $state<
     "appearance" | "translation" | "system" | "api" | "styles" | "about"
   >("appearance");
-  const appVersion = "1.0";
+  const appVersion = "1.3.0";
   let selectedModel = $state<AiModel>("gpt-5-mini" as AiModel);
   let apiKeys = $state({
     gemini: "",

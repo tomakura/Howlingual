@@ -1040,6 +1040,30 @@ fn handover_to_main(app: AppHandle, text: String) {
 async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(), String> {
     println!("[ocr] start_selection_ocr called, origin: {:?}", origin);
 
+    // Check screen capture permission on macOS before proceeding
+    #[cfg(target_os = "macos")]
+    {
+        unsafe {
+            let has_access = CGPreflightScreenCaptureAccess();
+            println!("[ocr] Screen Capture Access check: {}", has_access);
+
+            if !has_access {
+                println!("[ocr] No screen capture permission, requesting...");
+                // Request permission - this will show the system dialog
+                let requested = CGRequestScreenCaptureAccess();
+                println!("[ocr] Permission request result: {}", requested);
+
+                // Check again after request
+                let has_access_now = CGPreflightScreenCaptureAccess();
+                if !has_access_now {
+                    return Err(
+                        "画面収録の許可が必要です。\n\nシステム設定 > プライバシーとセキュリティ > 画面収録 から、\nHowlingualに画面収録の許可を与えてください。".to_string()
+                    );
+                }
+            }
+        }
+    }
+
     // Default to Main if not specific
     let origin_enum = match origin.as_deref() {
         Some("compact") => WindowOrigin::Compact,
@@ -1451,19 +1475,6 @@ extern "C" {
     fn CGRequestScreenCaptureAccess() -> bool;
 }
 
-#[cfg(target_os = "macos")]
-fn check_screen_capture_permission() {
-    unsafe {
-        let has_access = CGPreflightScreenCaptureAccess();
-        println!("[main] Screen Capture Access Preflight: {}", has_access);
-        if !has_access {
-            println!("[main] Requesting Screen Capture Access...");
-            let requested = CGRequestScreenCaptureAccess();
-            println!("[main] Screen Capture Access Requested: {}", requested);
-        }
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1492,7 +1503,8 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
-                check_screen_capture_permission();
+                // Screen capture permission check removed from startup
+                // It will be checked when OCR is actually used
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             }
 
