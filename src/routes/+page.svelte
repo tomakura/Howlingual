@@ -5273,6 +5273,15 @@
                             >
                               {t(appLanguage, "grant")}
                             </button>
+                            <button
+                              onclick={async () => {
+                                await invoke("open_screen_recording_settings");
+                              }}
+                              class="permission-btn"
+                              style="margin-left: 8px;"
+                            >
+                              設定を開く
+                            </button>
                           {/if}
                         </div>
 
@@ -5301,6 +5310,15 @@
                               class="permission-btn"
                             >
                               {t(appLanguage, "grant")}
+                            </button>
+                            <button
+                              onclick={async () => {
+                                await invoke("open_accessibility_settings");
+                              }}
+                              class="permission-btn"
+                              style="margin-left: 8px;"
+                            >
+                              設定を開く
                             </button>
                           {/if}
                         </div>

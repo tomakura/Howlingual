@@ -1562,6 +1562,26 @@ async fn ocr_windows(app: AppHandle, image: image::RgbaImage) -> Result<String, 
 // because they can be unreliable on some macOS versions. Permission is checked
 // implicitly when attempting to capture the screen.
 
+#[tauri::command]
+async fn open_accessibility_settings() {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn();
+    }
+}
+
+#[tauri::command]
+async fn open_screen_recording_settings() {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+            .spawn();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1588,7 +1608,9 @@ pub fn run() {
             complete_ocr_flow,
             set_ocr_engine,
             check_permissions,
-            request_permissions
+            request_permissions,
+            open_accessibility_settings,
+            open_screen_recording_settings
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]

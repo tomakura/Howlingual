@@ -2,20 +2,20 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Allow screen capture access (required for OCR feature) -->
-    <key>com.apple.security.device.audio-input</key>
-    <false/>
-    
-    <!-- Network access for AI API calls -->
-    <key>com.apple.security.network.client</key>
+    <!-- Hardened Runtime -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
     
-    <!-- Allow reading user selected files -->
-    <key>com.apple.security.files.user-selected.read-only</key>
-    <true/>
-    
-    <!-- Required for clipboard access and key event simulation -->
+    <!-- アクセシビリティ・AppleEvents -->
     <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    
+    <!-- ネットワーク（API通信用） -->
+    <key>com.apple.security.network.client</key>
     <true/>
 </dict>
 </plist>

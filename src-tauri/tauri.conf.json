@@ -42,6 +42,7 @@
     ],
     "macOS": {
       "minimumSystemVersion": "10.13",
+      "signingIdentity": "Howlingual Developer",
       "entitlements": "Entitlements.plist",
       "infoPlist": "Info.plist"
     },
