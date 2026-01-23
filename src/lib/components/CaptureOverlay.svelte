@@ -34,11 +34,9 @@
 	});
 
 	async function handleMouseDown(e: MouseEvent) {
-		// Only left click
+		console.log("[Capture] Mouse DOWN", e.button, e.clientX, e.clientY);
 		if (e.button !== 0) return;
-
-		window.focus(); // Ensure window has focus for keyboard events
-
+		window.focus();
 		isSelecting = true;
 		startX = e.clientX;
 		startY = e.clientY;
@@ -50,11 +48,6 @@
 		if (!isSelecting) return;
 		currentX = e.clientX;
 		currentY = e.clientY;
-		if (import.meta.env && import.meta.env.DEV) {
-			console.log(
-				`[Capture] Moving: ${selection.w}x${selection.h} (Selecting: ${isSelecting})`,
-			);
-		}
 	}
 
 	let isProcessing = $state(false);
@@ -87,25 +80,13 @@
 			// - Screenshot is 1920x1080px, so we crop at physical (150, 150)
 
 			const scale = getDevicePixelRatio();
-			console.log("[Capture] DPI scale:", scale);
 			console.log(
-				"[Capture] CSS coords:",
-				selection.x,
-				selection.y,
+				"[Capture] Selection:",
 				selection.w,
+				"x",
 				selection.h,
-			);
-			console.log(
-				"[Capture] Window size:",
-				window.innerWidth,
-				window.innerHeight,
-			);
-			console.log(
-				"[Capture] Physical coords:",
-				Math.round(selection.x * scale),
-				Math.round(selection.y * scale),
-				Math.round(selection.w * scale),
-				Math.round(selection.h * scale),
+				"Scale:",
+				scale,
 			);
 
 			const result = await invoke<string>("finish_selection_ocr", {
@@ -140,7 +121,6 @@
 	}
 
 	async function handleKeyDown(e: KeyboardEvent) {
-		console.log("[Capture] Keydown:", e.key);
 		if (e.key === "Escape") {
 			e.preventDefault();
 			e.stopPropagation();
@@ -161,6 +141,7 @@
 	}
 
 	onMount(() => {
+		console.log("[Capture] Mounted monitor:", monitorId);
 		// Ensure transparent background for this window
 		const originalHtmlBg = document.documentElement.style.background;
 		const originalBodyBg = document.body.style.background;
@@ -168,6 +149,7 @@
 			document.documentElement.style.backdropFilter;
 		const originalBodyBackdrop = document.body.style.backdropFilter;
 
+		// Apply robust check styles via JS too
 		document.documentElement.style.setProperty(
 			"background",
 			"transparent",
@@ -178,29 +160,13 @@
 			"transparent",
 			"important",
 		);
-		document.documentElement.style.backdropFilter = "none";
-		document.body.style.backdropFilter = "none";
 
 		// Log DPI/scaling information for debugging
-		console.log("[Capture] Monitor ID:", monitorId);
-		console.log("[Capture] devicePixelRatio:", window.devicePixelRatio);
 		console.log(
 			"[Capture] Window inner size:",
 			window.innerWidth,
 			"x",
 			window.innerHeight,
-		);
-		console.log(
-			"[Capture] Window outer size:",
-			window.outerWidth,
-			"x",
-			window.outerHeight,
-		);
-		console.log(
-			"[Capture] Screen size:",
-			window.screen.width,
-			"x",
-			window.screen.height,
 		);
 
 		// Verify DPI scaling is working as expected
@@ -240,7 +206,6 @@
 		// Focus for Keyboard Events
 		setTimeout(() => {
 			window.focus();
-			console.log("[Capture] Window focused");
 		}, 100);
 
 		window.addEventListener("keydown", handleKeyDown, true);
@@ -261,9 +226,9 @@
 <div
 	role="application"
 	class="overlay"
-	onmousedown={handleMouseDown}
-	onmousemove={handleMouseMove}
-	onmouseup={handleMouseUp}
+	on:mousedown={handleMouseDown}
+	on:mousemove={handleMouseMove}
+	on:mouseup={handleMouseUp}
 	transition:fade={{ duration: 150 }}
 >
 	{#if (!isSelecting || selection.w < 2 || selection.h < 2) && !isProcessing}
@@ -314,10 +279,13 @@
 	.overlay {
 		position: fixed;
 		inset: 0;
+		width: 100vw;
+		height: 100vh;
 		cursor: crosshair;
-		z-index: 9999;
+		z-index: 2147483647; /* Max z-index */
 		user-select: none;
 		font-family: "Inter", sans-serif;
+		background: transparent;
 		backdrop-filter: none !important;
 		-webkit-backdrop-filter: none !important;
 	}
@@ -325,32 +293,38 @@
 	.dim-bg {
 		position: absolute;
 		inset: 0;
-		background: rgba(0, 0, 0, 0.55);
+		width: 100%;
+		height: 100%;
+		background: rgba(0, 0, 0, 0.45) !important;
+		opacity: 1 !important;
 		backdrop-filter: none !important;
 		-webkit-backdrop-filter: none !important;
+		z-index: 1;
 	}
 
 	.selection-box {
 		position: absolute;
-		border: 1px solid rgba(255, 255, 255, 0.8);
+		border: 1px solid rgba(255, 255, 255, 0.8) !important;
 		/* Simple solid border, visually clean */
-		background: rgba(255, 255, 255, 0.08);
-		box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55); /* Darkens outside */
+		background: rgba(255, 255, 255, 0.1) !important;
+		box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45) !important; /* Darkens outside */
 		pointer-events: none;
 		display: flex;
 		justify-content: center;
 		align-items: center;
+		z-index: 2147483647;
 	}
 
 	.selection-box.starting {
-		border: none;
-		background: transparent;
+		border: none !important;
+		background: transparent !important;
+		box-shadow: none !important;
 	}
 
 	.selection-box.processing {
-		border-color: var(--primary-color, #4facfe);
-		background: rgba(0, 0, 0, 0.2);
-		box-shadow: none;
+		border-color: var(--primary-color, #4facfe) !important;
+		background: rgba(0, 0, 0, 0.2) !important;
+		box-shadow: none !important;
 	}
 
 	/* Fixed style block */
@@ -377,27 +351,29 @@
 		align-items: center;
 		gap: 12px;
 		pointer-events: none;
+		z-index: 2147483647;
 	}
 
 	.hint-box {
-		background: rgba(0, 0, 0, 0.75);
+		background: rgba(0, 0, 0, 0.85) !important;
 		/* backdrop-filter removed to prevent blur issues */
 		backdrop-filter: none !important;
 		-webkit-backdrop-filter: none !important;
 		padding: 12px 20px;
 		border-radius: 12px;
-		color: white;
+		color: white !important;
 		font-weight: 500;
 		display: flex;
 		align-items: center;
 		gap: 10px;
-		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-		border: 1px solid rgba(255, 255, 255, 0.1);
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+		border: 1px solid rgba(255, 255, 255, 0.2) !important;
 	}
 
 	.cancel-hint {
-		color: rgba(255, 255, 255, 0.7);
+		color: rgba(255, 255, 255, 0.8) !important;
 		font-size: 13px;
+		text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
 	}
 
 	/* Loading */

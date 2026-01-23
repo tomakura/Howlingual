@@ -135,6 +135,89 @@ impl std::fmt::Display for ShortcutError {
 
 impl std::error::Error for ShortcutError {}
 
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGRequestScreenCaptureAccess() -> bool;
+
+    // Accessibility APIs
+    fn AXIsProcessTrusted() -> bool;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXIsProcessTrustedWithOptions(options: core_foundation::dictionary::CFDictionaryRef)
+        -> bool;
+}
+
+#[derive(serde::Serialize)]
+struct PermissionStatus {
+    screen_recording: bool,
+    accessibility: bool,
+}
+
+#[tauri::command]
+async fn check_permissions() -> PermissionStatus {
+    #[cfg(target_os = "macos")]
+    {
+        PermissionStatus {
+            screen_recording: unsafe { CGPreflightScreenCaptureAccess() },
+            accessibility: unsafe { AXIsProcessTrusted() },
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        PermissionStatus {
+            screen_recording: true,
+            accessibility: true,
+        }
+    }
+}
+
+#[tauri::command]
+async fn request_permissions(permission_type: String) {
+    #[cfg(target_os = "macos")]
+    {
+        match permission_type.as_str() {
+            "screen_recording" => {
+                unsafe { CGRequestScreenCaptureAccess() };
+            }
+            "accessibility" => {
+                use core_foundation::base::TCFType;
+                use core_foundation::boolean::kCFBooleanTrue;
+                use core_foundation::dictionary::{
+                    kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks,
+                    CFDictionaryCreate,
+                };
+                use core_foundation::string::CFString;
+                use std::ptr;
+
+                unsafe {
+                    let key_str = CFString::from_static_string("AXTrustedCheckOptionPrompt");
+                    let value = kCFBooleanTrue;
+                    let keys: [*const std::ffi::c_void; 1] = [key_str.as_CFTypeRef() as *const _];
+                    let values: [*const std::ffi::c_void; 1] = [value as *const _];
+
+                    let options = CFDictionaryCreate(
+                        ptr::null(),
+                        keys.as_ptr(),
+                        values.as_ptr(),
+                        1,
+                        &kCFTypeDictionaryKeyCallBacks,
+                        &kCFTypeDictionaryValueCallBacks,
+                    );
+                    AXIsProcessTrustedWithOptions(options);
+
+                    // Cleanup
+                    core_foundation::base::CFRelease(options as *const _);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -503,6 +586,14 @@ fn capture_selected_text() -> Option<String> {
     // Clear clipboard
     let _ = clipboard.set_text("");
 
+    #[cfg(target_os = "macos")]
+    {
+        if !unsafe { AXIsProcessTrusted() } {
+            println!("[capture] Accessibility permission NOT granted. Aborting.");
+            return None;
+        }
+    }
+
     // Simulate Ctrl+C
     #[cfg(windows)]
     send_copy_shortcut();
@@ -640,6 +731,7 @@ fn ensure_capture_window(
 
     tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(url.into()))
         .title("Howlingual Capture")
+        .accept_first_mouse(true)
         .transparent(true)
         .resizable(true)
         .decorations(false)
@@ -1040,27 +1132,12 @@ fn handover_to_main(app: AppHandle, text: String) {
 async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(), String> {
     println!("[ocr] start_selection_ocr called, origin: {:?}", origin);
 
-    // Check screen capture permission on macOS before proceeding
     #[cfg(target_os = "macos")]
     {
-        unsafe {
-            let has_access = CGPreflightScreenCaptureAccess();
-            println!("[ocr] Screen Capture Access check: {}", has_access);
-
-            if !has_access {
-                println!("[ocr] No screen capture permission, requesting...");
-                // Request permission - this will show the system dialog
-                let requested = CGRequestScreenCaptureAccess();
-                println!("[ocr] Permission request result: {}", requested);
-
-                // Check again after request
-                let has_access_now = CGPreflightScreenCaptureAccess();
-                if !has_access_now {
-                    return Err(
-                        "画面収録の許可が必要です。\n\nシステム設定 > プライバシーとセキュリティ > 画面収録 から、\nHowlingualに画面収録の許可を与えてください。".to_string()
-                    );
-                }
-            }
+        if !unsafe { CGPreflightScreenCaptureAccess() } {
+            println!("[ocr] Screen recording permission NOT granted. Requesting...");
+            unsafe { CGRequestScreenCaptureAccess() };
+            return Err("画面収録の許可が必要です。\n\nシステム設定 > プライバシーとセキュリティ > 画面収録 から、\nHowlingualに画面収録の許可を与えてください。".to_string());
         }
     }
 
@@ -1113,7 +1190,19 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
                 index, mon_width, mon_height, mon_x, mon_y
             );
 
-            let image = monitor.capture_image().map_err(|e| e.to_string())?;
+            let image = monitor.capture_image().map_err(|e| {
+                let error_str = e.to_string();
+                // ALWAYS log the actual error for debugging
+                println!("[ocr] capture_image ERROR: {}", error_str);
+                // On macOS, permission errors typically contain "permission" or similar keywords
+                #[cfg(target_os = "macos")]
+                if error_str.to_lowercase().contains("permission") 
+                    || error_str.to_lowercase().contains("denied")
+                    || error_str.to_lowercase().contains("not permitted") {
+                    return "画面収録の許可が必要です。\n\nシステム設定 > プライバシーとセキュリティ > 画面収録 から、\nHowlingualに画面収録の許可を与えてください。".to_string();
+                }
+                error_str
+            })?;
             println!(
                 "[ocr] Captured image dimensions for monitor {}: {}x{}",
                 index,
@@ -1468,12 +1557,9 @@ async fn ocr_windows(app: AppHandle, image: image::RgbaImage) -> Result<String, 
     }
 }
 
-#[cfg(target_os = "macos")]
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGPreflightScreenCaptureAccess() -> bool;
-    fn CGRequestScreenCaptureAccess() -> bool;
-}
+// Note: CGPreflightScreenCaptureAccess and CGRequestScreenCaptureAccess are not used
+// because they can be unreliable on some macOS versions. Permission is checked
+// implicitly when attempting to capture the screen.
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -1498,7 +1584,9 @@ pub fn run() {
             finish_selection_ocr,
             cancel_selection_ocr,
             complete_ocr_flow,
-            set_ocr_engine
+            set_ocr_engine,
+            check_permissions,
+            request_permissions
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]

@@ -480,6 +480,9 @@
 
   // Load settings on mount
   onMount(() => {
+    const params = new URLSearchParams(window.location.search);
+    const viewParam = params.get("view");
+
     void detectWindowMode();
     const saved = localStorage.getItem("howlingual_settings");
     if (saved) {
@@ -584,6 +587,11 @@
         autoStartEnabled = await isAutostartEnabled();
       } catch (e) {
         console.warn("Failed to read autostart state", e);
+      }
+
+      // Check permissions on macOS
+      if (isMac) {
+        await checkPermissions();
       }
     })();
 
@@ -1320,6 +1328,18 @@
   }
 
   async function startOCR() {
+    if (isMac && !permissions.screen_recording) {
+      await requestPermission("screen_recording");
+      errorMessage = (t(appLanguage, "screenRecording") || "画面収録") + " " + (t(appLanguage, "denied") || "未許可") + "\n\n" + (t(appLanguage, "ocrHighAccuracyDesc") ? "System Settings > Privacy & Security > Screen Recording" : "システム設定 > プライバシーとセキュリティ > 画面収録 から、\nHowlingualに画面収録の許可を与えてください。");
+      // Actually, let's use a more direct message if we don't have a specific i18n key for the instruction yet
+      if (appLanguage === "ja") {
+        errorMessage = "画面収録の許可が必要です。\n\nシステム設定 > プライバシーとセキュリティ > 画面収録 から、\nHowlingualに画面収録の許可を与えてください。";
+      } else {
+        errorMessage = "Screen Recording permission is required.\n\nPlease grant permission to Howlingual in System Settings > Privacy & Security > Screen Recording.";
+      }
+      return;
+    }
+
     try {
       console.log("[UI] Starting OCR selection...");
       isWaitingForOCR = true;
@@ -2148,6 +2168,40 @@
   let isDetecting = $state(false);
 
   let errorMessage = $state("");
+
+  // ====== Permission State (macOS only) ======
+  let permissions = $state({
+    screen_recording: true,
+    accessibility: true,
+  });
+
+  async function checkPermissions() {
+    if (!isMac) return;
+    try {
+      const status = await invoke<any>("check_permissions");
+      permissions = status;
+      console.log("[permissions] Check status:", status);
+    } catch (e) {
+      console.warn("[permissions] Failed to check permissions", e);
+    }
+  }
+
+  async function requestPermission(type: "screen_recording" | "accessibility") {
+    try {
+      await invoke("request_permissions", { permissionType: type });
+      // After requesting, start a periodic check to detect when user grants it
+      const start = Date.now();
+      const interval = setInterval(async () => {
+        const status = await invoke<any>("check_permissions");
+        permissions = status;
+        if (permissions[type] || Date.now() - start > 60000) {
+          clearInterval(interval);
+        }
+      }, 2000);
+    } catch (e) {
+      console.warn("[permissions] Failed to request permission", e);
+    }
+  }
 
   // Technical Info
   type HistoryItem = {
@@ -5183,7 +5237,76 @@
                     </div>
                   </div>
 
-                  {#if isWindows}
+                  {#if isMac}
+                    <!-- Permissions (macOS) -->
+                    <div class="settings-section">
+                      <div class="settings-label">
+                        {t(appLanguage, "permissions")}
+                      </div>
+                      <div
+                        class="settings-card-row"
+                        style="flex-direction: column; gap: 12px;"
+                      >
+                        <!-- Screen Recording -->
+                        <div
+                          style="display: flex; justify-content: space-between; align-items: center; width: 100%;"
+                        >
+                          <div style="flex: 1;">
+                            <div style="font-size: 13px; font-weight: 500;">
+                              {t(appLanguage, "screenRecording")}
+                            </div>
+                            <div
+                              style="font-size: 11px; color: {permissions.screen_recording
+                                ? '#10b981'
+                                : '#ef4444'};"
+                            >
+                              {permissions.screen_recording
+                                ? t(appLanguage, "granted")
+                                : t(appLanguage, "denied")}
+                            </div>
+                          </div>
+                          {#if !permissions.screen_recording}
+                            <button
+                              onclick={() =>
+                                requestPermission("screen_recording")}
+                              class="permission-btn"
+                            >
+                              {t(appLanguage, "grant")}
+                            </button>
+                          {/if}
+                        </div>
+
+                        <!-- Accessibility -->
+                        <div
+                          style="display: flex; justify-content: space-between; align-items: center; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 12px;"
+                        >
+                          <div style="flex: 1;">
+                            <div style="font-size: 13px; font-weight: 500;">
+                              {t(appLanguage, "accessibility")}
+                            </div>
+                            <div
+                              style="font-size: 11px; color: {permissions.accessibility
+                                ? '#10b981'
+                                : '#ef4444'};"
+                            >
+                              {permissions.accessibility
+                                ? t(appLanguage, "granted")
+                                : t(appLanguage, "denied")}
+                            </div>
+                          </div>
+                          {#if !permissions.accessibility}
+                            <button
+                              onclick={() =>
+                                requestPermission("accessibility")}
+                              class="permission-btn"
+                            >
+                              {t(appLanguage, "grant")}
+                            </button>
+                          {/if}
+                        </div>
+                      </div>
+                    </div>
+                  {/if}
                     <!-- OCR Engine -->
                     <div class="settings-section">
                       <div class="settings-label">
@@ -5241,8 +5364,7 @@
                         </label>
                       </div>
                     </div>
-                  {/if}
-
+                  
                   <!-- Quick Shortcut -->
                   <div class="settings-section">
                     <label class="settings-label" for="quick-shortcut-input"
@@ -6037,6 +6159,20 @@
 {/if}
 
 <style>
+  .permission-btn {
+    padding: 4px 10px;
+    background: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .permission-btn:hover {
+    background: #2563eb;
+  }
   .container {
     display: flex;
     flex-direction: column;
