@@ -119,12 +119,6 @@ interface Translations {
 	usageCountLabel: string;
 	usageTokensLabel: string;
 	usageReset: string;
-	permissions: string;
-	screenRecording: string;
-	accessibility: string;
-	granted: string;
-	denied: string;
-	grant: string;
 }
 
 const translations: Record<AppLanguage, Translations> = {
@@ -233,12 +227,6 @@ const translations: Record<AppLanguage, Translations> = {
 		showMore: "もっと見る",
 		moreItems: "件",
 		showLess: "折りたたむ",
-		permissions: "アクセス許可の管理",
-		screenRecording: "画面収録",
-		accessibility: "アクセシビリティ",
-		granted: "許可済み",
-		denied: "未許可",
-		grant: "許可する",
 	},
 	en: {
 		settings: "Settings",
@@ -288,8 +276,6 @@ const translations: Record<AppLanguage, Translations> = {
 		openaiApiKey: "OpenAI API Key",
 		geminiApiKey: "Gemini API Key",
 		anthropicApiKey: "Anthropic API Key",
-		groqApiKey: "Groq API Key",
-		cerebrasApiKey: "Cerebras API Key",
 		translationCount: "Number of translations",
 		defaultTargetLang: "Default target language",
 		theme: "Theme",
@@ -345,12 +331,6 @@ const translations: Record<AppLanguage, Translations> = {
 		showMore: "Show more",
 		moreItems: "items",
 		showLess: "Show less",
-		permissions: "Permission Management",
-		screenRecording: "Screen Recording",
-		accessibility: "Accessibility",
-		granted: "Granted",
-		denied: "Denied",
-		grant: "Grant Access",
 	},
 	zh: {
 		settings: "设置",
@@ -400,8 +380,6 @@ const translations: Record<AppLanguage, Translations> = {
 		openaiApiKey: "OpenAI API Key",
 		geminiApiKey: "Gemini API Key",
 		anthropicApiKey: "Anthropic API Key",
-		groqApiKey: "Groq API Key",
-		cerebrasApiKey: "Cerebras API Key",
 		translationCount: "翻译方案数量",
 		defaultTargetLang: "默认目标语言",
 		theme: "主题",
@@ -457,12 +435,6 @@ const translations: Record<AppLanguage, Translations> = {
 		showMore: "更多",
 		moreItems: "项",
 		showLess: "收起",
-		permissions: "权限管理",
-		screenRecording: "屏幕录制",
-		accessibility: "辅助功能",
-		granted: "已授权",
-		denied: "未授权",
-		grant: "授予权限",
 	},
 	ko: {
 		settings: "설정",
@@ -512,8 +484,6 @@ const translations: Record<AppLanguage, Translations> = {
 		openaiApiKey: "OpenAI API Key",
 		geminiApiKey: "Gemini API Key",
 		anthropicApiKey: "Anthropic API Key",
-		groqApiKey: "Groq API Key",
-		cerebrasApiKey: "Cerebras API Key",
 		translationCount: "번역 제안 수",
 		defaultTargetLang: "기본 대상 언어",
 		theme: "테마",
@@ -569,12 +539,6 @@ const translations: Record<AppLanguage, Translations> = {
 		showMore: "더 보기",
 		moreItems: "개",
 		showLess: "접기",
-		permissions: "권한 관리",
-		screenRecording: "화면 기록",
-		accessibility: "접근성",
-		granted: "허용됨",
-		denied: "데니얼",
-		grant: "권한 허용",
 	},
 };
 

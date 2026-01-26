@@ -930,6 +930,55 @@
       } catch (e) {
         console.warn("Failed to sync history", e);
       }
+    } else if (event.key === "howlingual_settings") {
+      if (!event.newValue) return;
+      try {
+        const parsed = JSON.parse(event.newValue);
+        if (parsed.model) {
+          selectedModel = parsed.model;
+          const found = availableModels.find((m) => m.value === selectedModel);
+          if (found) {
+            selectedProvider = found.provider as any;
+          }
+        }
+        if (parsed.apiKeys) apiKeys = { ...apiKeys, ...parsed.apiKeys };
+        if (parsed.defaultTargetLang)
+          defaultTargetLang = parsed.defaultTargetLang;
+        if (parsed.theme) theme = parsed.theme;
+        if (parsed.appLanguage) appLanguage = parsed.appLanguage;
+        if (parsed.allowRewrite !== undefined)
+          allowRewrite = parsed.allowRewrite;
+        if (parsed.quickShortcut) {
+          const isMac = navigator.userAgent.includes("Mac");
+          quickShortcut = parsed.quickShortcut.replace(
+            "CommandOrControl",
+            isMac ? "Command" : "Ctrl",
+          );
+          shortcutDraft = quickShortcut;
+        }
+        if (parsed.autoRunQuick !== undefined)
+          autoRunQuick = parsed.autoRunQuick;
+        if (parsed.autoStartEnabled !== undefined)
+          autoStartEnabled = parsed.autoStartEnabled;
+        if (parsed.startMinimized !== undefined)
+          startMinimized = parsed.startMinimized;
+        if (parsed.lastSelectedModels)
+          lastSelectedModels = {
+            ...lastSelectedModels,
+            ...parsed.lastSelectedModels,
+          };
+        if (parsed.ocrEngine) ocrEngine = parsed.ocrEngine;
+        if (
+          parsed.translationCount &&
+          [1, 2, 3].includes(parsed.translationCount)
+        )
+          translationCount = parsed.translationCount;
+
+        document.documentElement.setAttribute("data-theme", theme);
+        console.log("[Sync] Settings updated from storage event");
+      } catch (e) {
+        console.warn("Failed to sync settings", e);
+      }
     } else if (event.key === "howlingual_favorites") {
       try {
         favorites = event.newValue ? JSON.parse(event.newValue) : [];
@@ -5325,6 +5374,7 @@
                       </div>
                     </div>
                   {/if}
+                  {#if isWindows}
                     <!-- OCR Engine -->
                     <div class="settings-section">
                       <div class="settings-label">
@@ -5382,6 +5432,7 @@
                         </label>
                       </div>
                     </div>
+                  {/if}
                   
                   <!-- Quick Shortcut -->
                   <div class="settings-section">
