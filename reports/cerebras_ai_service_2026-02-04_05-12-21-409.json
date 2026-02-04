@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-02-04T05:12:21.409Z",
+  "model": "qwen-3-235b-a22b-instruct-2507",
+  "mode": "stream+nonstream",
+  "results": {
+    "stream": {
+      "ok": false,
+      "error": "Error: HTTP 404 Not Found",
+      "status": 404
+    },
+    "nonstream": {
+      "ok": false,
+      "error": "Error: HTTP 404 Not Found",
+      "status": 404
+    }
+  }
+}

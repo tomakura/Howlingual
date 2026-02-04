@@ -1,0 +1,78 @@
+{
+  "timestamp": "2026-02-03T00:24:00.505Z",
+  "prompt": "The quick brown fox jumps over the lazy dog.",
+  "sourceLang": "English",
+  "targetLang": "日本語",
+  "explanationLang": "日本語",
+  "candidateCount": 1,
+  "timeoutMs": 60000,
+  "env_keys_present": {
+    "openai": true,
+    "gemini": true,
+    "anthropic": true,
+    "groq": true,
+    "cerebras": true
+  },
+  "results": {
+    "openai": {
+      "model": "gpt-5-mini",
+      "ok": true,
+      "text": "素早い茶色のキツネが怠け者の犬を飛び越える。",
+      "usage": {
+        "input_tokens": 443,
+        "output_tokens": 1518
+      },
+      "latency_ms": 20765,
+      "first_update_ms": 15532,
+      "updates": 403
+    },
+    "gemini": {
+      "model": "gemini-3-flash-preview",
+      "ok": true,
+      "text": "すばしっこい茶色のキツネが、のろまな犬を飛び越える。",
+      "usage": {
+        "input_tokens": 405,
+        "output_tokens": 288
+      },
+      "latency_ms": 20432,
+      "first_update_ms": 18770,
+      "updates": 12
+    },
+    "anthropic": {
+      "model": "claude-sonnet-4-5-20250929",
+      "ok": true,
+      "text": "素早い茶色のキツネが怠け者の犬を飛び越える。",
+      "usage": {
+        "input_tokens": 568,
+        "output_tokens": 625
+      },
+      "latency_ms": 12390,
+      "first_update_ms": 12390,
+      "updates": 1
+    },
+    "groq": {
+      "model": "openai/gpt-oss-120b",
+      "ok": true,
+      "text": "素早く茶色いキツネが怠け者の犬を飛び越える。",
+      "usage": {
+        "input_tokens": 534,
+        "output_tokens": 239
+      },
+      "latency_ms": 816,
+      "first_update_ms": 812,
+      "updates": 4
+    },
+    "cerebras": {
+      "model": "qwen-3-235b-a22b-instruct-2507",
+      "ok": true,
+      "text": "素早い茶色のキツネが怠惰な犬を飛び越える。",
+      "usage": {
+        "input_tokens": 435,
+        "output_tokens": 381
+      },
+      "latency_ms": 3836,
+      "first_update_ms": 3376,
+      "updates": 103
+    }
+  }
+}

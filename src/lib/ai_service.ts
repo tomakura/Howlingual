@@ -1,15 +1,13 @@
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+import { getExecutionPlan } from "./translation_policy";
+import { getProviderForModel, type AiProvider } from "./ai_models";
 
 // Environment variables
 const ENV = import.meta.env;
 
-// Initialize clients
-// Clients will be initialized dynamically or via env fallback
-const genAI = ENV.VITE_GOOGLE_GENERATIVE_AI_API_KEY ? new GoogleGenerativeAI(ENV.VITE_GOOGLE_GENERATIVE_AI_API_KEY) : null;
-const openai = ENV.VITE_OPENAI_API_KEY ? new OpenAI({ apiKey: ENV.VITE_OPENAI_API_KEY, dangerouslyAllowBrowser: true }) : null;
-const anthropic = ENV.VITE_ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ENV.VITE_ANTHROPIC_API_KEY, dangerouslyAllowBrowser: true }) : null;
+// Clients are initialized dynamically or via env fallback
 
 // Dynamic Client Getters
 function getGeminiClient(apiKey?: string) {
@@ -30,24 +28,15 @@ function getAnthropicClient(apiKey?: string) {
 	return new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true });
 }
 
-function getGroqClient(apiKey?: string) {
-	const key = apiKey || ENV.VITE_GROQ_API_KEY;
-	if (!key) throw new Error("Groq API Key missing");
-	return new OpenAI({
-		apiKey: key,
-		baseURL: "https://api.groq.com/openai/v1",
-		dangerouslyAllowBrowser: true
-	});
+const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
+const CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1";
+
+function resolveGroqApiKey(apiKey?: string) {
+	return apiKey || ENV.VITE_GROQ_API_KEY;
 }
 
-function getCerebrasClient(apiKey?: string) {
-	const key = apiKey || ENV.VITE_CEREBRAS_API_KEY;
-	if (!key) throw new Error("Cerebras API Key missing");
-	return new OpenAI({
-		apiKey: key,
-		baseURL: "https://api.cerebras.ai/v1",
-		dangerouslyAllowBrowser: true
-	});
+function resolveCerebrasApiKey(apiKey?: string) {
+	return apiKey || ENV.VITE_CEREBRAS_API_KEY;
 }
 
 export type AiModel = string;
@@ -72,6 +61,258 @@ export interface AiResponse {
 	usage?: UsageMetadata;
 }
 
+function normalizeJsonText(raw: string): string {
+	return raw
+		.replace(/```json/gi, "```")
+		.replace(/```/g, "")
+		.trim();
+}
+
+function extractJsonFromText(raw: string): string | null {
+	const cleaned = normalizeJsonText(raw);
+	const start = cleaned.indexOf("{");
+	const end = cleaned.lastIndexOf("}");
+	if (start === -1 || end === -1 || end <= start) return null;
+	return cleaned.slice(start, end + 1);
+}
+
+function parseJsonFromText<T>(raw: string): T {
+	const cleaned = normalizeJsonText(raw);
+	try {
+		return JSON.parse(cleaned) as T;
+	} catch {
+		const extracted = extractJsonFromText(cleaned);
+		if (extracted) {
+			return JSON.parse(extracted) as T;
+		}
+		throw new Error("Failed to parse JSON response");
+	}
+}
+
+function buildProviderHeaders(
+	apiKey: string | undefined,
+	extra: Record<string, string> = {},
+) {
+	if (!apiKey) throw new Error("API Key missing");
+	const headers: Record<string, string> = {
+		Authorization: `Bearer ${apiKey}`,
+		"Content-Type": "application/json",
+		...extra,
+	};
+	if (typeof window === "undefined") {
+		headers["User-Agent"] = "Howlingual/1.0";
+	}
+	return headers;
+}
+
+function mapUsageToMetadata(usage: any): UsageMetadata | undefined {
+	if (!usage || typeof usage !== "object") return undefined;
+	const input =
+		usage.prompt_tokens ??
+		usage.input_tokens ??
+		usage.promptTokenCount ??
+		usage.inputTokenCount;
+	const output =
+		usage.completion_tokens ??
+		usage.output_tokens ??
+		usage.candidatesTokenCount ??
+		usage.outputTokenCount;
+	if (typeof input !== "number" && typeof output !== "number") return undefined;
+	return {
+		input_tokens: typeof input === "number" ? input : 0,
+		output_tokens: typeof output === "number" ? output : 0,
+	};
+}
+
+async function fetchChatCompletionJson(params: {
+	url: string;
+	apiKey?: string;
+	body: any;
+	signal?: AbortSignal;
+}) {
+	const res = await fetch(params.url, {
+		method: "POST",
+		headers: buildProviderHeaders(params.apiKey),
+		body: JSON.stringify(params.body),
+		signal: params.signal,
+	});
+	if (!res.ok) {
+		const text = await res.text();
+		let message = `HTTP ${res.status} ${res.statusText}`;
+		try {
+			const data = JSON.parse(text);
+			message =
+				data?.error?.message ||
+				data?.message ||
+				data?.error ||
+				message;
+		} catch {
+			// ignore parse errors
+		}
+		const err: any = new Error(message);
+		err.status = res.status;
+		err.body = text;
+		throw err;
+	}
+	return res.json();
+}
+
+async function streamChatCompletion(params: {
+	url: string;
+	apiKey?: string;
+	body: any;
+	signal?: AbortSignal;
+	onDelta: (delta: string) => void;
+	onUsage?: (usage: UsageMetadata) => void;
+}) {
+	const res = await fetch(params.url, {
+		method: "POST",
+		headers: buildProviderHeaders(params.apiKey, {
+			Accept: "text/event-stream",
+		}),
+		body: JSON.stringify(params.body),
+		signal: params.signal,
+	});
+	if (!res.ok) {
+		const text = await res.text();
+		let message = `HTTP ${res.status} ${res.statusText}`;
+		try {
+			const data = JSON.parse(text);
+			message =
+				data?.error?.message ||
+				data?.message ||
+				data?.error ||
+				message;
+		} catch {
+			// ignore parse errors
+		}
+		const err: any = new Error(message);
+		err.status = res.status;
+		err.body = text;
+		throw err;
+	}
+	if (!res.body) throw new Error("No response body");
+	const reader = res.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	while (true) {
+		const { value, done } = await reader.read();
+		if (done) break;
+		buffer += decoder.decode(value, { stream: true });
+		const lines = buffer.split(/\r?\n/);
+		buffer = lines.pop() || "";
+		for (const line of lines) {
+			if (!line.startsWith("data:")) continue;
+			const data = line.slice(5).trim();
+			if (!data) continue;
+			if (data === "[DONE]") return;
+			try {
+				const parsed = JSON.parse(data);
+				const delta = parsed?.choices?.[0]?.delta?.content || "";
+				if (delta) params.onDelta(delta);
+				const usage = mapUsageToMetadata(parsed?.usage);
+				if (usage && params.onUsage) params.onUsage(usage);
+			} catch {
+				continue;
+			}
+		}
+	}
+}
+
+function extractJsonStringValue(raw: string, key: string): string | null {
+	const cleaned = normalizeJsonText(raw);
+	const keyIndex = cleaned.indexOf(`"${key}"`);
+	if (keyIndex === -1) return null;
+	const colonIndex = cleaned.indexOf(":", keyIndex);
+	if (colonIndex === -1) return null;
+	const quoteIndex = cleaned.indexOf("\"", colonIndex + 1);
+	if (quoteIndex === -1) return null;
+	let i = quoteIndex + 1;
+	let value = "";
+	while (i < cleaned.length) {
+		const ch = cleaned[i];
+		if (ch === "\\") {
+			const next = cleaned[i + 1];
+			if (next) {
+				value += next;
+				i += 2;
+				continue;
+			}
+		}
+		if (ch === "\"") return value;
+		value += ch;
+		i += 1;
+	}
+	return value || null;
+}
+
+function extractPartialFromJsonLike(raw: string): Partial<AiResponse> | null {
+	const detected = extractJsonStringValue(raw, "detected_source_language");
+	const text = extractJsonStringValue(raw, "text");
+	const reason = extractJsonStringValue(raw, "reason");
+	const partial: Partial<AiResponse> = {};
+	if (detected) partial.detected_source_language = detected;
+	if (text || reason) {
+		partial.candidates = [
+			{
+				text: text || "",
+				reason: reason || "",
+			},
+		];
+	}
+	return Object.keys(partial).length > 0 ? partial : null;
+}
+
+function isReasoningModelName(modelName: string): boolean {
+	return (
+		modelName.includes("gpt-oss") ||
+		modelName.includes("o1") ||
+		modelName.includes("o3") ||
+		modelName.includes("qwq") ||
+		modelName.includes("deepseek-r1") ||
+		modelName.includes("k2-instruct")
+	);
+}
+
+function getErrorStatus(err: unknown): number | undefined {
+	if (!err || typeof err !== "object") return undefined;
+	const anyErr = err as any;
+	return (
+		anyErr.status ??
+		anyErr.statusCode ??
+		anyErr.response?.status ??
+		anyErr.error?.status ??
+		undefined
+	);
+}
+
+function getErrorMessage(err: unknown): string {
+	if (!err) return "";
+	if (typeof err === "string") return err;
+	if (typeof err === "object") {
+		const anyErr = err as any;
+		return (
+			anyErr.error?.message ||
+			anyErr.message ||
+			(anyErr.error ? JSON.stringify(anyErr.error) : "") ||
+			String(err)
+		);
+	}
+	return String(err);
+}
+
+function shouldRetryWithoutJson(err: unknown): boolean {
+	const status = getErrorStatus(err);
+	if (status !== 400) return false;
+	const message = getErrorMessage(err).toLowerCase();
+	return (
+		message.includes("failed_generation") ||
+		message.includes("response_format") ||
+		message.includes("json") ||
+		message.includes("schema")
+	);
+}
+
 // Build system prompt with configurable explanation language
 function buildSystemPrompt(
 	explanationLang: string = "日本語",
@@ -88,7 +329,10 @@ function buildSystemPrompt(
 2. **detected_source_language**: 原文の言語を判定し、${explanationLang}で出力すること。
 3. 各翻訳案の「reason」と「detailed_explanation」は**${explanationLang}で**書くこと。
 4. **detailed_explanation**: 重要な単語や文法ポイントを3つ程度ピックアップし、${explanationLang}で詳しく解説すること。
-5. 出力は必ず以下のJSON形式のみで行うこと。
+5. 出力は必ず以下のJSON形式のみで行うこと（余計な説明や前置き、Markdown、コードフェンスは禁止）。
+6. ストリーム表示のため、次の順に出力を進めること:
+   detected_source_language → candidates[].text → candidates[].reason → detailed_explanation。
+7. 文字列内の引用符や改行は、必ずJSONとして正しくエスケープすること。
 
 \`\`\`json
 {
@@ -143,8 +387,13 @@ function buildUserPrompt(
 }
 
 // Gemini Implementation
-async function callGemini(prompt: string, systemPrompt: string = SYSTEM_PROMPT): Promise<AiResponse> {
-	if (!genAI) throw new Error("Gemini API Key missing");
+async function callGemini(
+	modelName: string,
+	prompt: string,
+	systemPrompt: string = SYSTEM_PROMPT,
+	apiKey?: string,
+): Promise<AiResponse> {
+	const client = getGeminiClient(apiKey);
 
 	const schema = {
 		type: SchemaType.OBJECT,
@@ -182,8 +431,8 @@ async function callGemini(prompt: string, systemPrompt: string = SYSTEM_PROMPT):
 		required: ["detected_source_language", "candidates", "detailed_explanation"]
 	} as const;
 
-	const model = genAI.getGenerativeModel({
-		model: "gemini-1.5-flash",
+	const model = client.getGenerativeModel({
+		model: modelName || "gemini-1.5-flash",
 		systemInstruction: systemPrompt,
 		generationConfig: {
 			responseMimeType: "application/json",
@@ -192,7 +441,14 @@ async function callGemini(prompt: string, systemPrompt: string = SYSTEM_PROMPT):
 	});
 
 	const result = await model.generateContent(prompt);
-	return JSON.parse(result.response.text());
+	const parsed = parseJsonFromText<AiResponse>(result.response.text());
+	if (result.response.usageMetadata) {
+		parsed.usage = {
+			input_tokens: result.response.usageMetadata.promptTokenCount,
+			output_tokens: result.response.usageMetadata.candidatesTokenCount,
+		};
+	}
+	return parsed;
 }
 
 // OpenAI Implementation
@@ -200,30 +456,128 @@ async function callOpenAI(
 	modelName: string,
 	prompt: string,
 	systemPrompt: string = SYSTEM_PROMPT,
+	apiKey?: string,
+	signal?: AbortSignal,
+	jsonMode = true,
 ): Promise<AiResponse> {
-	if (!openai) throw new Error("OpenAI API Key missing");
+	const client = getOpenAIClient(apiKey);
+	return callOpenAICompatible(client, modelName, prompt, systemPrompt, {
+		signal,
+		jsonMode,
+	});
+}
 
-	const completion = await openai.chat.completions.create({
+async function callOpenAICompatible(
+	openai: OpenAI,
+	modelName: string,
+	prompt: string,
+	systemPrompt: string,
+	options: { signal?: AbortSignal; jsonMode?: boolean } = {},
+): Promise<AiResponse> {
+	const requestParams: any = {
 		model: modelName,
 		messages: [
 			{ role: "system", content: systemPrompt },
-			{ role: "user", content: prompt }
+			{ role: "user", content: prompt },
 		],
-		response_format: { type: "json_object" },
+	};
+
+	if (options.jsonMode !== false) {
+		requestParams.response_format = { type: "json_object" };
+	}
+
+	if (isReasoningModelName(modelName)) {
 		// @ts-ignore - reasoning_effort might not be in the current SDK types yet
-		reasoning_effort: "low"
+		requestParams.reasoning_effort = "low";
+	}
+
+	const completion = await openai.chat.completions.create(requestParams, {
+		signal: options.signal,
 	});
 
 	const content = completion.choices[0].message.content;
 	if (!content) throw new Error("No content from OpenAI");
 
-	// OpenAI doesn't enforce schema as strictly, so we validate/parse carefully
-	// Assuming the prompt guidance is enough for reliable JSON structure
-	const parsed = JSON.parse(content);
+	const parsed = parseJsonFromText<AiResponse>(content);
+	if (completion.usage) {
+		parsed.usage = {
+			input_tokens: completion.usage.prompt_tokens,
+			output_tokens: completion.usage.completion_tokens,
+		};
+	}
+	return parsed;
+}
 
-	// Normalize if necessary (e.g. if root object keys differ slightly, though prompt asks for specific format)
-	// For robustness, we could enforce a schema with Zod, but sticking to simple JSON parse for now.
-	return parsed as AiResponse;
+async function callGroqDirect(
+	modelName: string,
+	prompt: string,
+	systemPrompt: string,
+	apiKey?: string,
+	signal?: AbortSignal,
+	jsonMode = true,
+): Promise<AiResponse> {
+	const resolvedKey = resolveGroqApiKey(apiKey);
+	const requestParams: any = {
+		model: modelName,
+		messages: [
+			{ role: "system", content: systemPrompt },
+			{ role: "user", content: prompt },
+		],
+	};
+	if (jsonMode) {
+		requestParams.response_format = { type: "json_object" };
+	}
+	if (isReasoningModelName(modelName)) {
+		requestParams.reasoning_effort = "low";
+	}
+	const data = await fetchChatCompletionJson({
+		url: `${GROQ_BASE_URL}/chat/completions`,
+		apiKey: resolvedKey,
+		body: requestParams,
+		signal,
+	});
+	const content = data?.choices?.[0]?.message?.content;
+	if (!content) throw new Error("No content from Groq");
+	const parsed = parseJsonFromText<AiResponse>(content);
+	const usage = mapUsageToMetadata(data?.usage);
+	if (usage) parsed.usage = usage;
+	return parsed;
+}
+
+async function callCerebrasDirect(
+	modelName: string,
+	prompt: string,
+	systemPrompt: string,
+	apiKey?: string,
+	signal?: AbortSignal,
+	jsonMode = true,
+): Promise<AiResponse> {
+	const resolvedKey = resolveCerebrasApiKey(apiKey);
+	const requestParams: any = {
+		model: modelName,
+		messages: [
+			{ role: "system", content: systemPrompt },
+			{ role: "user", content: prompt },
+		],
+	};
+	if (jsonMode) {
+		requestParams.response_format = { type: "json_object" };
+	}
+	if (isReasoningModelName(modelName)) {
+		requestParams.reasoning_effort = "low";
+	}
+	const data = await fetchChatCompletionJson({
+		url: `${CEREBRAS_BASE_URL}/chat/completions`,
+		apiKey: resolvedKey,
+		body: requestParams,
+		signal,
+	});
+	const content = data?.choices?.[0]?.message?.content;
+	if (!content) throw new Error("No content from Cerebras");
+	const parsed = parseJsonFromText<AiResponse>(content);
+	const usage = mapUsageToMetadata(data?.usage);
+	if (usage) parsed.usage = usage;
+	return parsed;
 }
 
 // Anthropic Implementation
@@ -231,32 +585,45 @@ async function callAnthropic(
 	modelName: string,
 	prompt: string,
 	systemPrompt: string = SYSTEM_PROMPT,
+	apiKey?: string,
+	signal?: AbortSignal,
 ): Promise<AiResponse> {
-	if (!anthropic) throw new Error("Anthropic API Key missing");
+	const client = getAnthropicClient(apiKey);
 
 	// Anthropic doesn't support JSON mode natively like OpenAI/Gemini yet in the same way,
 	// so we append "Output JSON only" instruction excessively.
-	const msg = await anthropic.messages.create({
+	const msg = await client.messages.create(
+		{
 		model: modelName,
 		max_tokens: 1024,
 		system: systemPrompt + "\n\nOutput strictly valid JSON.",
 		messages: [{ role: "user", content: prompt }]
-	});
+		},
+		{ signal },
+	);
 
 	const contentBlock = msg.content[0];
 	if (contentBlock.type !== 'text') throw new Error("Unexpected Anthropic response type");
 
-	// Simple JSON extraction in case of preamble
-	const jsonMatch = contentBlock.text.match(/\{[\s\S]*\}/);
-	if (!jsonMatch) throw new Error("Failed to parse JSON from Anthropic response");
-
-	return JSON.parse(jsonMatch[0]) as AiResponse;
+	const parsed = parseJsonFromText<AiResponse>(contentBlock.text);
+	if (msg.usage) {
+		parsed.usage = {
+			input_tokens: msg.usage.input_tokens,
+			output_tokens: msg.usage.output_tokens,
+		};
+	}
+	return parsed;
 }
 
 // Helper to safely parse partial JSON with auto-closing attempts
 function tryParsePartialJson(jsonStr: string): Partial<AiResponse> | null {
-	// 0. Pre-process: remove trailing comma if present, as it breaks JSON.parse
-	const trimmed = jsonStr.trim().replace(/,$/, "");
+	// 0. Pre-process: remove code fences and trailing comma
+	const cleaned = normalizeJsonText(jsonStr);
+	const start = cleaned.indexOf("{");
+	const trimmed = (start >= 0 ? cleaned.slice(start) : cleaned).replace(
+		/,$/,
+		"",
+	);
 
 	// 1. Try naive parse
 	try {
@@ -293,7 +660,7 @@ function tryParsePartialJson(jsonStr: string): Partial<AiResponse> | null {
 		}
 	}
 
-	return null;
+	return extractPartialFromJsonLike(trimmed);
 }
 
 // Stream Translation Router
@@ -307,13 +674,40 @@ export async function translateTextStream(
 	explanationLang: string = "日本語",
 	styleMeta: Record<string, { name: string; prompt?: string }> = {},
 	apiKeys: Record<string, string> = {},
-	options: { provider?: string; signal?: AbortSignal } = {},
+	options: { provider?: AiProvider; signal?: AbortSignal } = {},
 	candidateCount: number = 3,
 ): Promise<void> {
 	const userPrompt = buildUserPrompt(text, sourceLang, targetLang, styles, styleMeta);
 	const systemPrompt = buildSystemPrompt(explanationLang, candidateCount);
-	const provider = options.provider;
+	const provider = options.provider || getProviderForModel(model);
 	const signal = options.signal;
+	const plan = getExecutionPlan({
+		provider,
+		model,
+		streamingDisplay: true,
+	});
+
+	if (plan.mode === "non_stream") {
+		if (signal?.aborted) return;
+		const response = await translateText(
+			text,
+			sourceLang,
+			targetLang,
+			styles,
+			model as AiModel,
+			styleMeta,
+			candidateCount,
+			{
+				provider,
+				apiKeys,
+				explanationLang,
+				signal,
+				jsonMode: plan.jsonMode,
+			},
+		);
+		onUpdate(response, response.usage);
+		return;
+	}
 
 	if (provider === "gemini" || model.startsWith("gemini")) {
 		await streamGemini(
@@ -325,13 +719,37 @@ export async function translateTextStream(
 			signal
 		);
 	} else if (provider === "groq") {
-		await streamGroq(model, userPrompt, onUpdate, systemPrompt, apiKeys.groq?.trim(), signal);
+		await streamGroq(
+			model,
+			userPrompt,
+			onUpdate,
+			systemPrompt,
+			apiKeys.groq?.trim(),
+			signal,
+			plan.jsonMode,
+		);
 	} else if (provider === "cerebras") {
-		await streamCerebras(model, userPrompt, onUpdate, systemPrompt, apiKeys.cerebras?.trim(), signal);
+		await streamCerebras(
+			model,
+			userPrompt,
+			onUpdate,
+			systemPrompt,
+			apiKeys.cerebras?.trim(),
+			signal,
+			plan.jsonMode,
+		);
 	} else if (provider === "anthropic" || model.startsWith("claude")) {
 		await streamAnthropic(model, userPrompt, onUpdate, systemPrompt, apiKeys.anthropic?.trim(), signal);
 	} else if (provider === "openai" || model.startsWith("gpt") || model.startsWith("o3")) {
-		await streamOpenAI(model, userPrompt, onUpdate, systemPrompt, apiKeys.openai?.trim(), signal);
+		await streamOpenAI(
+			model,
+			userPrompt,
+			onUpdate,
+			systemPrompt,
+			apiKeys.openai?.trim(),
+			signal,
+			plan.jsonMode,
+		);
 	} else {
 		throw new Error(`Unsupported model: ${model}`);
 	}
@@ -347,42 +765,20 @@ async function streamGemini(
 	signal?: AbortSignal
 ) {
 	const genAI = getGeminiClient(apiKey);
-	// Check schema definition from previous code... assuming it's available or re-defined here
-	// For brevity re-using the logic conceptually.
-
-	// Note: Gemini's generateContentStream with responseSchema might buffer significantly.
-	// We use the model definition from before.
-	const schema = {
-		type: SchemaType.OBJECT,
-		properties: {
-			detected_source_language: { type: SchemaType.STRING },
-			candidates: {
-				type: SchemaType.ARRAY,
-				items: {
-					type: SchemaType.OBJECT,
-					properties: {
-						text: { type: SchemaType.STRING },
-						reason: { type: SchemaType.STRING }
-					}
-				}
-			}
-		},
-		required: ["detected_source_language", "candidates"]
-	} as const;
 
 	const model = genAI.getGenerativeModel({
 		model: modelName,
 		systemInstruction: systemPrompt,
 		generationConfig: {
-			responseMimeType: "application/json",
-			responseSchema: schema as any
-		}
+			responseMimeType: "application/json"
+		},
 	});
 
 	// @ts-expect-error - SDK typing does not include AbortSignal yet
 	const result = await model.generateContentStream(prompt, { signal });
 
 	let accumulatedText = "";
+	let lastPartialKey = "";
 
 	for await (const chunk of result.stream) {
 		if (signal?.aborted) return;
@@ -392,13 +788,17 @@ async function streamGemini(
 
 		const partial = tryParsePartialJson(accumulatedText);
 		if (partial) {
-			onUpdate(partial);
+			const key = JSON.stringify(partial);
+			if (key !== lastPartialKey) {
+				lastPartialKey = key;
+				onUpdate(partial);
+			}
 		}
 	}
 	// Final safe parse to ensure everything is correct
 	try {
 		if (signal?.aborted) return;
-		const final = JSON.parse(accumulatedText);
+		const final = parseJsonFromText<AiResponse>(accumulatedText);
 		const response = await result.response;
 		const usage = response.usageMetadata ? {
 			input_tokens: response.usageMetadata.promptTokenCount,
@@ -419,41 +819,39 @@ async function streamOpenAICompatible(
 	prompt: string,
 	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void,
 	systemPrompt: string,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	jsonMode = true
 ) {
-	// Check if model supports reasoning parameters
-	const isReasoningModel = modelName.includes('gpt-oss') || 
-	                         modelName.includes('o1') || 
-	                         modelName.includes('o3') ||
-	                         modelName.includes('qwq') ||
-	                         modelName.includes('deepseek-r1') ||
-	                         modelName.includes('k2-instruct');
-	
 	const requestParams: any = {
 		model: modelName,
 		messages: [
 			{ role: "system", content: systemPrompt },
 			{ role: "user", content: prompt }
 		],
-		response_format: { type: "json_object" },
 		stream: true,
 		stream_options: { include_usage: true }
 	};
 
+	if (jsonMode) {
+		requestParams.response_format = { type: "json_object" };
+	}
+
 	// Only add reasoning_effort for models that support it
-	if (isReasoningModel) {
+	if (isReasoningModelName(modelName)) {
 		requestParams.reasoning_effort = "low";
 	}
 
 	const stream = await openai.chat.completions.create(requestParams, { signal });
 
 	let accumulatedText = "";
+	let lastPartialKey = "";
 	for await (const chunk of stream) {
 		if (signal?.aborted) return;
 		const content = chunk.choices[0]?.delta?.content || "";
 
 		if (chunk.usage) {
-			onUpdate(tryParsePartialJson(accumulatedText) || {}, {
+			const partialForUsage = tryParsePartialJson(accumulatedText) || {};
+			onUpdate(partialForUsage, {
 				input_tokens: chunk.usage.prompt_tokens,
 				output_tokens: chunk.usage.completion_tokens
 			});
@@ -465,7 +863,11 @@ async function streamOpenAICompatible(
 			accumulatedText += content;
 			const partial = tryParsePartialJson(accumulatedText);
 			if (partial) {
-				onUpdate(partial);
+				const key = JSON.stringify(partial);
+				if (key !== lastPartialKey) {
+					lastPartialKey = key;
+					onUpdate(partial);
+				}
 			}
 		}
 	}
@@ -473,7 +875,7 @@ async function streamOpenAICompatible(
 	// Even though OpenAI streams deltas, accumulatedText IS the complete version at this point.
 	try {
 		if (accumulatedText.trim()) {
-			const final = JSON.parse(accumulatedText);
+			const final = parseJsonFromText<AiResponse>(accumulatedText);
 			console.log("[OpenAI] Final Full JSON parsed successfully.");
 			// Usage is already handled via chunk.usage in the loop (final chunk usually has it)
 			onUpdate(final);
@@ -483,16 +885,84 @@ async function streamOpenAICompatible(
 	}
 }
 
+async function streamProviderChatCompletion(params: {
+	url: string;
+	apiKey?: string;
+	modelName: string;
+	prompt: string;
+	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void;
+	systemPrompt: string;
+	signal?: AbortSignal;
+	jsonMode: boolean;
+}) {
+	const requestParams: any = {
+		model: params.modelName,
+		messages: [
+			{ role: "system", content: params.systemPrompt },
+			{ role: "user", content: params.prompt },
+		],
+		stream: true,
+	};
+	if (params.jsonMode) {
+		requestParams.response_format = { type: "json_object" };
+	}
+	if (isReasoningModelName(params.modelName)) {
+		requestParams.reasoning_effort = "low";
+	}
+
+	let accumulatedText = "";
+	let lastPartialKey = "";
+	await streamChatCompletion({
+		url: params.url,
+		apiKey: params.apiKey,
+		body: requestParams,
+		signal: params.signal,
+		onDelta: (delta) => {
+			accumulatedText += delta;
+			const partial = tryParsePartialJson(accumulatedText);
+			if (partial) {
+				const key = JSON.stringify(partial);
+				if (key !== lastPartialKey) {
+					lastPartialKey = key;
+					params.onUpdate(partial);
+				}
+			}
+		},
+		onUsage: (usage) => {
+			const partialForUsage = tryParsePartialJson(accumulatedText) || {};
+			params.onUpdate(partialForUsage, usage);
+		},
+	});
+
+	try {
+		if (accumulatedText.trim()) {
+			const final = parseJsonFromText<AiResponse>(accumulatedText);
+			params.onUpdate(final);
+		}
+	} catch (e) {
+		console.warn("[Stream] Final JSON parse failed:", e);
+	}
+}
+
 async function streamOpenAI(
 	modelName: string,
 	prompt: string,
 	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void,
 	systemPrompt: string,
 	apiKey?: string,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	jsonMode = true
 ) {
 	const openai = getOpenAIClient(apiKey);
-	await streamOpenAICompatible(openai, modelName, prompt, onUpdate, systemPrompt, signal);
+	await streamOpenAICompatible(
+		openai,
+		modelName,
+		prompt,
+		onUpdate,
+		systemPrompt,
+		signal,
+		jsonMode,
+	);
 }
 
 async function streamGroq(
@@ -501,10 +971,20 @@ async function streamGroq(
 	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void,
 	systemPrompt: string,
 	apiKey?: string,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	jsonMode = true
 ) {
-	const groq = getGroqClient(apiKey);
-	await streamOpenAICompatible(groq, modelName, prompt, onUpdate, systemPrompt, signal);
+	const resolvedKey = resolveGroqApiKey(apiKey);
+	await streamProviderChatCompletion({
+		url: `${GROQ_BASE_URL}/chat/completions`,
+		apiKey: resolvedKey,
+		modelName,
+		prompt,
+		onUpdate,
+		systemPrompt,
+		signal,
+		jsonMode,
+	});
 }
 
 async function streamCerebras(
@@ -513,10 +993,20 @@ async function streamCerebras(
 	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void,
 	systemPrompt: string,
 	apiKey?: string,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	_jsonMode = true
 ) {
-	const cerebras = getCerebrasClient(apiKey);
-	await streamOpenAICompatible(cerebras, modelName, prompt, onUpdate, systemPrompt, signal);
+	const resolvedKey = resolveCerebrasApiKey(apiKey);
+	await streamProviderChatCompletion({
+		url: `${CEREBRAS_BASE_URL}/chat/completions`,
+		apiKey: resolvedKey,
+		modelName,
+		prompt,
+		onUpdate,
+		systemPrompt,
+		signal,
+		jsonMode: false,
+	});
 }
 
 // Anthropic Streaming
@@ -542,6 +1032,7 @@ async function streamAnthropic(
 	);
 
 	let accumulatedText = "";
+	let lastPartialKey = "";
 	let currentUsage: UsageMetadata = { input_tokens: 0, output_tokens: 0 };
 
 	for await (const chunk of stream) {
@@ -567,9 +1058,22 @@ async function streamAnthropic(
 				const jsonPart = accumulatedText.substring(jsonStart);
 				const partial = tryParsePartialJson(jsonPart);
 				if (partial) {
-					onUpdate(partial, currentUsage);
+					const key = JSON.stringify(partial);
+					if (key !== lastPartialKey) {
+						lastPartialKey = key;
+						onUpdate(partial, currentUsage);
+					}
 				}
 			}
+		}
+	}
+
+	if (!signal?.aborted && accumulatedText.trim()) {
+		try {
+			const final = parseJsonFromText<AiResponse>(accumulatedText);
+			onUpdate(final, currentUsage);
+		} catch (e) {
+			console.warn("[Anthropic] Final JSON parse failed:", e);
 		}
 	}
 }
@@ -583,18 +1087,81 @@ export async function translateText(
 	model: AiModel = "gemini-1.5-flash",
 	styleMeta: Record<string, { name: string; prompt?: string }> = {},
 	candidateCount: number = 3,
+	options: {
+		provider?: AiProvider;
+		apiKeys?: Record<string, string>;
+		explanationLang?: string;
+		signal?: AbortSignal;
+		jsonMode?: boolean;
+	} = {},
 ): Promise<AiResponse> {
 	const userPrompt = buildUserPrompt(text, sourceLang, targetLang, styles, styleMeta);
-	const systemPrompt = buildSystemPrompt("日本語", candidateCount);
+	const systemPrompt = buildSystemPrompt(
+		options.explanationLang || "日本語",
+		candidateCount,
+	);
+	const provider = options.provider || getProviderForModel(model);
+	const jsonMode = options.jsonMode !== false;
 
 	let response: AiResponse;
 
-	if (model.startsWith("gemini")) {
-		response = await callGemini(userPrompt, systemPrompt);
-	} else if (model.startsWith("gpt")) {
-		response = await callOpenAI(model, userPrompt, systemPrompt);
-	} else if (model.startsWith("claude")) {
-		response = await callAnthropic(model, userPrompt, systemPrompt);
+	if (provider === "gemini" || model.startsWith("gemini")) {
+		response = await callGemini(
+			model,
+			userPrompt,
+			systemPrompt,
+			options.apiKeys?.google?.trim() || options.apiKeys?.gemini?.trim(),
+		);
+	} else if (provider === "openai" || model.startsWith("gpt") || model.startsWith("o3")) {
+		response = await callOpenAI(
+			model,
+			userPrompt,
+			systemPrompt,
+			options.apiKeys?.openai?.trim(),
+			options.signal,
+			jsonMode,
+		);
+	} else if (provider === "groq") {
+		response = await callGroqDirect(
+			model,
+			userPrompt,
+			systemPrompt,
+			options.apiKeys?.groq?.trim(),
+			options.signal,
+			jsonMode,
+		);
+	} else if (provider === "cerebras") {
+		try {
+			response = await callCerebrasDirect(
+				model,
+				userPrompt,
+				systemPrompt,
+				options.apiKeys?.cerebras?.trim(),
+				options.signal,
+				jsonMode,
+			);
+		} catch (err) {
+			if (jsonMode && shouldRetryWithoutJson(err)) {
+				response = await callCerebrasDirect(
+					model,
+					userPrompt,
+					systemPrompt,
+					options.apiKeys?.cerebras?.trim(),
+					options.signal,
+					false,
+				);
+			} else {
+				throw err;
+			}
+		}
+	} else if (provider === "anthropic" || model.startsWith("claude")) {
+		response = await callAnthropic(
+			model,
+			userPrompt,
+			systemPrompt,
+			options.apiKeys?.anthropic?.trim(),
+			options.signal,
+		);
 	} else {
 		throw new Error(`Unsupported model: ${model}`);
 	}
@@ -603,4 +1170,3 @@ export async function translateText(
 	response.candidates = response.candidates.map((c, i) => ({ ...c, id: i + 1 }));
 	return response;
 }
-

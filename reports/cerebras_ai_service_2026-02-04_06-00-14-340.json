@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-02-04T06:00:14.340Z",
+  "model": "qwen-3-235b-a22b-instruct-2507",
+  "mode": "stream+nonstream",
+  "results": {
+    "stream": {
+      "ok": false,
+      "error": "Error: Model qwen-3-235b-a22b-instruct-2507 does not exist or you do not have access to it.",
+      "status": 404
+    },
+    "nonstream": {
+      "ok": false,
+      "error": "Error: Model qwen-3-235b-a22b-instruct-2507 does not exist or you do not have access to it.",
+      "status": 404
+    }
+  }
+}

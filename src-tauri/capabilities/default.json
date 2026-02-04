@@ -13,6 +13,7 @@
     "core:default",
     "autostart:default",
     "opener:default",
+    "log:default",
     "core:event:default",
     "core:window:default",
     "core:window:allow-start-dragging",

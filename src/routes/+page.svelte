@@ -4,14 +4,25 @@
   import { flip } from "svelte/animate";
   import { quintOut } from "svelte/easing";
   import { invoke } from "@tauri-apps/api/core";
+  import { getVersion } from "@tauri-apps/api/app";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { listen, emit, TauriEvent } from "@tauri-apps/api/event";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import {
     enable as enableAutostart,
     disable as disableAutostart,
     isEnabled as isAutostartEnabled,
   } from "@tauri-apps/plugin-autostart";
   import { type AiModel } from "$lib/ai_service";
+  import {
+    AI_MODELS,
+    DEFAULT_MODELS_BY_PROVIDER,
+    type AiProvider,
+    getDefaultModelForProvider,
+    getModelEntry,
+    getProviderForModel,
+    isAiProvider,
+  } from "$lib/ai_models";
   import CaptureOverlay from "$lib/components/CaptureOverlay.svelte";
   import {
     t,
@@ -33,8 +44,10 @@
   let settingsTab = $state<
     "appearance" | "translation" | "system" | "api" | "styles" | "about"
   >("appearance");
-  const appVersion = "1.3.0";
-  let selectedModel = $state<AiModel>("gpt-5-mini" as AiModel);
+  let appVersion = $state("1.3.0");
+  let selectedModel = $state<AiModel>(
+    DEFAULT_MODELS_BY_PROVIDER.openai as AiModel,
+  );
   let apiKeys = $state({
     gemini: "",
     openai: "",
@@ -42,20 +55,16 @@
     groq: "",
     cerebras: "",
   });
+  let rememberApiKeys = $state(true);
   let defaultTargetLang = $state("日本語");
   let theme = $state<"dark" | "light">("dark");
   let appLanguage = $state<"ja" | "en" | "zh" | "ko">("ja");
   let translationCount = $state<1 | 2 | 3>(3); // 翻訳案の個数（1〜3）
   let allowRewrite = $state(false);
-  type AiProvider = "openai" | "gemini" | "anthropic" | "groq" | "cerebras";
   let selectedProvider = $state<AiProvider>("openai");
   // プロバイダごとの最後に選択したモデルを記憶
   let lastSelectedModels = $state<Record<string, string>>({
-    openai: "gpt-5-mini",
-    gemini: "gemini-2.5-flash",
-    anthropic: "claude-sonnet-4.5",
-    groq: "llama-3.1-70b-versatile",
-    cerebras: "llama3.1-70b",
+    ...DEFAULT_MODELS_BY_PROVIDER,
   });
   // Initialize mode synchronously from URL to prevent flash of wrong UI
   const initialParams = new URLSearchParams(window.location.search);
@@ -72,6 +81,7 @@
   let autoStartEnabled = $state(false);
   let startMinimized = $state(false);
   let ocrEngine = $state<"paddle" | "windows">("paddle");
+  let clipboardOpsEnabled = $state(true);
 
   let historyAnimating = $state(false);
   let historyAnimTimer: ReturnType<typeof setTimeout> | null = null;
@@ -86,6 +96,8 @@
   let isWindowVisible = $state(false);
   let isWindows = $state(false);
   let isMac = $state(false);
+  let isLinux = $state(false);
+  let ttsAvailable = $state(false);
 
   async function toggleAutoStart() {
     const next = !autoStartEnabled;
@@ -117,6 +129,14 @@
       if (typeof navigator !== "undefined") {
         isWindows = navigator.userAgent.includes("Windows");
         isMac = navigator.userAgent.includes("Mac");
+        isLinux =
+          navigator.userAgent.includes("Linux") &&
+          !navigator.userAgent.includes("Android");
+      }
+      if (typeof window !== "undefined") {
+        ttsAvailable =
+          "speechSynthesis" in window &&
+          typeof SpeechSynthesisUtterance !== "undefined";
       }
 
       // Listen for window_shown event from Rust
@@ -150,19 +170,20 @@
       });
     })();
 
-    // Handle Escape key globally
-    const handleKeydown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        hideWindow();
-      }
-    };
-    window.addEventListener("keydown", handleKeydown);
-
     return () => {
       if (unlistenShown) unlistenShown();
       if (unlistenFocus) unlistenFocus();
-      window.removeEventListener("keydown", handleKeydown);
     };
+  });
+
+  onMount(() => {
+    getVersion()
+      .then((version) => {
+        appVersion = version;
+      })
+      .catch((err) => {
+        console.warn("Failed to read app version", err);
+      });
   });
 
   function detectLanguageSimple(text: string) {
@@ -170,9 +191,17 @@
     const hasHiraganaKatakana = /[\u3040-\u30ff]/.test(text);
     if (hasHiraganaKatakana) return "日本語";
 
-    // 漢字のみの場合は日本語として扱う（簡易判定）
+    // ハングルが含まれていれば韓国語
+    const hasHangul = /[\uac00-\ud7af]/.test(text);
+    if (hasHangul) return "韓国語";
+
+    // 漢字のみの場合は句読点等で判定
     const hasKanji = /[\u4e00-\u9faf]/.test(text);
-    if (hasKanji) return "日本語";
+    if (hasKanji) {
+      const hasJapanesePunct = /[「」『』。、・《》]/.test(text);
+      if (hasJapanesePunct) return "日本語";
+      return "中国語";
+    }
 
     return "英語";
   }
@@ -258,185 +287,12 @@
     }
   });
 
-  const availableModels: { label: string; value: string; provider: string }[] =
-    [
-      // OpenAI
-      { label: "GPT-5.2", value: "gpt-5.2", provider: "openai" },
-      { label: "GPT-5.2 Pro", value: "gpt-5.2-pro", provider: "openai" },
-      { label: "GPT-5.1", value: "gpt-5.1", provider: "openai" },
-      { label: "GPT-5-Mini", value: "gpt-5-mini", provider: "openai" },
-      { label: "GPT-5-Nano", value: "gpt-5-nano", provider: "openai" },
-      { label: "GPT-4.1", value: "gpt-4.1", provider: "openai" },
-      { label: "GPT-4.1-Mini", value: "gpt-4.1-mini", provider: "openai" },
-      { label: "GPT-4.1-Nano", value: "gpt-4.1-nano", provider: "openai" },
-      { label: "o3-pro", value: "o3-pro", provider: "openai" },
-      // Google Gemini
-      { label: "Gemini 2.5 Pro", value: "gemini-2.5-pro", provider: "gemini" },
-      {
-        label: "Gemini 2.5 Flash",
-        value: "gemini-2.5-flash",
-        provider: "gemini",
-      },
-      {
-        label: "Gemini 2.5 Flash-Lite",
-        value: "gemini-2.5-flash-lite",
-        provider: "gemini",
-      },
-      { label: "Gemini 3 Pro", value: "gemini-3-pro", provider: "gemini" },
-      { label: "Gemini 3 Flash", value: "gemini-3-flash", provider: "gemini" },
-      // Anthropic Claude
-      {
-        label: "Claude Opus 4.5",
-        value: "claude-opus-4.5",
-        provider: "anthropic",
-      },
-      {
-        label: "Claude Sonnet 4.5",
-        value: "claude-sonnet-4.5",
-        provider: "anthropic",
-      },
-      {
-        label: "Claude Haiku 4.5",
-        value: "claude-haiku-4.5",
-        provider: "anthropic",
-      },
-      // Groq (OpenAI-compatible)
-      {
-        label: "Llama 4 Maverick 17B",
-        value: "meta-llama/llama-4-maverick-17b-128e-instruct",
-        provider: "groq",
-      },
-      {
-        label: "Llama 4 Scout 17B",
-        value: "meta-llama/llama-4-scout-17b-16e-instruct",
-        provider: "groq",
-      },
-      {
-        label: "Llama Guard 4 12B",
-        value: "meta-llama/llama-guard-4-12b",
-        provider: "groq",
-      },
-      {
-        label: "Llama 3.3 70B Versatile",
-        value: "llama-3.3-70b-versatile",
-        provider: "groq",
-      },
-      {
-        label: "Llama 3.1 70B Versatile",
-        value: "llama-3.1-70b-versatile",
-        provider: "groq",
-      },
-      {
-        label: "Llama 3.1 8B Instant",
-        value: "llama-3.1-8b-instant",
-        provider: "groq",
-      },
-      {
-        label: "Llama Guard 3 8B",
-        value: "llama-guard-3-8b",
-        provider: "groq",
-      },
-      {
-        label: "Llama 3 70B 8192",
-        value: "llama3-70b-8192",
-        provider: "groq",
-      },
-      {
-        label: "Llama 3 8B 8192",
-        value: "llama3-8b-8192",
-        provider: "groq",
-      },
-      {
-        label: "GPT-OSS 120B",
-        value: "openai/gpt-oss-120b",
-        provider: "groq",
-      },
-      {
-        label: "GPT-OSS 20B",
-        value: "openai/gpt-oss-20b",
-        provider: "groq",
-      },
-      {
-        label: "Kimi K2 Instruct",
-        value: "moonshotai/kimi-k2-instruct",
-        provider: "groq",
-      },
-      {
-        label: "Kimi K2 Instruct 0905",
-        value: "moonshotai/kimi-k2-instruct-0905",
-        provider: "groq",
-      },
-      {
-        label: "Qwen 3 32B",
-        value: "qwen/qwen3-32b",
-        provider: "groq",
-      },
-      {
-        label: "Qwen QwQ 32B",
-        value: "qwen-qwq-32b",
-        provider: "groq",
-      },
-      {
-        label: "Mistral Saba 24B",
-        value: "mistral-saba-24b",
-        provider: "groq",
-      },
-      {
-        label: "Gemma 2 9B IT",
-        value: "gemma2-9b-it",
-        provider: "groq",
-      },
-      {
-        label: "DeepSeek R1 Distill Llama 70B",
-        value: "deepseek-r1-distill-llama-70b",
-        provider: "groq",
-      },
-      // Cerebras (OpenAI-compatible)
-      {
-        label: "Llama 4 Scout 17B",
-        value: "llama-4-scout-17b-16e-instruct",
-        provider: "cerebras",
-      },
-      {
-        label: "Llama 3.3 70B",
-        value: "llama-3.3-70b",
-        provider: "cerebras",
-      },
-      {
-        label: "Llama 3.1 8B",
-        value: "llama3.1-8b",
-        provider: "cerebras",
-      },
-      {
-        label: "GPT-OSS 120B",
-        value: "gpt-oss-120b",
-        provider: "cerebras",
-      },
-      {
-        label: "Qwen 3 32B",
-        value: "qwen-3-32b",
-        provider: "cerebras",
-      },
-      {
-        label: "Qwen 3 235B Instruct (Preview)",
-        value: "qwen-3-235b-a22b-instruct-2507",
-        provider: "cerebras",
-      },
-      {
-        label: "Z.ai GLM 4.6 (Preview)",
-        value: "zai-glm-4.6",
-        provider: "cerebras",
-      },
-      {
-        label: "Z.ai GLM 4.7 (Preview)",
-        value: "zai-glm-4.7",
-        provider: "cerebras",
-      },
-    ];
+  let availableModels = $state([...AI_MODELS]);
 
   let filteredModels = $derived(
     availableModels.filter((m) => m.provider === selectedProvider),
   );
+
 
   async function detectWindowMode() {
     const params = new URLSearchParams(window.location.search);
@@ -488,42 +344,7 @@
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (parsed.model) {
-          selectedModel = parsed.model;
-          const found = availableModels.find((m) => m.value === selectedModel);
-          if (found) {
-            selectedProvider = found.provider as any;
-          }
-        }
-        if (parsed.apiKeys) apiKeys = { ...apiKeys, ...parsed.apiKeys };
-        if (parsed.defaultTargetLang)
-          defaultTargetLang = parsed.defaultTargetLang;
-        if (parsed.theme) theme = parsed.theme;
-        if (parsed.appLanguage) appLanguage = parsed.appLanguage;
-        // customStyles removed from settings to avoid conflict with dedicated storage
-        if (parsed.allowRewrite !== undefined)
-          allowRewrite = parsed.allowRewrite;
-        if (parsed.quickShortcut) quickShortcut = parsed.quickShortcut;
-        if (parsed.autoRunQuick !== undefined)
-          autoRunQuick = parsed.autoRunQuick;
-        if (parsed.autoStartEnabled !== undefined)
-          autoStartEnabled = parsed.autoStartEnabled;
-        if (parsed.startMinimized !== undefined)
-          startMinimized = parsed.startMinimized;
-        if (parsed.lastSelectedModels)
-          lastSelectedModels = {
-            ...lastSelectedModels,
-            ...parsed.lastSelectedModels,
-          };
-        if (parsed.ocrEngine) ocrEngine = parsed.ocrEngine;
-        if (
-          parsed.translationCount &&
-          [1, 2, 3].includes(parsed.translationCount)
-        )
-          translationCount = parsed.translationCount;
-
-        // Apply theme on load
-        document.documentElement.setAttribute("data-theme", theme);
+        applySettingsFromParsed(parsed);
       } catch (e) {
         console.warn("Failed to parse saved settings", e);
       }
@@ -637,6 +458,8 @@
         });
       });
     }
+
+    settingsReady = true;
   });
 
   // Service Integration
@@ -679,6 +502,8 @@
               sourceText: p.inputQuery || inputQuery,
               sourceLang: p.detectedLang || p.sourceLang || sourceLang,
               targetLang: p.targetLang || targetLang,
+              isAutoDetect: isAutoDetect,
+              detectedLang: p.detectedLang || detectedLang || "",
               translations: p.translations.map((t: any) => ({
                 text: t.text,
                 reason: t.reason,
@@ -723,6 +548,9 @@
           detailedExplanation = null;
           showExplanation = false;
         }
+        if ("errorMessage" in p) {
+          errorMessage = p.errorMessage || "";
+        }
         if (p.inputQuery && p.inputQuery !== inputQuery) {
           inputQuery = p.inputQuery;
         }
@@ -752,7 +580,9 @@
         }
 
         // Sync Metrics
-        techMetrics = p.techMetrics;
+        if (p.techMetrics) {
+          syncTechMetrics(p.techMetrics);
+        }
 
         // Auto-resize if needed
         void tick().then(autoResize);
@@ -766,13 +596,15 @@
 
   // Poll for pending text when window gets focus (for compact mode)
   onMount(() => {
-    let intervalId: ReturnType<typeof setInterval> | null = null;
+    let pollTimeoutId: ReturnType<typeof setTimeout> | null = null;
     let hasReceivedText = false;
     let checkCount = 0;
+    let pollStart = Date.now();
+    const POLL_INTERVAL_MS = 100;
 
-    async function checkPendingText() {
+    async function checkPendingText(): Promise<boolean> {
       // Don't consume pending text if we are navigating to main window
-      if (isOpeningMain) return;
+      if (isOpeningMain) return false;
 
       try {
         let text: string | null = null;
@@ -794,11 +626,7 @@
             await handleHandover(text);
           }
 
-          // Stop polling once we got text
-          if (intervalId) {
-            clearInterval(intervalId);
-            intervalId = null;
-          }
+          return true;
         } else {
           // If no text after first check, clear the UI for fresh start
           checkCount++;
@@ -810,43 +638,38 @@
             showExplanation = false;
             isTranslating = false;
             errorMessage = "";
-            techMetrics = {
-              time: 0,
-              waitTime: 0,
-              genTime: 0,
-              model: "",
-              inputTokens: 0,
-              outputTokens: 0,
-              tokensPerSec: 0,
-              isReal: false,
-              firstTokenReceived: false,
-            };
+            resetTechMetrics();
             autoScrollEnabled = true;
           }
         }
       } catch (error) {
         // Ignore errors (command may not exist in web mode)
       }
+      return false;
     }
+
+    const scheduleNextPoll = () => {
+      if (!isCompactMode) return;
+      if (pollTimeoutId) {
+        clearTimeout(pollTimeoutId);
+        pollTimeoutId = null;
+      }
+      pollTimeoutId = setTimeout(async () => {
+        if (Date.now() - pollStart > 3000) return;
+        const got = await checkPendingText();
+        if (!got) {
+          scheduleNextPoll();
+        }
+      }, POLL_INTERVAL_MS);
+    };
 
     // Check immediately (Run once for BOTH modes to catch handover/initial data)
-    void checkPendingText();
-
-    // Check immediately if we are in compact mode
-    if (isCompactMode) {
-      // Also check periodically (in case window was already visible)
-      intervalId = setInterval(() => {
-        void checkPendingText();
-      }, 100);
-    }
-
-    // Stop polling after 3 seconds if nothing received
-    setTimeout(() => {
-      if (intervalId) {
-        clearInterval(intervalId);
-        intervalId = null;
+    pollStart = Date.now();
+    void checkPendingText().then((got) => {
+      if (isCompactMode && !got) {
+        scheduleNextPoll();
       }
-    }, 3000);
+    });
 
     // Note: We don't need a focus handler for compact mode
     // The text_captured event already handles window opening/text updates
@@ -907,7 +730,7 @@
     });
 
     return async () => {
-      if (intervalId) clearInterval(intervalId);
+      if (pollTimeoutId) clearTimeout(pollTimeoutId);
       const unlisten = await unlistenPromise;
       unlisten();
       const unlistenHandover = await unlistenHandoverPromise;
@@ -934,20 +757,7 @@
       if (!event.newValue) return;
       try {
         const parsed = JSON.parse(event.newValue);
-        if (parsed.model) {
-          selectedModel = parsed.model;
-          const found = availableModels.find((m) => m.value === selectedModel);
-          if (found) {
-            selectedProvider = found.provider as any;
-          }
-        }
-        if (parsed.apiKeys) apiKeys = { ...apiKeys, ...parsed.apiKeys };
-        if (parsed.defaultTargetLang)
-          defaultTargetLang = parsed.defaultTargetLang;
-        if (parsed.theme) theme = parsed.theme;
-        if (parsed.appLanguage) appLanguage = parsed.appLanguage;
-        if (parsed.allowRewrite !== undefined)
-          allowRewrite = parsed.allowRewrite;
+        applySettingsFromParsed(parsed);
         if (parsed.quickShortcut) {
           const isMac = navigator.userAgent.includes("Mac");
           quickShortcut = parsed.quickShortcut.replace(
@@ -956,25 +766,6 @@
           );
           shortcutDraft = quickShortcut;
         }
-        if (parsed.autoRunQuick !== undefined)
-          autoRunQuick = parsed.autoRunQuick;
-        if (parsed.autoStartEnabled !== undefined)
-          autoStartEnabled = parsed.autoStartEnabled;
-        if (parsed.startMinimized !== undefined)
-          startMinimized = parsed.startMinimized;
-        if (parsed.lastSelectedModels)
-          lastSelectedModels = {
-            ...lastSelectedModels,
-            ...parsed.lastSelectedModels,
-          };
-        if (parsed.ocrEngine) ocrEngine = parsed.ocrEngine;
-        if (
-          parsed.translationCount &&
-          [1, 2, 3].includes(parsed.translationCount)
-        )
-          translationCount = parsed.translationCount;
-
-        document.documentElement.setAttribute("data-theme", theme);
         console.log("[Sync] Settings updated from storage event");
       } catch (e) {
         console.warn("Failed to sync settings", e);
@@ -1003,20 +794,33 @@
 
   // Auto-save settings when changed
   $effect(() => {
+    if (!settingsReady) return;
+    const sanitizedApiKeys = rememberApiKeys
+      ? apiKeys
+      : {
+          gemini: "",
+          openai: "",
+          anthropic: "",
+          groq: "",
+          cerebras: "",
+        };
     const settings = {
       model: selectedModel,
-      apiKeys: apiKeys,
+      provider: selectedProvider,
+      apiKeys: sanitizedApiKeys,
       defaultTargetLang: defaultTargetLang,
       theme: theme,
       appLanguage: appLanguage,
       // customStyles: customStyles, // Removed from general settings, saved separately
       allowRewrite: allowRewrite,
+      rememberApiKeys: rememberApiKeys,
       quickShortcut: quickShortcut,
       autoRunQuick: autoRunQuick,
       autoStartEnabled: autoStartEnabled,
       startMinimized: startMinimized,
       lastSelectedModels: lastSelectedModels,
       translationCount: translationCount,
+      clipboardOpsEnabled: clipboardOpsEnabled,
       ocrEngine: ocrEngine,
     };
     localStorage.setItem("howlingual_settings", JSON.stringify(settings));
@@ -1032,6 +836,13 @@
     }
 
     // console.log("[Settings] Auto-saved");
+  });
+
+  $effect(() => {
+    if (!settingsReady) return;
+    invoke("set_clipboard_ops_enabled", { enabled: clipboardOpsEnabled }).catch(
+      (e) => console.warn("Failed to set clipboard ops enabled", e),
+    );
   });
 
   // Style levels: 0 = オフ, 1 = 弱, 2 = 強（IDベースで管理）
@@ -1068,6 +879,108 @@
     }
     return result;
   };
+
+  let settingsReady = $state(false);
+
+  function syncProviderAndModel(model?: string, provider?: string) {
+    const entry = getModelEntry(model);
+    if (entry) {
+      selectedModel = entry.value as AiModel;
+      selectedProvider = entry.provider;
+      return;
+    }
+
+    if (model) {
+      selectedModel = model as AiModel;
+      const inferred =
+        getProviderForModel(model) ||
+        (provider && isAiProvider(provider) ? provider : null);
+      if (inferred) {
+        selectedProvider = inferred;
+      }
+      return;
+    }
+
+    if (provider && isAiProvider(provider)) {
+      selectedProvider = provider;
+      const fallback =
+        lastSelectedModels[provider] ?? getDefaultModelForProvider(provider);
+      if (fallback) {
+        selectedModel = fallback as AiModel;
+      }
+    }
+  }
+
+  function ensureModelMatchesProvider() {
+    const valid = availableModels.some(
+      (m) => m.provider === selectedProvider && m.value === selectedModel,
+    );
+    if (!valid) {
+      const fallback =
+        lastSelectedModels[selectedProvider] ??
+        getDefaultModelForProvider(selectedProvider);
+      if (fallback) {
+        selectedModel = fallback as AiModel;
+      }
+    }
+  }
+
+  function applySettingsFromParsed(parsed: any) {
+    if (!parsed || typeof parsed !== "object") return;
+
+    if (parsed.lastSelectedModels) {
+      lastSelectedModels = {
+        ...lastSelectedModels,
+        ...parsed.lastSelectedModels,
+      };
+    }
+
+    if (parsed.model || parsed.provider) {
+      syncProviderAndModel(parsed.model, parsed.provider);
+    } else {
+      ensureModelMatchesProvider();
+    }
+
+    if (selectedProvider && selectedModel) {
+      if (lastSelectedModels[selectedProvider] !== selectedModel) {
+        lastSelectedModels = {
+          ...lastSelectedModels,
+          [selectedProvider]: selectedModel,
+        };
+      }
+    }
+
+    if (parsed.rememberApiKeys !== undefined)
+      rememberApiKeys = parsed.rememberApiKeys;
+    const shouldApplyKeys =
+      parsed.rememberApiKeys !== undefined
+        ? parsed.rememberApiKeys
+        : rememberApiKeys;
+    if (parsed.apiKeys && shouldApplyKeys) {
+      apiKeys = { ...apiKeys, ...parsed.apiKeys };
+    }
+    if (parsed.defaultTargetLang)
+      defaultTargetLang = parsed.defaultTargetLang;
+    if (parsed.theme) theme = parsed.theme;
+    if (parsed.appLanguage) appLanguage = parsed.appLanguage;
+    if (parsed.allowRewrite !== undefined) allowRewrite = parsed.allowRewrite;
+    if (parsed.quickShortcut) quickShortcut = parsed.quickShortcut;
+    if (parsed.autoRunQuick !== undefined) autoRunQuick = parsed.autoRunQuick;
+    if (parsed.autoStartEnabled !== undefined)
+      autoStartEnabled = parsed.autoStartEnabled;
+    if (parsed.startMinimized !== undefined)
+      startMinimized = parsed.startMinimized;
+    if (parsed.clipboardOpsEnabled !== undefined)
+      clipboardOpsEnabled = parsed.clipboardOpsEnabled;
+    if (parsed.ocrEngine) ocrEngine = parsed.ocrEngine;
+    if (
+      parsed.translationCount &&
+      [1, 2, 3].includes(parsed.translationCount)
+    )
+      translationCount = parsed.translationCount;
+
+    document.documentElement.setAttribute("data-theme", theme);
+  }
 
   let styleLevels: Record<string, number> = $state(
     normalizeStyleLevels({}, customStyles),
@@ -1128,7 +1041,10 @@
 
   function selectProvider(provider: AiProvider) {
     // 現在のモデルを現在のプロバイダに保存
-    lastSelectedModels[selectedProvider] = selectedModel;
+    lastSelectedModels = {
+      ...lastSelectedModels,
+      [selectedProvider]: selectedModel,
+    };
 
     selectedProvider = provider;
 
@@ -1146,13 +1062,71 @@
     }
 
     // フォールバック: プロバイダの最初のモデルを選択
-    const defaultForProvider = availableModels.find(
-      (m) => m.provider === provider,
-    );
-    if (defaultForProvider) {
-      selectedModel = defaultForProvider.value as AiModel;
+    const fallback = getDefaultModelForProvider(provider);
+    if (fallback) {
+      selectedModel = fallback as AiModel;
     }
   }
+
+  const PROVIDER_DOCS: { provider: AiProvider; label: string; url: string }[] =
+    [
+      {
+        provider: "openai",
+        label: "OpenAI",
+        url: "https://platform.openai.com/docs/overview",
+      },
+      {
+        provider: "gemini",
+        label: "Gemini",
+        url: "https://ai.google.dev/docs/gemini_api_overview",
+      },
+      {
+        provider: "anthropic",
+        label: "Anthropic",
+        url: "https://platform.claude.com/docs/en/api/overview",
+      },
+      {
+        provider: "groq",
+        label: "Groq",
+        url: "https://console.groq.com/docs",
+      },
+      {
+        provider: "cerebras",
+        label: "Cerebras",
+        url: "https://inference-docs.cerebras.ai/",
+      },
+    ];
+
+  function getProviderDoc(provider: AiProvider) {
+    return PROVIDER_DOCS.find((doc) => doc.provider === provider) || null;
+  }
+
+  let selectedProviderDoc = $derived(getProviderDoc(selectedProvider));
+
+  async function openProviderDocs(url: string) {
+    try {
+      await openUrl(url);
+    } catch (error) {
+      console.warn("Failed to open provider docs:", error);
+      if (typeof window !== "undefined") {
+        try {
+          window.open(url, "_blank", "noopener");
+        } catch {}
+      }
+    }
+  }
+
+  $effect(() => {
+    const provider = selectedProvider;
+    const model = selectedModel;
+    if (!provider || !model) return;
+    if (lastSelectedModels[provider] !== model) {
+      lastSelectedModels = {
+        ...lastSelectedModels,
+        [provider]: model,
+      };
+    }
+  });
 
   let slideDirection = $state(1);
   const settingsTabOrder = [
@@ -1377,7 +1351,7 @@
   }
 
   async function startOCR() {
-    if (isMac && !permissions.screen_recording) {
+    if (isMac && permissions.screen_recording === false) {
       await requestPermission("screen_recording");
       errorMessage = (t(appLanguage, "screenRecording") || "画面収録") + " " + (t(appLanguage, "denied") || "未許可") + "\n\n" + (t(appLanguage, "ocrHighAccuracyDesc") ? "System Settings > Privacy & Security > Screen Recording" : "システム設定 > プライバシーとセキュリティ > 画面収録 から、\nHowlingualに画面収録の許可を与えてください。");
       // Actually, let's use a more direct message if we don't have a specific i18n key for the instruction yet
@@ -1397,6 +1371,7 @@
     } catch (e) {
       console.error("[UI] OCR trigger failed:", e);
       errorMessage = "OCR Error: " + String(e);
+      isWaitingForOCR = false;
     }
   }
 
@@ -1486,7 +1461,9 @@
             customStyles,
           );
         }
-        if (data.techMetrics) techMetrics = { ...techMetrics, ...data.techMetrics };
+        if (data.techMetrics) {
+          syncTechMetrics({ ...techMetrics, ...data.techMetrics });
+        }
         if (typeof data.showTechInfo === "boolean") {
           showTechInfo = data.showTechInfo;
         }
@@ -1511,28 +1488,18 @@
     // Clear ALL previous state when new text arrives
     inputQuery = ""; // Clear first to force reactivity
     // Pre-populate empty translation slots (so card backgrounds are visible)
-    translations = [
-      { id: 1, text: "", reason: "" },
-      { id: 2, text: "", reason: "" },
-      { id: 3, text: "", reason: "" },
-    ];
+    translations = Array.from({ length: translationCount }, (_, i) => ({
+      id: i + 1,
+      text: "",
+      reason: "",
+    }));
     detailedExplanation = null;
     showExplanation = false;
     errorMessage = "";
     autoScrollEnabled = true;
     lastStreamCharCount = 0;
     // Reset tech metrics
-    techMetrics = {
-      time: 0,
-      waitTime: 0,
-      genTime: 0,
-      model: "",
-      inputTokens: 0,
-      outputTokens: 0,
-      tokensPerSec: 0,
-      isReal: false,
-      firstTokenReceived: false,
-    };
+    resetTechMetrics();
     isStackExpanded = false; // Reset stack state
 
     await tick();
@@ -1613,6 +1580,26 @@
     scheduleSyncSharedState();
   }
 
+  async function clearInput() {
+    if (isTranslating) {
+      await stopTranslation();
+    }
+    inputQuery = "";
+    translations = [];
+    detailedExplanation = null;
+    showExplanation = false;
+    errorMessage = "";
+    lastStreamCharCount = 0;
+    autoScrollEnabled = true;
+    isStackExpanded = false;
+    if (isAutoDetect) {
+      detectedLang = "";
+      isDetecting = false;
+    }
+    resetTechMetrics();
+    await syncSharedState(true);
+  }
+
   async function syncShortcut() {
     try {
       await invoke("update_shortcut", { shortcut: quickShortcut });
@@ -1649,69 +1636,9 @@
   // Use selected model for translations (instead of env variable)
   let currentModel = $derived(
     selectedModel ||
+      (getDefaultModelForProvider(selectedProvider) as AiModel) ||
       ((import.meta.env.VITE_PREFERRED_MODEL || "gemini-1.5-flash") as AiModel),
   );
-
-  // Streaming-compatible models by provider
-  const streamingModels: Record<string, string[]> = {
-    groq: [
-      "meta-llama/llama-4-maverick-17b-128e-instruct",
-      "meta-llama/llama-4-scout-17b-16e-instruct",
-      "llama-3.3-70b-versatile",
-      "llama-3.1-70b-versatile",
-      "llama-3.1-8b-instant",
-      "llama3-70b-8192",
-      "llama3-8b-8192",
-      "openai/gpt-oss-120b",
-      "openai/gpt-oss-20b",
-      "moonshotai/kimi-k2-instruct",
-      "moonshotai/kimi-k2-instruct-0905",
-      "qwen/qwen3-32b",
-      "qwen-qwq-32b",
-      "mistral-saba-24b",
-      "gemma2-9b-it",
-      "deepseek-r1-distill-llama-70b",
-    ],
-    cerebras: [
-      "llama-4-scout-17b-16e-instruct",
-      "llama-3.3-70b",
-      "llama3.1-8b",
-      "gpt-oss-120b",
-      "qwen-3-32b",
-      "qwen-3-235b-a22b-instruct-2507",
-      "zai-glm-4.6",
-      "zai-glm-4.7",
-    ],
-    openai: [
-      "gpt-5.2",
-      "gpt-5.2-pro",
-      "gpt-5.1",
-      "gpt-5-mini",
-      "gpt-5-nano",
-      "gpt-4.1",
-      "gpt-4.1-mini",
-      "gpt-4.1-nano",
-      "o3-pro",
-    ],
-    gemini: [
-      "gemini-2.5-pro",
-      "gemini-2.5-flash",
-      "gemini-2.5-flash-lite",
-      "gemini-3-pro",
-      "gemini-3-flash",
-    ],
-    anthropic: [
-      "claude-opus-4.5",
-      "claude-sonnet-4.5",
-      "claude-haiku-4.5",
-    ],
-  };
-
-  function isStreamingModel(): boolean {
-    const provider = selectedProvider;
-    const models = streamingModels[provider] || [];
-    return models.includes(selectedModel as string);
-  }
 
   let inputQuery = $state("");
 
@@ -1736,6 +1663,7 @@
   ];
 
   let isSparkling = $state(false);
+  let canReplaceSelection = $derived(clipboardOpsEnabled && !isLinux);
 
   function applySourceLangFromSync(lang: string, detected?: string) {
     if (lang === AUTO_DETECT_LABEL) {
@@ -1843,18 +1771,28 @@
   let replacedId: number | null = $state(null);
   let actionMenuOpenId: number | null = $state(null);
 
-  function handleCopy(id: number, text: string) {
+  async function handleCopy(id: number, text: string) {
     console.log(`[UI] Copy triggered for ID: ${id}`);
-    navigator.clipboard.writeText(text);
-    copiedId = id;
-    setTimeout(() => {
-      copiedId = null;
-    }, 1500);
+    try {
+      await navigator.clipboard.writeText(text);
+      copiedId = id;
+      setTimeout(() => {
+        copiedId = null;
+      }, 1500);
+    } catch (error) {
+      console.warn("Copy failed:", error);
+    }
   }
 
   async function handleReplace(id: number, text: string) {
     console.log(`[UI] Replace triggered for ID: ${id}`);
     actionMenuOpenId = null;
+    if (!canReplaceSelection) {
+      errorMessage = isLinux
+        ? t(appLanguage, "replaceUnavailableLinux")
+        : t(appLanguage, "clipboardOpsDisabled");
+      return;
+    }
     try {
       await invoke("replace_selection", { text });
       replacedId = id;
@@ -1887,7 +1825,10 @@
   }
 
   function handleSpeak(id: number, text: string, lang: string) {
-    if (!window.speechSynthesis) return;
+    if (!ttsAvailable) {
+      errorMessage = t(appLanguage, "ttsUnavailable");
+      return;
+    }
 
     // If already speaking THIS card, stop it
     if (isSpeakingId === id) {
@@ -2220,8 +2161,8 @@
 
   // ====== Permission State (macOS only) ======
   let permissions = $state({
-    screen_recording: true,
-    accessibility: true,
+    screen_recording: null as boolean | null,
+    accessibility: null as boolean | null,
   });
 
   async function checkPermissions() {
@@ -2259,6 +2200,8 @@
     sourceText: string;
     sourceLang: string;
     targetLang: string;
+    isAutoDetect?: boolean;
+    detectedLang?: string;
     translations: { text: string; reason: string }[];
     detailedExplanation?: {
       points: { term: string; explanation: string }[];
@@ -2303,10 +2246,28 @@
     }, 600);
   }
 
+  function buildFavoriteKey(item: {
+    sourceText: string;
+    translations: { text: string; reason: string }[];
+  }): string {
+    const normalizedTranslations = (item.translations || [])
+      .map((t) => ({
+        text: t.text || "",
+        reason: t.reason || "",
+      }))
+      .sort((a, b) =>
+        (a.text + a.reason).localeCompare(b.text + b.reason),
+      );
+    return JSON.stringify({
+      sourceText: item.sourceText || "",
+      translations: normalizedTranslations,
+    });
+  }
+
   function toggleFavorite(item: HistoryItem) {
-    // Check by id first for history list, fallback to sourceText for main screen
+    const itemKey = buildFavoriteKey(item);
     const existingIdx = favorites.findIndex(
-      (f) => f.id === item.id || f.sourceText === item.sourceText,
+      (f) => f.id === item.id || buildFavoriteKey(f) === itemKey,
     );
     if (existingIdx >= 0) {
       favorites = favorites.filter((_, i) => i !== existingIdx);
@@ -2321,10 +2282,22 @@
   }
 
   function isFavorited(sourceText: string): boolean {
-    return favorites.some((f) => f.sourceText === sourceText);
+    const key = buildFavoriteKey({
+      sourceText,
+      translations: translations.map((t) => ({
+        text: t.text,
+        reason: t.reason,
+      })),
+    });
+    return favorites.some((f) => buildFavoriteKey(f) === key);
   }
 
   function isFavoritedById(id: string): boolean {
+    const item = history.find((h) => h.id === id);
+    if (item) {
+      const key = buildFavoriteKey(item);
+      return favorites.some((f) => f.id === id || buildFavoriteKey(f) === key);
+    }
     return favorites.some((f) => f.id === id);
   }
 
@@ -2407,10 +2380,18 @@
     if (languages.includes(item.targetLang)) {
       targetLang = item.targetLang;
     }
-    if (item.sourceLang === "自動検出") {
-      selectSourceLang(null);
+    const shouldAutoDetect =
+      item.isAutoDetect ?? item.sourceLang === AUTO_DETECT_LABEL;
+    if (shouldAutoDetect) {
+      isAutoDetect = true;
+      sourceLang = AUTO_DETECT_LABEL;
+      detectedLang = item.detectedLang || "";
+      isDetecting = false;
     } else if (languages.includes(item.sourceLang)) {
-      selectSourceLang(item.sourceLang);
+      isAutoDetect = false;
+      sourceLang = item.sourceLang;
+      detectedLang = "";
+      isDetecting = false;
     }
 
     // Restore style levels
@@ -2513,16 +2494,77 @@
     }
   });
 
-  let techMetrics = $state({
+  type TechMetrics = {
+    time: number;
+    waitTime: number; // Time until first token
+    genTime: number; // Time for generation after first token
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    tokensPerSec: number;
+    streamMode: boolean;
+    isReal: boolean;
+    firstTokenReceived: boolean;
+  };
+
+  const EMPTY_TECH_METRICS: TechMetrics = {
     time: 0,
-    waitTime: 0, // Time until first token
-    genTime: 0, // Time for generation after first token
+    waitTime: 0,
+    genTime: 0,
     model: "",
     inputTokens: 0,
     outputTokens: 0,
     tokensPerSec: 0,
+    streamMode: true,
     isReal: false,
     firstTokenReceived: false,
+  };
+
+  let techMetrics = $state<TechMetrics>({ ...EMPTY_TECH_METRICS });
+  let techMetricsBaseTime = 0;
+  let techMetricsLastSyncAt = 0;
+
+  function syncTechMetrics(next: TechMetrics) {
+    const now = Date.now();
+    let merged = next;
+    if (next.time < techMetrics.time && next.time > 0) {
+      merged = {
+        ...next,
+        time: techMetrics.time,
+        waitTime: techMetrics.waitTime,
+        genTime: techMetrics.genTime,
+      };
+    }
+    techMetrics = merged;
+    techMetricsBaseTime = merged.time ?? 0;
+    techMetricsLastSyncAt = now;
+  }
+
+  function resetTechMetrics() {
+    syncTechMetrics({ ...EMPTY_TECH_METRICS });
+  }
+
+  onMount(() => {
+    const interval = setInterval(() => {
+      if (!isTranslating || techMetricsLastSyncAt === 0) return;
+      const elapsed = (Date.now() - techMetricsLastSyncAt) / 1000;
+      const time = techMetricsBaseTime + elapsed;
+      if (time <= techMetrics.time) return;
+      techMetrics.time = time;
+      if (techMetrics.firstTokenReceived) {
+        techMetrics.genTime = Math.max(0, time - techMetrics.waitTime);
+        if (techMetrics.genTime > 0) {
+          techMetrics.tokensPerSec = techMetrics.outputTokens / techMetrics.genTime;
+        }
+      } else {
+        techMetrics.waitTime = time;
+        techMetrics.genTime = 0;
+      }
+    }, 100);
+
+    return () => {
+      clearInterval(interval);
+    };
   });
 
   type DailyUsage = {
@@ -2742,17 +2784,6 @@
       console.error("Translation failed:", error);
       errorMessage = "Translation failed: " + String(error);
       isTranslating = false;
-    } finally {
-      // Ensure isTranslating is properly reset
-      if (isTranslating) {
-        // Wait a bit to ensure all streaming is complete
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-      
-      // Mark translation as complete and update tracking variable
-      isTranslating = false;
-      lastTranslatedText = inputQuery;
-      showExplanation = Boolean(detailedExplanation?.points?.length);
     }
   }
 
@@ -2946,13 +2977,14 @@
               </svg>
             {/if}
             {#if isAutoDetect && detectedLang && translations.length > 0}
-              {detectedLang} - {t(appLanguage, "detected")}
+              {getTargetLanguageName(appLanguage, detectedLang)} -
+              {t(appLanguage, "detected")}
             {:else if isAutoDetect && isDetecting}
               {t(appLanguage, "detecting")}
             {:else if isAutoDetect}
               {t(appLanguage, "autoDetect")}
             {:else}
-              {sourceLang}
+              {getTargetLanguageName(appLanguage, sourceLang)}
             {/if}
             <svg
               class="chevron-icon"
@@ -2997,7 +3029,7 @@
                     d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
                   ></path>
                 </svg>
-                自動検出
+                {t(appLanguage, "autoDetect")}
               </button>
               <div class="menu-divider"></div>
               {#each languages as lang}
@@ -3005,7 +3037,8 @@
                   class="lang-option {!isAutoDetect && lang === sourceLang
                     ? 'active'
                     : ''}"
-                  onclick={() => selectSourceLang(lang)}>{lang}</button
+                  onclick={() => selectSourceLang(lang)}
+                  >{getTargetLanguageName(appLanguage, lang)}</button
                 >
               {/each}
             </div>
@@ -3035,7 +3068,7 @@
               showSourceLangMenu = false;
             }}
           >
-            {targetLang}
+            {getTargetLanguageName(appLanguage, targetLang)}
             <svg
               class="chevron-icon"
               width="10"
@@ -3057,7 +3090,8 @@
               {#each languages as lang}
                 <button
                   class="lang-option {lang === targetLang ? 'active' : ''}"
-                  onclick={() => selectTargetLang(lang)}>{lang}</button
+                  onclick={() => selectTargetLang(lang)}
+                  >{getTargetLanguageName(appLanguage, lang)}</button
                 >
               {/each}
             </div>
@@ -3083,7 +3117,7 @@
               {#if inputQuery.trim()}
                 <button
                   class="textarea-action-btn"
-                  onclick={() => (inputQuery = "")}
+                  onclick={clearInput}
                   title={t(appLanguage, "clearText") || "テキストをクリア"}
                 >
                   <svg
@@ -3310,15 +3344,17 @@
                   {techMetrics.waitTime.toFixed(2)}s
                 {/if}
               </span>
-              <span class="tech-divider">→</span>
-              <span class="tech-item">
-                <span class="tech-label">Gen:</span>
-                {#if isTranslating}
-                  {techMetrics.genTime.toFixed(1)}s
-                {:else}
-                  {techMetrics.genTime.toFixed(2)}s
-                {/if}
-              </span>
+              {#if techMetrics.streamMode}
+                <span class="tech-divider">→</span>
+                <span class="tech-item">
+                  <span class="tech-label">Gen:</span>
+                  {#if isTranslating}
+                    {techMetrics.genTime.toFixed(1)}s
+                  {:else}
+                    {techMetrics.genTime.toFixed(2)}s
+                  {/if}
+                </span>
+              {/if}
               <span class="tech-divider">=</span>
               <span class="tech-item">
                 <span class="tech-label">Total:</span>
@@ -3424,6 +3460,7 @@
                         class="icon-btn replace-btn"
                         class:replaced={replacedId === item.id}
                         title={t(appLanguage, "replaceSelection")}
+                        disabled={!canReplaceSelection}
                         onclick={() => handleReplace(item.id, item.text)}
                       >
                         {#if replacedId === item.id}
@@ -3539,6 +3576,7 @@
                               onclick={() =>
                                 handleSpeak(item.id, item.text, targetLang)}
                               onmouseenter={() => triggerSpeakAnim(item.id)}
+                              disabled={!ttsAvailable}
                             >
                               <span class="action-menu-icon">
                                 {#if isSpeakingId === item.id}
@@ -3626,6 +3664,17 @@
               </span>
             </button>
           {/if}
+          {#if isCompactMode && isStackExpanded}
+            <div style="display: flex; justify-content: center; margin-top: 8px;">
+              <button
+                class="collapse-btn"
+                onclick={() => (isStackExpanded = false)}
+                title={t(appLanguage, "showLess")}
+              >
+                {t(appLanguage, "showLess")}
+              </button>
+            </div>
+          {/if}
 
           <!-- Explanation -->
           {#if (!isCompactMode || isStackExpanded) && detailedExplanation && detailedExplanation.points && detailedExplanation.points.length > 0}
@@ -3672,16 +3721,18 @@
                 class:active={isFavorited(inputQuery)}
                 class:animating={starAnimatingId === "current"}
                 onclick={() => {
-                  const itemToSave = {
-                    id: crypto.randomUUID(),
-                    timestamp: Date.now(),
-                    sourceText: inputQuery,
-                    sourceLang: detectedLang || sourceLang,
-                    targetLang: targetLang,
-                    translations: translations.map((t) => ({
-                      text: t.text,
-                      reason: t.reason,
-                    })),
+                    const itemToSave = {
+                      id: crypto.randomUUID(),
+                      timestamp: Date.now(),
+                      sourceText: inputQuery,
+                      sourceLang: detectedLang || sourceLang,
+                      targetLang: targetLang,
+                      isAutoDetect: isAutoDetect,
+                      detectedLang: detectedLang || "",
+                      translations: translations.map((t) => ({
+                        text: t.text,
+                        reason: t.reason,
+                      })),
                     detailedExplanation: detailedExplanation
                       ? $state.snapshot(detailedExplanation)
                       : undefined,
@@ -3905,7 +3956,8 @@
               </svg>
             {/if}
             {#if isAutoDetect && detectedLang}
-              {detectedLang} - {t(appLanguage, "detected")}
+              {getTargetLanguageName(appLanguage, detectedLang)} -
+              {t(appLanguage, "detected")}
             {:else if isAutoDetect && isDetecting}
               <span class="detecting-label">
                 {t(appLanguage, "detecting")}
@@ -3913,7 +3965,7 @@
             {:else if isAutoDetect}
               {t(appLanguage, "autoDetect")}
             {:else}
-              {sourceLang}
+              {getTargetLanguageName(appLanguage, sourceLang)}
             {/if}
             <svg
               class="chevron-icon"
@@ -3958,7 +4010,7 @@
                     d="M17 16C17 16 17.5 18 20 19C17.5 20 17 22 17 22C17 22 16.5 20 14 19C16.5 18 17 16 17 16Z"
                   ></path>
                 </svg>
-                自動検出
+                {t(appLanguage, "autoDetect")}
               </button>
               <div class="menu-divider"></div>
               {#each languages as lang}
@@ -3966,7 +4018,8 @@
                   class="lang-option {!isAutoDetect && lang === sourceLang
                     ? 'active'
                     : ''}"
-                  onclick={() => selectSourceLang(lang)}>{lang}</button
+                  onclick={() => selectSourceLang(lang)}
+                  >{getTargetLanguageName(appLanguage, lang)}</button
                 >
               {/each}
             </div>
@@ -3996,7 +4049,7 @@
               showSourceLangMenu = false;
             }}
           >
-            {targetLang}
+            {getTargetLanguageName(appLanguage, targetLang)}
             <svg
               class="chevron-icon"
               width="10"
@@ -4018,7 +4071,8 @@
               {#each languages as lang}
                 <button
                   class="lang-option {lang === targetLang ? 'active' : ''}"
-                  onclick={() => selectTargetLang(lang)}>{lang}</button
+                  onclick={() => selectTargetLang(lang)}
+                  >{getTargetLanguageName(appLanguage, lang)}</button
                 >
               {/each}
             </div>
@@ -4329,15 +4383,17 @@
                 {techMetrics.waitTime.toFixed(2)}s
               {/if}
             </span>
-            <span class="tech-divider">→</span>
-            <span class="tech-item">
-              <span class="tech-label">Gen:</span>
-              {#if isTranslating}
-                {techMetrics.genTime.toFixed(1)}s
-              {:else}
-                {techMetrics.genTime.toFixed(2)}s
-              {/if}
-            </span>
+            {#if techMetrics.streamMode}
+              <span class="tech-divider">→</span>
+              <span class="tech-item">
+                <span class="tech-label">Gen:</span>
+                {#if isTranslating}
+                  {techMetrics.genTime.toFixed(1)}s
+                {:else}
+                  {techMetrics.genTime.toFixed(2)}s
+                {/if}
+              </span>
+            {/if}
             <span class="tech-divider">=</span>
             <span class="tech-item">
               <span class="tech-label">Total:</span>
@@ -4507,7 +4563,20 @@
           {:else if isTranslating && translations.every((t) => !t.text)}
             <!-- Loading State -->
             <div class="loading-state-container" in:fade={{ duration: 200 }}>
-              {#each [1, 2, 3] as idx}
+              <div
+                class="shortcut-hint"
+                style="margin-bottom: 8px; text-align: center;"
+              >
+                {techMetrics.firstTokenReceived
+                  ? "ストリーム受信中..."
+                  : "ストリーム待機中..."}
+                {#if techMetrics.time > 0}
+                  <span style="margin-left: 6px;"
+                    >({techMetrics.time.toFixed(1)}s)</span
+                  >
+                {/if}
+              </div>
+              {#each Array.from({ length: translationCount }, (_, i) => i + 1) as idx}
                 <div
                   class="skeleton-card"
                   style="animation-delay: {idx * 0.1}s"
@@ -5245,14 +5314,14 @@
                   <div class="settings-section">
                     <div class="settings-label">
                       {t(appLanguage, "startMinimized") ||
-                        "起動時はメイン画面を最小化"}
+                        "起動時はメイン画面を非表示"}
                     </div>
                     <div class="settings-card-row">
                       <span
                         style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
                       >
                         {t(appLanguage, "startMinimizedDesc") ||
-                          "起動時にメイン画面を最小化して開始します"}
+                          "起動時にメイン画面を非表示で開始します"}
                       </span>
                       <button
                         onclick={() => (startMinimized = !startMinimized)}
@@ -5286,6 +5355,53 @@
                     </div>
                   </div>
 
+                  <!-- Clipboard Ops -->
+                  <div class="settings-section">
+                    <div class="settings-label">
+                      {t(appLanguage, "clipboardOps")}
+                    </div>
+                    <div class="settings-card-row">
+                      <span
+                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                      >
+                        {t(appLanguage, "clipboardOpsDesc")}
+                      </span>
+                      <button
+                        onclick={() =>
+                          (clipboardOpsEnabled = !clipboardOpsEnabled)}
+                        style="
+                        width: 44px; 
+                        height: 24px; 
+                        background: {clipboardOpsEnabled
+                          ? '#3b82f6'
+                          : 'rgba(255,255,255,0.1)'}; 
+                        border-radius: 20px; 
+                        border: none;
+                        cursor: pointer;
+                        position: relative;
+                        transition: background 0.2s;
+                      "
+                        aria-label="Toggle clipboard ops"
+                      >
+                        <div
+                          style="
+                          width: 18px; 
+                          height: 18px; 
+                          background: white; 
+                          border-radius: 50%; 
+                          position: absolute; 
+                          top: 3px; 
+                          left: {clipboardOpsEnabled ? '23px' : '3px'}; 
+                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
+                        ></div>
+                      </button>
+                    </div>
+                    <div class="settings-note">
+                      {t(appLanguage, "clipboardOpsWarning")}
+                    </div>
+                  </div>
+
                   {#if isMac}
                     <!-- Permissions (macOS) -->
                     <div class="settings-section">
@@ -5305,16 +5421,20 @@
                               {t(appLanguage, "screenRecording")}
                             </div>
                             <div
-                              style="font-size: 11px; color: {permissions.screen_recording
-                                ? '#10b981'
-                                : '#ef4444'};"
+                              style="font-size: 11px; color: {permissions.screen_recording === null
+                                ? '#a1a1aa'
+                                : permissions.screen_recording
+                                  ? '#10b981'
+                                  : '#ef4444'};"
                             >
-                              {permissions.screen_recording
-                                ? t(appLanguage, "granted")
-                                : t(appLanguage, "denied")}
+                              {permissions.screen_recording === null
+                                ? t(appLanguage, "checking")
+                                : permissions.screen_recording
+                                  ? t(appLanguage, "granted")
+                                  : t(appLanguage, "denied")}
                             </div>
                           </div>
-                          {#if !permissions.screen_recording}
+                          {#if permissions.screen_recording === false}
                             <button
                               onclick={() =>
                                 requestPermission("screen_recording")}
@@ -5343,16 +5463,20 @@
                               {t(appLanguage, "accessibility")}
                             </div>
                             <div
-                              style="font-size: 11px; color: {permissions.accessibility
-                                ? '#10b981'
-                                : '#ef4444'};"
+                              style="font-size: 11px; color: {permissions.accessibility === null
+                                ? '#a1a1aa'
+                                : permissions.accessibility
+                                  ? '#10b981'
+                                  : '#ef4444'};"
                             >
-                              {permissions.accessibility
-                                ? t(appLanguage, "granted")
-                                : t(appLanguage, "denied")}
+                              {permissions.accessibility === null
+                                ? t(appLanguage, "checking")
+                                : permissions.accessibility
+                                  ? t(appLanguage, "granted")
+                                  : t(appLanguage, "denied")}
                             </div>
                           </div>
-                          {#if !permissions.accessibility}
+                          {#if permissions.accessibility === false}
                             <button
                               onclick={() =>
                                 requestPermission("accessibility")}
@@ -5553,6 +5677,52 @@
                     </button>
                   </div>
 
+                  <div class="settings-section">
+                    <div class="settings-label">
+                      {t(appLanguage, "rememberApiKeys")}
+                    </div>
+                    <div class="settings-card-row">
+                      <span
+                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                      >
+                        {t(appLanguage, "rememberApiKeysDesc")}
+                      </span>
+                      <button
+                        onclick={() =>
+                          (rememberApiKeys = !rememberApiKeys)}
+                        style="
+                        width: 44px; 
+                        height: 24px; 
+                        background: {rememberApiKeys
+                          ? '#3b82f6'
+                          : 'rgba(255,255,255,0.1)'}; 
+                        border-radius: 20px; 
+                        border: none;
+                        cursor: pointer;
+                        position: relative;
+                        transition: background 0.2s;
+                      "
+                        aria-label="Toggle remember api keys"
+                      >
+                        <div
+                          style="
+                          width: 18px; 
+                          height: 18px; 
+                          background: white; 
+                          border-radius: 50%; 
+                          position: absolute; 
+                          top: 3px; 
+                          left: {rememberApiKeys ? '23px' : '3px'}; 
+                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
+                        ></div>
+                      </button>
+                    </div>
+                    <div class="settings-note">
+                      {t(appLanguage, "apiKeyWarning")}
+                    </div>
+                  </div>
+
                   <!-- API Key for Selected Provider -->
                   <div class="settings-section">
                     <label class="settings-label" for="api-key-input">
@@ -5582,6 +5752,44 @@
                       {/each}
                     </select>
                   </div>
+
+                  {#if selectedProviderDoc}
+                    <div class="settings-section">
+                      <div class="settings-label">
+                        {t(appLanguage, "apiOverview")}
+                      </div>
+                      <div class="settings-note top">
+                        {t(appLanguage, "apiOverviewDesc")}
+                      </div>
+                      <button
+                        class="settings-card-row provider-docs-btn"
+                        onclick={() => openProviderDocs(selectedProviderDoc.url)}
+                      >
+                        <div class="provider-docs-text">
+                          <div class="provider-docs-title">
+                            {selectedProviderDoc.label}
+                          </div>
+                          <div class="provider-docs-action">
+                            {t(appLanguage, "openDocs")}
+                          </div>
+                        </div>
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        >
+                          <path d="M14 3h7v7" />
+                          <path d="M10 14L21 3" />
+                          <path d="M5 5v16h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  {/if}
                 {:else if settingsTab === "styles"}
                   <!-- Styles Tab -->
                   <div class="styles-actions-top">
@@ -5739,10 +5947,18 @@
                         <h2>Howlingual</h2>
                         <p>Version {appVersion}</p>
                       </div>
-                      <div class="about-footer-info">
-                        <p>© 2026 tomakura</p>
-                      </div>
+                    <div class="about-footer-info">
+                      <p>© 2026 tomakura</p>
                     </div>
+                    <div style="margin-top: 12px;">
+                      <button
+                        class="rich-btn danger"
+                        onclick={() => invoke("quit_app")}
+                      >
+                        {t(appLanguage, "quit")}
+                      </button>
+                    </div>
+                  </div>
 
                     <div class="about-usage-section">
                       <div class="usage-cards">
@@ -6241,6 +6457,16 @@
   }
   .permission-btn:hover {
     background: #2563eb;
+  }
+  .settings-note {
+    margin-top: 6px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-muted);
+  }
+  .settings-note.top {
+    margin-top: 0;
+    margin-bottom: 8px;
   }
   .container {
     display: flex;
@@ -7908,6 +8134,10 @@
     background: rgba(255, 255, 255, 0.08);
     color: var(--primary-hover);
   }
+  .action-menu-item:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 
   .action-menu-item.copied {
     color: #22c55e;
@@ -7973,6 +8203,10 @@
   .icon-btn:hover {
     background: rgba(255, 255, 255, 0.1);
     color: var(--primary-hover);
+  }
+  .icon-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
   }
   .icon-btn:active {
     transform: scale(0.92);
@@ -8836,6 +9070,48 @@
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   }
 
+  .provider-docs-btn {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    text-align: left;
+    border: 1px solid var(--border-color);
+    background: rgba(0, 0, 0, 0.2);
+    appearance: none;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .provider-docs-btn:hover {
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .provider-docs-btn:active {
+    transform: translateY(1px);
+  }
+
+  .provider-docs-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .provider-docs-title {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .provider-docs-action {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .provider-docs-btn svg {
+    opacity: 0.7;
+  }
+
   /* Overflow Dropdown */
   .style-dropdown-wrapper {
     position: relative;
@@ -9135,6 +9411,12 @@
   }
   :global([data-theme="light"]) .provider-btn:hover {
     background: rgba(0, 0, 0, 0.05);
+  }
+  :global([data-theme="light"]) .provider-docs-btn {
+    background: rgba(0, 0, 0, 0.03);
+  }
+  :global([data-theme="light"]) .provider-docs-btn:hover {
+    background: rgba(0, 0, 0, 0.08);
   }
 
   /* Theme buttons */

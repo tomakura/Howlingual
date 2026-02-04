@@ -17,7 +17,7 @@ pub fn perform_ocr(img: DynamicImage) -> Result<String, String> {
     use std::ffi::c_void;
     use std::io::Cursor;
 
-    println!(
+    log::info!(
         "[macos_ocr] perform_ocr called. Image: {}x{}",
         img.width(),
         img.height()
@@ -28,7 +28,7 @@ pub fn perform_ocr(img: DynamicImage) -> Result<String, String> {
     img.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
         .map_err(|e| format!("Failed to encode image: {}", e))?;
 
-    println!("[macos_ocr] Image encoded to PNG. Bytes: {}", bytes.len());
+    log::info!("[macos_ocr] Image encoded to PNG. Bytes: {}", bytes.len());
 
     // Create NSData
     // NSData::from/with_bytes methods were missing, so using explicit init.
@@ -36,7 +36,7 @@ pub fn perform_ocr(img: DynamicImage) -> Result<String, String> {
     let ns_data = unsafe {
         NSData::initWithBytes_length(NSData::alloc(), bytes.as_ptr() as *mut c_void, bytes.len())
     };
-    println!("[macos_ocr] NSData created. Length: {}", ns_data.length());
+    log::info!("[macos_ocr] NSData created. Length: {}", ns_data.length());
 
     // 2. Create Request Handler
     // alloc() returns Allocated<Self> (owned), init consumes it.
@@ -69,11 +69,11 @@ pub fn perform_ocr(img: DynamicImage) -> Result<String, String> {
     let requests = NSArray::from_vec(vec![request_ptr]);
 
     // performRequests_error returns Result<(), Retained<NSError>> in modern bindings
-    println!("[macos_ocr] Performing Vision request...");
+    log::info!("[macos_ocr] Performing Vision request...");
     let result = unsafe { handler.performRequests_error(&requests) };
 
     if let Err(e) = result {
-        println!(
+        log::info!(
             "[macos_ocr] Vision request FAILED: {}",
             e.localizedDescription()
         );
@@ -86,7 +86,7 @@ pub fn perform_ocr(img: DynamicImage) -> Result<String, String> {
     // 5. Process Results (from original request object)
     let results = unsafe { request.results() };
     if results.is_none() {
-        println!("[macos_ocr] No results found (results is None).");
+        log::info!("[macos_ocr] No results found (results is None).");
         return Ok(String::new());
     }
     let results = results.unwrap();
@@ -94,7 +94,7 @@ pub fn perform_ocr(img: DynamicImage) -> Result<String, String> {
     let mut full_text = String::new();
 
     let count = results.count();
-    println!("[macos_ocr] Observations found: {}", count);
+    log::info!("[macos_ocr] Observations found: {}", count);
 
     for i in 0..count {
         let obs: Retained<VNRecognizedTextObservation> = unsafe { results.objectAtIndex(i) };
@@ -110,6 +110,6 @@ pub fn perform_ocr(img: DynamicImage) -> Result<String, String> {
         }
     }
 
-    println!("[macos_ocr] Final text length: {}", full_text.len());
+    log::info!("[macos_ocr] Final text length: {}", full_text.len());
     Ok(full_text)
 }

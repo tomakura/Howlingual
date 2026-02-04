@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::process::Command;
 
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_log::{Target, TargetKind};
+use serde::Serialize;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use arboard::Clipboard;
@@ -76,6 +79,15 @@ struct LastCursorPos(Mutex<Option<(i32, i32)>>);
 impl Default for LastCursorPos {
     fn default() -> Self {
         Self(Mutex::new(None))
+    }
+}
+
+// Clipboard ops enabled flag (selection capture / replace)
+struct ClipboardOpsEnabled(Mutex<bool>);
+
+impl Default for ClipboardOpsEnabled {
+    fn default() -> Self {
+        Self(Mutex::new(true))
     }
 }
 
@@ -179,9 +191,25 @@ fn update_pending_text(text: String, state: State<'_, PendingText>) {
 }
 
 #[tauri::command]
+fn set_clipboard_ops_enabled(enabled: bool, state: State<'_, ClipboardOpsEnabled>) {
+    if let Ok(mut g) = state.0.lock() {
+        *g = enabled;
+    }
+}
+
+#[tauri::command]
 fn replace_selection(app: AppHandle, text: String) -> Result<(), String> {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
+        let enabled = app
+            .state::<ClipboardOpsEnabled>()
+            .0
+            .lock()
+            .map(|g| *g)
+            .unwrap_or(true);
+        if !enabled {
+            return Err("Clipboard operations are disabled".into());
+        }
         if let Some(window) = app.get_webview_window(COMPACT_WINDOW_LABEL) {
             let _ = window.hide();
         }
@@ -224,7 +252,7 @@ fn send_copy_shortcut() {
         VK_C, VK_CONTROL, VK_LWIN, VK_MENU, VK_SHIFT,
     };
 
-    println!("[copy] Sending Ctrl+C via SendInput (safe)...");
+    log::info!("[copy] Sending Ctrl+C via SendInput (safe)...");
 
     // Create key inputs: Release modifiers -> Ctrl down -> C down -> C up -> Ctrl up -> Restore modifiers
     // We release modifiers first to avoid "Ctrl+Shift+C", then restore them to match physical state
@@ -341,7 +369,7 @@ fn send_copy_shortcut() {
         },
     ];
     let result = unsafe { SendInput(&copy_inputs, std::mem::size_of::<INPUT>() as i32) };
-    println!("[copy] SendInput result: {}", result);
+    log::info!("[copy] SendInput result: {}", result);
 
     // Wait a bit for the copy to complete
     std::thread::sleep(Duration::from_millis(50));
@@ -355,7 +383,7 @@ fn send_paste_shortcut() {
         VK_CONTROL, VK_V,
     };
 
-    println!("[paste] Sending Ctrl+V via SendInput (safe)...");
+    log::info!("[paste] Sending Ctrl+V via SendInput (safe)...");
 
     let paste_inputs = [
         INPUT {
@@ -408,7 +436,7 @@ fn send_paste_shortcut() {
         },
     ];
     let result = unsafe { SendInput(&paste_inputs, std::mem::size_of::<INPUT>() as i32) };
-    println!("[paste] SendInput result: {}", result);
+    log::info!("[paste] SendInput result: {}", result);
 
     std::thread::sleep(Duration::from_millis(50));
 }
@@ -424,7 +452,7 @@ fn send_copy_shortcut() {
     let source = match CGEventSource::new(CGEventSourceStateID::CombinedSessionState) {
         Ok(source) => source,
         Err(_) => {
-            println!("[copy] macOS CGEventSource unavailable");
+            log::info!("[copy] macOS CGEventSource unavailable");
             return;
         }
     };
@@ -452,7 +480,7 @@ fn send_paste_shortcut() {
     let source = match CGEventSource::new(CGEventSourceStateID::CombinedSessionState) {
         Ok(source) => source,
         Err(_) => {
-            println!("[paste] macOS CGEventSource unavailable");
+            log::info!("[paste] macOS CGEventSource unavailable");
             return;
         }
     };
@@ -476,7 +504,7 @@ fn send_paste_shortcut() {
     not(any(target_os = "android", target_os = "ios"))
 ))]
 fn send_copy_shortcut() {
-    println!("[copy] Linux keyboard simulation not yet implemented");
+    log::info!("[copy] Linux keyboard simulation not yet implemented");
 }
 
 // Linux: Placeholder (Paste)
@@ -486,14 +514,14 @@ fn send_copy_shortcut() {
     not(any(target_os = "android", target_os = "ios"))
 ))]
 fn send_paste_shortcut() {
-    println!("[paste] Linux keyboard simulation not yet implemented");
+    log::info!("[paste] Linux keyboard simulation not yet implemented");
 }
 
 // Windows: UI Automation implementation
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn capture_selected_text() -> Option<String> {
-    println!("[capture] Starting text capture via Clipboard Hack...");
+    log::info!("[capture] Starting text capture via Clipboard Hack...");
 
     let mut clipboard = Clipboard::new().ok()?;
 
@@ -522,7 +550,7 @@ fn capture_selected_text() -> Option<String> {
         if let Ok(text) = clipboard.get_text() {
             // Check if text is non-empty
             if !text.is_empty() {
-                println!("[capture] Attempt {}: Captured {} chars", i + 1, text.len());
+                log::info!("[capture] Attempt {}: Captured {} chars", i + 1, text.len());
                 result = Some(text);
                 break;
             }
@@ -539,12 +567,22 @@ fn capture_selected_text() -> Option<String> {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn trigger_quick_open(app: AppHandle) {
-    println!("[shortcut] Trigger quick open called!");
+    log::info!("[shortcut] Trigger quick open called!");
     let cursor_pos = get_cursor_position();
 
     // Capture text BEFORE spawning thread to avoid potential threading issues
-    let selection = capture_selected_text();
-    println!(
+    let clipboard_enabled = app
+        .state::<ClipboardOpsEnabled>()
+        .0
+        .lock()
+        .map(|g| *g)
+        .unwrap_or(true);
+    let selection = if clipboard_enabled {
+        capture_selected_text()
+    } else {
+        None
+    };
+    log::info!(
         "[shortcut] Selection captured with UIA attempt: {:?}",
         selection.as_ref().map(|s| s.len())
     );
@@ -575,9 +613,6 @@ fn register_shortcut(
     }
 
     let manager = app.global_shortcut();
-    if !current.is_empty() {
-        let _ = manager.unregister(current.as_str());
-    }
 
     manager
         .on_shortcut(trimmed, move |app: &AppHandle, _shortcut, event| {
@@ -587,6 +622,10 @@ fn register_shortcut(
             trigger_quick_open(app.clone());
         })
         .map_err(|err| ShortcutError(err.to_string()))?;
+
+    if !current.is_empty() {
+        let _ = manager.unregister(current.as_str());
+    }
 
     *current = trimmed.to_string();
     Ok(())
@@ -830,28 +869,28 @@ fn show_compact_window(
 
     // Position window near cursor if available
     if let Some((cursor_x, cursor_y)) = cursor_pos {
-        println!("[debug] Cursor pos: ({}, {})", cursor_x, cursor_y);
+        log::info!("[debug] Cursor pos: ({}, {})", cursor_x, cursor_y);
 
         // Get window size
         let win_size = window.outer_size().unwrap_or(tauri::PhysicalSize {
             width: 420,
             height: 560,
         });
-        println!(
+        log::info!(
             "[debug] Window size: {}x{}",
             win_size.width, win_size.height
         );
 
         // Get the monitor at cursor position or primary monitor
         let monitors = window.available_monitors()?;
-        println!("[debug] Available monitors: {}", monitors.len());
+        log::info!("[debug] Available monitors: {}", monitors.len());
 
         let monitor = monitors
             .into_iter()
             .find(|m| {
                 let pos = m.position();
                 let size = m.size();
-                println!(
+                log::info!(
                     "[debug] Monitor: pos=({},{}), size={}x{}",
                     pos.x, pos.y, size.width, size.height
                 );
@@ -883,7 +922,7 @@ fn show_compact_window(
             let mon_pos = monitor.position();
             let mon_size = monitor.size();
             let scale = monitor.scale_factor();
-            println!(
+            log::info!(
                 "[debug] Selected monitor: pos=({},{}), size={}x{}, scale={}",
                 mon_pos.x, mon_pos.y, mon_size.width, mon_size.height, scale
             );
@@ -909,16 +948,16 @@ fn show_compact_window(
 
             let x = cursor_x + 10;
             let y = cursor_y + 10;
-            println!("[debug] Initial calc pos: ({}, {})", x, y);
+            log::info!("[debug] Initial calc pos: ({}, {})", x, y);
             let (x, y) = clamp_window_to_monitor(x, y, win_w, win_h, *mon_pos, *mon_size);
 
-            println!("[debug] Final pos: ({}, {})", x, y);
+            log::info!("[debug] Final pos: ({}, {})", x, y);
             let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
         } else {
-            println!("[debug] No monitor found!");
+            log::info!("[debug] No monitor found!");
         }
     } else {
-        println!("[debug] No cursor pos available");
+        log::info!("[debug] No cursor pos available");
     }
 
     window.show()?;
@@ -978,7 +1017,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 tray = tray.icon(icon).icon_as_template(true);
             }
             Err(e) => {
-                println!("[tray] Failed to load template icon: {}, using default", e);
+                log::info!("[tray] Failed to load template icon: {}, using default", e);
                 if let Some(icon) = app.default_window_icon().cloned() {
                     tray = tray.icon(icon);
                 }
@@ -1024,7 +1063,7 @@ fn handover_to_main(app: AppHandle, text: String) {
 
         // Also close capture windows to prevent loop/overlap
         if let Err(e) = close_capture_windows(&app) {
-            println!("[handover] Warning: Failed to close capture windows: {}", e);
+            log::info!("[handover] Warning: Failed to close capture windows: {}", e);
         }
 
         // Show main window
@@ -1038,7 +1077,7 @@ fn handover_to_main(app: AppHandle, text: String) {
 
 #[tauri::command]
 async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(), String> {
-    println!("[ocr] start_selection_ocr called, origin: {:?}", origin);
+    log::info!("[ocr] start_selection_ocr called, origin: {:?}", origin);
 
     // Default to Main if not specific
     let origin_enum = match origin.as_deref() {
@@ -1060,15 +1099,30 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
         }
 
         // Wait for windows to fully hide before capturing screenshots
-        // TODO: Consider using window visibility state checks or event-based mechanism
-        // for more reliable cross-platform behavior instead of hardcoded delay
-        std::thread::sleep(Duration::from_millis(300));
+        let start = Instant::now();
+        loop {
+            let main_visible = app
+                .get_webview_window(MAIN_WINDOW_LABEL)
+                .and_then(|w| w.is_visible().ok())
+                .unwrap_or(false);
+            let compact_visible = app
+                .get_webview_window(COMPACT_WINDOW_LABEL)
+                .and_then(|w| w.is_visible().ok())
+                .unwrap_or(false);
+            if !main_visible && !compact_visible {
+                break;
+            }
+            if start.elapsed() >= Duration::from_millis(300) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
 
         let monitors = Monitor::all().map_err(|e| e.to_string())?;
 
         // Close any existing capture windows before creating new ones
         if let Err(e) = close_capture_windows(&app) {
-            println!(
+            log::info!(
                 "[ocr] Warning: Failed to close existing capture windows: {}",
                 e
             );
@@ -1084,13 +1138,13 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
             let mon_height = monitor.height().map_err(|e| e.to_string())?;
             let mon_x = monitor.x().map_err(|e| e.to_string())?;
             let mon_y = monitor.y().map_err(|e| e.to_string())?;
-            println!(
+            log::info!(
                 "[ocr] Capturing monitor {}: {}x{} at ({},{})",
                 index, mon_width, mon_height, mon_x, mon_y
             );
 
             let image = monitor.capture_image().map_err(|e| e.to_string())?;
-            println!(
+            log::info!(
                 "[ocr] Captured image dimensions for monitor {}: {}x{}",
                 index,
                 image.width(),
@@ -1119,14 +1173,14 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
                         y: mon_y as f64,
                     }))
                 {
-                    println!("[ocr] Failed to set window position: {}", e);
+                    log::info!("[ocr] Failed to set window position: {}", e);
                 }
 
                 if let Err(e) = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
                     width: mon_width as f64,
                     height: mon_height as f64,
                 })) {
-                    println!("[ocr] Failed to set window size: {}", e);
+                    log::info!("[ocr] Failed to set window size: {}", e);
                 }
             }
 
@@ -1141,20 +1195,20 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
                         y: mon_y,
                     }))
                 {
-                    println!("[ocr] Failed to set window position: {}", e);
+                    log::info!("[ocr] Failed to set window position: {}", e);
                 }
 
                 if let Err(e) = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
                     width: img_width,
                     height: img_height,
                 })) {
-                    println!("[ocr] Failed to set window size: {}", e);
+                    log::info!("[ocr] Failed to set window size: {}", e);
                 }
             }
 
             // SHOW the window now that it's sized correctly
             if let Err(e) = window.show() {
-                println!("[ocr] Failed to show window: {}", e);
+                log::info!("[ocr] Failed to show window: {}", e);
             }
 
             // Focus strategy: focus the window on the monitor containing the cursor.
@@ -1171,7 +1225,7 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
             };
 
             if should_focus {
-                println!("[ocr] Focusing capture window on monitor {}", index);
+                log::info!("[ocr] Focusing capture window on monitor {}", index);
                 let _ = window.set_focus();
             }
         }
@@ -1195,7 +1249,7 @@ async fn finish_selection_ocr(
 ) -> Result<String, String> {
     // Coordinates received here are in physical pixels
     // Frontend scales CSS pixel coords by devicePixelRatio before sending
-    println!(
+    log::info!(
         "[ocr] finish_selection_ocr ({}): {},{} {}x{}",
         monitor_id, x, y, width, height
     );
@@ -1212,7 +1266,7 @@ async fn finish_selection_ocr(
     let image_width = image.width();
     let image_height = image.height();
 
-    println!(
+    log::info!(
         "[ocr] Image dimensions: {}x{}, selection: {},{} {}x{}",
         image_width, image_height, x, y, width, height
     );
@@ -1238,12 +1292,14 @@ async fn finish_selection_ocr(
     // Crop image
     let sub_image = image::imageops::crop_imm(&image, x_u32, y_u32, width, height).to_image();
 
-    // DEBUG: Save cropped image to user's temp directory
-    if let Ok(temp_dir) = std::env::temp_dir().canonicalize() {
-        let debug_path = temp_dir.join("howlingual_ocr_crop.png");
-        match sub_image.save(&debug_path) {
-            Ok(_) => println!("[ocr] Saved debug crop to {:?}", debug_path),
-            Err(e) => println!("[ocr] Failed to save debug crop: {}", e),
+    // DEBUG: Save cropped image to user's temp directory (debug builds only)
+    if cfg!(debug_assertions) {
+        if let Ok(temp_dir) = std::env::temp_dir().canonicalize() {
+            let debug_path = temp_dir.join("howlingual_ocr_crop.png");
+            match sub_image.save(&debug_path) {
+                Ok(_) => log::info!("[ocr] Saved debug crop to {:?}", debug_path),
+                Err(e) => log::info!("[ocr] Failed to save debug crop: {}", e),
+            }
         }
     }
 
@@ -1266,7 +1322,7 @@ fn set_ocr_engine(app: AppHandle, engine: String) -> Result<(), String> {
         "windows" => *guard = OcrEngineType::Windows,
         _ => return Err("Invalid engine type".into()),
     }
-    println!("[ocr] Engine set to: {}", engine);
+    log::info!("[ocr] Engine set to: {}", engine);
     Ok(())
 }
 
@@ -1278,14 +1334,14 @@ fn set_ocr_engine(_app: AppHandle, _engine: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn complete_ocr_flow(app: AppHandle, text: String) -> Result<(), String> {
-    println!(
+    log::info!(
         "[ocr] complete_ocr_flow called with text length: {}",
         text.len()
     );
 
     // Close capture windows first to clean up
     if let Err(e) = close_capture_windows(&app) {
-        println!("[ocr] Warning: Failed to close capture windows: {}", e);
+        log::info!("[ocr] Warning: Failed to close capture windows: {}", e);
     }
 
     // Determine where to go back to based on origin state
@@ -1294,7 +1350,7 @@ async fn complete_ocr_flow(app: AppHandle, text: String) -> Result<(), String> {
         state.0.lock().map(|g| *g).unwrap_or(WindowOrigin::Main)
     };
 
-    println!("[ocr] completing flow, returning to: {:?}", origin);
+    log::info!("[ocr] completing flow, returning to: {:?}", origin);
 
     match origin {
         WindowOrigin::Main => {
@@ -1321,7 +1377,7 @@ async fn complete_ocr_flow(app: AppHandle, text: String) -> Result<(), String> {
 fn cancel_selection_ocr(app: AppHandle) {
     // Close capture windows and clear state only if closure succeeds
     if let Err(e) = close_capture_windows(&app) {
-        println!("[ocr] Warning: Failed to close some capture windows: {}", e);
+        log::info!("[ocr] Warning: Failed to close some capture windows: {}", e);
         // Don't clear state if windows might still be active
     } else {
         // Only clear the state if all windows were successfully closed
@@ -1335,7 +1391,7 @@ fn cancel_selection_ocr(app: AppHandle) {
         let state = app.state::<OcrOriginState>();
         state.0.lock().map(|g| *g).unwrap_or(WindowOrigin::Main)
     };
-    println!("[ocr] cancelled, restoring: {:?}", origin);
+    log::info!("[ocr] cancelled, restoring: {:?}", origin);
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     match origin {
@@ -1364,14 +1420,14 @@ async fn run_ocr(_app: AppHandle, image: image::RgbaImage) -> Result<String, Str
     {
         use image::DynamicImage;
         let dyn_img = DynamicImage::ImageRgba8(image);
-        println!("[ocr] Running macOS Native Vision OCR...");
+        log::info!("[ocr] Running macOS Native Vision OCR...");
         return macos_ocr::perform_ocr(dyn_img);
     }
 
     // 2. Windows Native OCR (Restored)
     #[cfg(target_os = "windows")]
     {
-        println!("[ocr] Running Windows Native OCR...");
+        log::info!("[ocr] Running Windows Native OCR...");
         return ocr_windows(_app, image).await;
     }
 
@@ -1396,7 +1452,7 @@ async fn ocr_windows(app: AppHandle, image: image::RgbaImage) -> Result<String, 
             // Lazy initialization
             let mut guard = state.0.lock().map_err(|_| "Lock failed")?;
             if guard.is_none() {
-                println!("[ocr] Initializing PaddleOCR...");
+                log::info!("[ocr] Initializing PaddleOCR...");
                 let resource_dir = app
                     .path()
                     .resolve("resources", tauri::path::BaseDirectory::Resource)
@@ -1407,13 +1463,13 @@ async fn ocr_windows(app: AppHandle, image: image::RgbaImage) -> Result<String, 
                 let rec_path = resource_dir.join("japan_PP-OCRv5_rec_infer.onnx");
                 let keys_path = resource_dir.join("japan_dict_v5.txt");
 
-                println!("[ocr] Loading models from: {:?}", resource_dir);
+                log::info!("[ocr] Loading models from: {:?}", resource_dir);
 
                 let engine = ocr_engine::PaddleOcr::new(det_path, rec_path, keys_path)
                     .map_err(|e| format!("Failed to load OCR models: {}", e))?;
 
                 *guard = Some(engine);
-                println!("[ocr] PaddleOCR initialized successfully");
+                log::info!("[ocr] PaddleOCR initialized successfully");
             }
 
             if let Some(engine) = guard.as_mut() {
@@ -1427,7 +1483,7 @@ async fn ocr_windows(app: AppHandle, image: image::RgbaImage) -> Result<String, 
             let state = app.state::<WindowsOcrState>();
             let mut guard = state.0.lock().map_err(|_| "Lock failed")?;
             if guard.is_none() {
-                println!("[ocr] Initializing Windows Native OCR...");
+                log::info!("[ocr] Initializing Windows Native OCR...");
                 match ocr_native::WindowsOcr::new() {
                     Ok(engine) => *guard = Some(engine),
                     Err(e) => return Err(format!("Failed to init Windows OCR: {}", e)), // Fail early if native OCR is broken
@@ -1452,14 +1508,115 @@ extern "C" {
 }
 
 #[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    static kAXTrustedCheckOptionPrompt: core_foundation::string::CFStringRef;
+    fn AXIsProcessTrusted() -> bool;
+    fn AXIsProcessTrustedWithOptions(
+        options: core_foundation::dictionary::CFDictionaryRef,
+    ) -> bool;
+}
+
+#[derive(Serialize)]
+struct PermissionStatus {
+  screen_recording: bool,
+  accessibility: bool,
+}
+
+#[cfg(target_os = "macos")]
+use core_foundation::base::TCFType;
+
+#[cfg(target_os = "macos")]
+fn check_permissions_impl() -> PermissionStatus {
+    let screen_recording = unsafe { CGPreflightScreenCaptureAccess() };
+    let accessibility = unsafe { AXIsProcessTrusted() };
+    PermissionStatus {
+        screen_recording,
+        accessibility,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn check_permissions_impl() -> PermissionStatus {
+    PermissionStatus {
+        screen_recording: true,
+        accessibility: true,
+    }
+}
+
+#[tauri::command]
+fn check_permissions() -> PermissionStatus {
+    check_permissions_impl()
+}
+
+#[cfg(target_os = "macos")]
+fn request_permissions_impl(permission_type: &str) -> Result<(), String> {
+    match permission_type {
+        "screen_recording" => {
+            unsafe {
+                CGRequestScreenCaptureAccess();
+            }
+            Ok(())
+        }
+        "accessibility" => {
+            use core_foundation::boolean::CFBoolean;
+            use core_foundation::dictionary::CFDictionary;
+            use core_foundation::string::CFString;
+
+            let key = unsafe { CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt) };
+            let options = CFDictionary::from_CFType_pairs(&[(key, CFBoolean::true_value())]);
+            unsafe {
+                AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef());
+            }
+            Ok(())
+        }
+        _ => Err("Invalid permission type".into()),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn request_permissions_impl(_permission_type: &str) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+fn request_permissions(permission_type: String) -> Result<(), String> {
+    request_permissions_impl(permission_type.as_str())
+}
+
+#[cfg(target_os = "macos")]
+fn open_settings_url(url: &str) -> Result<(), String> {
+    Command::new("open")
+        .arg(url)
+        .status()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_settings_url(_url: &str) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+fn open_screen_recording_settings() -> Result<(), String> {
+    open_settings_url("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+}
+
+#[tauri::command]
+fn open_accessibility_settings() -> Result<(), String> {
+    open_settings_url("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+}
+
+#[cfg(target_os = "macos")]
 fn check_screen_capture_permission() {
     unsafe {
         let has_access = CGPreflightScreenCaptureAccess();
-        println!("[main] Screen Capture Access Preflight: {}", has_access);
+        log::info!("[main] Screen Capture Access Preflight: {}", has_access);
         if !has_access {
-            println!("[main] Requesting Screen Capture Access...");
+            log::info!("[main] Requesting Screen Capture Access...");
             let requested = CGRequestScreenCaptureAccess();
-            println!("[main] Screen Capture Access Requested: {}", requested);
+            log::info!("[main] Screen Capture Access Requested: {}", requested);
         }
     }
 }
@@ -1471,6 +1628,18 @@ pub fn run() {
             MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(if cfg!(debug_assertions) {
+                    log::LevelFilter::Debug
+                } else {
+                    log::LevelFilter::Info
+                })
+                .targets([Target::new(TargetKind::LogDir {
+                    file_name: Some("howlingual".into()),
+                })])
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
@@ -1480,9 +1649,14 @@ pub fn run() {
             get_pending_text,
             get_handover_text,
             update_pending_text,
+            set_clipboard_ops_enabled,
             replace_selection,
             quit_app,
             handover_to_main,
+            check_permissions,
+            request_permissions,
+            open_screen_recording_settings,
+            open_accessibility_settings,
             start_selection_ocr,
             finish_selection_ocr,
             cancel_selection_ocr,
@@ -1508,6 +1682,7 @@ pub fn run() {
             app.manage(PendingText::default());
             app.manage(HandoverText::default());
             app.manage(LastCursorPos::default());
+            app.manage(ClipboardOpsEnabled::default());
             app.manage(CapturedImages::default());
             app.manage(OcrOriginState::default());
             #[cfg(windows)]

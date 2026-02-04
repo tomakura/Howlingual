@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-02-04T04:57:48.320Z",
+  "model": "qwen-3-235b-a22b-instruct-2507",
+  "mode": "stream+nonstream",
+  "results": {
+    "stream": {
+      "ok": false,
+      "error": "Error: 404 status code (no body)",
+      "status": 404
+    },
+    "nonstream": {
+      "ok": false,
+      "error": "Error: 404 status code (no body)",
+      "status": 404
+    }
+  }
+}

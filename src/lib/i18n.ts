@@ -66,6 +66,9 @@ interface Translations {
 	confirmDiscard: string;
 	discard: string;
 	aiTabDescription: string;
+	apiOverview: string;
+	apiOverviewDesc: string;
+	openDocs: string;
 	showTechInfo: string;
 	showTechInfoDesc: string;
 	autoStart: string;
@@ -76,6 +79,23 @@ interface Translations {
 	quickShortcutHint: string;
 	applyShortcut: string;
 	shortcutInvalid: string;
+	permissions: string;
+	screenRecording: string;
+	accessibility: string;
+	granted: string;
+	denied: string;
+	grant: string;
+	checking: string;
+	quit: string;
+	rememberApiKeys: string;
+	rememberApiKeysDesc: string;
+	apiKeyWarning: string;
+	clipboardOps: string;
+	clipboardOpsDesc: string;
+	clipboardOpsWarning: string;
+	clipboardOpsDisabled: string;
+	replaceUnavailableLinux: string;
+	ttsUnavailable: string;
 
 	// Styles
 	polite: string;
@@ -188,16 +208,36 @@ const translations: Record<AppLanguage, Translations> = {
 		confirmDiscard: "変更を破棄しますか？",
 		discard: "破棄して戻る",
 		aiTabDescription: "選択したAIプロバイダーのモデルが有効になります。",
+		apiOverview: "API概要",
+		apiOverviewDesc: "選択中のプロバイダーの公式APIドキュメントを開きます。",
+		openDocs: "ドキュメントを開く",
 		showTechInfo: "技術情報を表示",
 		showTechInfoDesc: "翻訳時に処理時間やトークン数を表示します。",
 		autoStart: "スタートアップで起動",
 		autoStartDesc: "OS 起動時にアプリを自動で起動します",
-		startMinimized: "起動時はメイン画面を最小化",
-		startMinimizedDesc: "起動時にメイン画面を最小化して開始します",
+		startMinimized: "起動時はメイン画面を非表示",
+		startMinimizedDesc: "起動時にメイン画面を非表示で開始します",
 		quickShortcut: "クイック起動ショートカット",
 		quickShortcutHint: "例: CommandOrControl+Shift+H",
 		applyShortcut: "適用",
 		shortcutInvalid: "ショートカットが無効です",
+		permissions: "権限",
+		screenRecording: "画面収録",
+		accessibility: "アクセシビリティ",
+		granted: "許可済み",
+		denied: "未許可",
+		grant: "許可する",
+		checking: "確認中...",
+		quit: "終了",
+		rememberApiKeys: "APIキーを保存する",
+		rememberApiKeysDesc: "再起動後もAPIキーを保持します",
+		apiKeyWarning: "APIキーは端末のローカルストレージに保存されます。共有PCではOFF推奨。",
+		clipboardOps: "クリップボード操作",
+		clipboardOpsDesc: "選択テキスト取得/置換のため、一時的にクリップボードを書き換えます",
+		clipboardOpsWarning: "画像やファイルのクリップボード内容が失われる可能性があります",
+		clipboardOpsDisabled: "クリップボード操作が無効です",
+		replaceUnavailableLinux: "Linuxでは選択文の置換は未対応です",
+		ttsUnavailable: "この環境では読み上げが利用できません",
 		polite: "丁寧",
 		business: "ビジネス",
 		casual: "カジュアル",
@@ -292,16 +332,36 @@ const translations: Record<AppLanguage, Translations> = {
 		confirmDiscard: "Discard changes?",
 		discard: "Discard",
 		aiTabDescription: "The model from the selected AI provider will be active.",
+		apiOverview: "API Overview",
+		apiOverviewDesc: "Open the official API docs for the selected provider.",
+		openDocs: "Open docs",
 		showTechInfo: "Show Technical Info",
 		showTechInfoDesc: "Display processing time and token count during translation.",
 		autoStart: "Launch on startup",
 		autoStartDesc: "Automatically launch the app when the OS starts.",
-		startMinimized: "Start with main window minimized",
-		startMinimizedDesc: "Minimize the main window on launch.",
+		startMinimized: "Start with main window hidden",
+		startMinimizedDesc: "Start with the main window hidden.",
 		quickShortcut: "Quick Shortcut",
 		quickShortcutHint: "Example: CommandOrControl+Shift+H",
 		applyShortcut: "Apply",
 		shortcutInvalid: "Invalid shortcut",
+		permissions: "Permissions",
+		screenRecording: "Screen Recording",
+		accessibility: "Accessibility",
+		granted: "Granted",
+		denied: "Denied",
+		grant: "Grant",
+		checking: "Checking...",
+		quit: "Quit",
+		rememberApiKeys: "Remember API keys",
+		rememberApiKeysDesc: "Keep API keys after restart",
+		apiKeyWarning: "API keys are stored in local storage. Turn off on shared machines.",
+		clipboardOps: "Clipboard operations",
+		clipboardOpsDesc: "Temporarily overwrites clipboard to capture/replace selected text",
+		clipboardOpsWarning: "Images/files in the clipboard may be lost",
+		clipboardOpsDisabled: "Clipboard operations are disabled",
+		replaceUnavailableLinux: "Replace selection is not supported on Linux",
+		ttsUnavailable: "Text-to-speech is not available in this environment",
 		polite: "Polite",
 		business: "Business",
 		casual: "Casual",
@@ -396,16 +456,36 @@ const translations: Record<AppLanguage, Translations> = {
 		confirmDiscard: "放弃更改？",
 		discard: "丢弃",
 		aiTabDescription: "所选AI提供商的模型将处于活动状态。",
+		apiOverview: "API 概览",
+		apiOverviewDesc: "打开当前所选提供商的官方 API 文档。",
+		openDocs: "打开文档",
 		showTechInfo: "显示技术信息",
 		showTechInfoDesc: "翻译时显示处理时间和令牌计数",
 		autoStart: "开机自启",
 		autoStartDesc: "系统启动时自动启动应用",
-		startMinimized: "启动时最小化主窗口",
-		startMinimizedDesc: "启动时将主窗口最小化显示",
+		startMinimized: "启动时隐藏主窗口",
+		startMinimizedDesc: "启动时将主窗口隐藏",
 		quickShortcut: "快捷键",
 		quickShortcutHint: "例如: CommandOrControl+Shift+H",
 		applyShortcut: "应用",
 		shortcutInvalid: "快捷键无效",
+		permissions: "权限",
+		screenRecording: "屏幕录制",
+		accessibility: "辅助功能",
+		granted: "已授权",
+		denied: "未授权",
+		grant: "授权",
+		checking: "检查中...",
+		quit: "退出",
+		rememberApiKeys: "保存 API 密钥",
+		rememberApiKeysDesc: "重启后保留 API 密钥",
+		apiKeyWarning: "API 密钥会保存在本地存储，共享设备建议关闭。",
+		clipboardOps: "剪贴板操作",
+		clipboardOpsDesc: "为获取/替换选中文本会临时改写剪贴板",
+		clipboardOpsWarning: "剪贴板中的图片/文件可能会丢失",
+		clipboardOpsDisabled: "剪贴板操作已禁用",
+		replaceUnavailableLinux: "Linux 上不支持替换选中文本",
+		ttsUnavailable: "此环境不支持朗读功能",
 		polite: "礼貌",
 		business: "商务",
 		casual: "休闲",
@@ -500,16 +580,36 @@ const translations: Record<AppLanguage, Translations> = {
 		confirmDiscard: "변경 사항을 취소하시겠습니까?",
 		discard: "취소하고 뒤로",
 		aiTabDescription: "선택한 AI 제공업체의 모델이 활성화됩니다.",
+		apiOverview: "API 개요",
+		apiOverviewDesc: "선택한 제공자의 공식 API 문서를 엽니다.",
+		openDocs: "문서 열기",
 		showTechInfo: "기술 정보 표시",
 		showTechInfoDesc: "번역 시 처리 시간 및 토큰 수 표시",
 		autoStart: "시작 프로그램 실행",
 		autoStartDesc: "OS 시작 시 앱을 자동으로 실행합니다.",
-		startMinimized: "시작 시 메인 창 최소화",
-		startMinimizedDesc: "실행 시 메인 창을 최소화합니다.",
+		startMinimized: "시작 시 메인 창 숨김",
+		startMinimizedDesc: "시작 시 메인 창을 숨깁니다.",
 		quickShortcut: "단축키",
 		quickShortcutHint: "예: CommandOrControl+Shift+H",
 		applyShortcut: "적용",
 		shortcutInvalid: "유효하지 않은 단축키",
+		permissions: "권한",
+		screenRecording: "화면 기록",
+		accessibility: "손쉬운 사용",
+		granted: "허용됨",
+		denied: "허용 안 됨",
+		grant: "허용",
+		checking: "확인 중...",
+		quit: "종료",
+		rememberApiKeys: "API 키 저장",
+		rememberApiKeysDesc: "재시작 후에도 API 키 유지",
+		apiKeyWarning: "API 키는 로컬 저장소에 저장됩니다. 공유 PC에서는 끄는 것을 권장합니다.",
+		clipboardOps: "클립보드 작업",
+		clipboardOpsDesc: "선택 텍스트 가져오기/치환을 위해 클립보드를 임시로 변경합니다",
+		clipboardOpsWarning: "클립보드의 이미지/파일이 사라질 수 있습니다",
+		clipboardOpsDisabled: "클립보드 작업이 비활성화되었습니다",
+		replaceUnavailableLinux: "Linux에서는 선택 문장 치환이 지원되지 않습니다",
+		ttsUnavailable: "이 환경에서는 음성 읽기를 사용할 수 없습니다",
 		polite: "정중",
 		business: "비즈니스",
 		casual: "캐주얼",
