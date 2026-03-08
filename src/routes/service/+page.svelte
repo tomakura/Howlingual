@@ -242,10 +242,11 @@
 		targetLang = params.targetLang;
 		styleLevels = params.styles;
 		currentModel = params.model;
-		errorMessage = "";
-		const provider =
-			(params.provider as AiProvider | undefined) ||
-			getProviderForModel(params.model);
+			errorMessage = "";
+			const provider =
+				((params.provider as AiProvider | null | undefined) ??
+					getProviderForModel(params.model)) ??
+				undefined;
 		const cerebrasApiKey = params.apiKeys?.cerebras?.trim();
 		const executionPlan = getExecutionPlan({
 			provider,
@@ -353,8 +354,8 @@
 				},
 				params.explanationLang,
 				params.styleMeta, // pass style metadata (id -> {name, prompt})
-				params.apiKeys,
-				{ provider: params.provider, signal: abortController.signal },
+					params.apiKeys,
+					{ provider, signal: abortController.signal },
 				candidateCount,
 			);
 			if (

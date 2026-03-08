@@ -9,7 +9,6 @@ const pkg = JSON.parse(readFileSync(file, "utf8"));
 const projectRoot = path.dirname(file);
 const yarnBerryCache = path.resolve(process.env.HOME || "", ".yarn/berry");
 
-// @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/

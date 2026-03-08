@@ -128,7 +128,7 @@
 	outline: none;
 }
 
-button:focus {
+*:focus-visible {
 	outline: none;
 }
 

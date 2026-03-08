@@ -674,12 +674,12 @@ export async function translateTextStream(
 	explanationLang: string = "日本語",
 	styleMeta: Record<string, { name: string; prompt?: string }> = {},
 	apiKeys: Record<string, string> = {},
-	options: { provider?: AiProvider; signal?: AbortSignal } = {},
+	options: { provider?: AiProvider | null; signal?: AbortSignal } = {},
 	candidateCount: number = 3,
 ): Promise<void> {
 	const userPrompt = buildUserPrompt(text, sourceLang, targetLang, styles, styleMeta);
 	const systemPrompt = buildSystemPrompt(explanationLang, candidateCount);
-	const provider = options.provider || getProviderForModel(model);
+	const provider = options.provider ?? getProviderForModel(model) ?? undefined;
 	const signal = options.signal;
 	const plan = getExecutionPlan({
 		provider,
@@ -698,7 +698,7 @@ export async function translateTextStream(
 			styleMeta,
 			candidateCount,
 			{
-				provider,
+				provider: provider ?? undefined,
 				apiKeys,
 				explanationLang,
 				signal,
@@ -774,7 +774,6 @@ async function streamGemini(
 		},
 	});
 
-	// @ts-expect-error - SDK typing does not include AbortSignal yet
 	const result = await model.generateContentStream(prompt, { signal });
 
 	let accumulatedText = "";
@@ -822,7 +821,7 @@ async function streamOpenAICompatible(
 	signal?: AbortSignal,
 	jsonMode = true
 ) {
-	const requestParams: any = {
+	const requestParams: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming = {
 		model: modelName,
 		messages: [
 			{ role: "system", content: systemPrompt },
@@ -838,7 +837,7 @@ async function streamOpenAICompatible(
 
 	// Only add reasoning_effort for models that support it
 	if (isReasoningModelName(modelName)) {
-		requestParams.reasoning_effort = "low";
+		(requestParams as any).reasoning_effort = "low";
 	}
 
 	const stream = await openai.chat.completions.create(requestParams, { signal });
@@ -1088,7 +1087,7 @@ export async function translateText(
 	styleMeta: Record<string, { name: string; prompt?: string }> = {},
 	candidateCount: number = 3,
 	options: {
-		provider?: AiProvider;
+		provider?: AiProvider | null;
 		apiKeys?: Record<string, string>;
 		explanationLang?: string;
 		signal?: AbortSignal;
@@ -1100,7 +1099,7 @@ export async function translateText(
 		options.explanationLang || "日本語",
 		candidateCount,
 	);
-	const provider = options.provider || getProviderForModel(model);
+	const provider = options.provider ?? getProviderForModel(model) ?? undefined;
 	const jsonMode = options.jsonMode !== false;
 
 	let response: AiResponse;

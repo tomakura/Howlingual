@@ -86,6 +86,7 @@ interface Translations {
 	denied: string;
 	grant: string;
 	checking: string;
+	openSystemSettings: string;
 	quit: string;
 	rememberApiKeys: string;
 	rememberApiKeysDesc: string;
@@ -93,6 +94,7 @@ interface Translations {
 	clipboardOps: string;
 	clipboardOpsDesc: string;
 	clipboardOpsWarning: string;
+	clipboardOpsConfirmEnable: string;
 	clipboardOpsDisabled: string;
 	replaceUnavailableLinux: string;
 	ttsUnavailable: string;
@@ -228,6 +230,7 @@ const translations: Record<AppLanguage, Translations> = {
 		denied: "未許可",
 		grant: "許可する",
 		checking: "確認中...",
+		openSystemSettings: "設定を開く",
 		quit: "終了",
 		rememberApiKeys: "APIキーを保存する",
 		rememberApiKeysDesc: "再起動後もAPIキーを保持します",
@@ -235,6 +238,7 @@ const translations: Record<AppLanguage, Translations> = {
 		clipboardOps: "クリップボード操作",
 		clipboardOpsDesc: "選択テキスト取得/置換のため、一時的にクリップボードを書き換えます",
 		clipboardOpsWarning: "画像やファイルのクリップボード内容が失われる可能性があります",
+		clipboardOpsConfirmEnable: "クリップボード操作を有効化しますか？画像やファイルが失われる可能性があります。",
 		clipboardOpsDisabled: "クリップボード操作が無効です",
 		replaceUnavailableLinux: "Linuxでは選択文の置換は未対応です",
 		ttsUnavailable: "この環境では読み上げが利用できません",
@@ -316,6 +320,8 @@ const translations: Record<AppLanguage, Translations> = {
 		openaiApiKey: "OpenAI API Key",
 		geminiApiKey: "Gemini API Key",
 		anthropicApiKey: "Anthropic API Key",
+		groqApiKey: "Groq API Key",
+		cerebrasApiKey: "Cerebras API Key",
 		translationCount: "Number of translations",
 		defaultTargetLang: "Default target language",
 		theme: "Theme",
@@ -352,6 +358,7 @@ const translations: Record<AppLanguage, Translations> = {
 		denied: "Denied",
 		grant: "Grant",
 		checking: "Checking...",
+		openSystemSettings: "Open Settings",
 		quit: "Quit",
 		rememberApiKeys: "Remember API keys",
 		rememberApiKeysDesc: "Keep API keys after restart",
@@ -359,6 +366,7 @@ const translations: Record<AppLanguage, Translations> = {
 		clipboardOps: "Clipboard operations",
 		clipboardOpsDesc: "Temporarily overwrites clipboard to capture/replace selected text",
 		clipboardOpsWarning: "Images/files in the clipboard may be lost",
+		clipboardOpsConfirmEnable: "Enable clipboard operations? Images/files in the clipboard may be lost.",
 		clipboardOpsDisabled: "Clipboard operations are disabled",
 		replaceUnavailableLinux: "Replace selection is not supported on Linux",
 		ttsUnavailable: "Text-to-speech is not available in this environment",
@@ -440,6 +448,8 @@ const translations: Record<AppLanguage, Translations> = {
 		openaiApiKey: "OpenAI API Key",
 		geminiApiKey: "Gemini API Key",
 		anthropicApiKey: "Anthropic API Key",
+		groqApiKey: "Groq API Key",
+		cerebrasApiKey: "Cerebras API Key",
 		translationCount: "翻译方案数量",
 		defaultTargetLang: "默认目标语言",
 		theme: "主题",
@@ -476,6 +486,7 @@ const translations: Record<AppLanguage, Translations> = {
 		denied: "未授权",
 		grant: "授权",
 		checking: "检查中...",
+		openSystemSettings: "打开设置",
 		quit: "退出",
 		rememberApiKeys: "保存 API 密钥",
 		rememberApiKeysDesc: "重启后保留 API 密钥",
@@ -483,6 +494,7 @@ const translations: Record<AppLanguage, Translations> = {
 		clipboardOps: "剪贴板操作",
 		clipboardOpsDesc: "为获取/替换选中文本会临时改写剪贴板",
 		clipboardOpsWarning: "剪贴板中的图片/文件可能会丢失",
+		clipboardOpsConfirmEnable: "要启用剪贴板操作吗？剪贴板中的图片/文件可能会丢失。",
 		clipboardOpsDisabled: "剪贴板操作已禁用",
 		replaceUnavailableLinux: "Linux 上不支持替换选中文本",
 		ttsUnavailable: "此环境不支持朗读功能",
@@ -564,6 +576,8 @@ const translations: Record<AppLanguage, Translations> = {
 		openaiApiKey: "OpenAI API Key",
 		geminiApiKey: "Gemini API Key",
 		anthropicApiKey: "Anthropic API Key",
+		groqApiKey: "Groq API Key",
+		cerebrasApiKey: "Cerebras API Key",
 		translationCount: "번역 제안 수",
 		defaultTargetLang: "기본 대상 언어",
 		theme: "테마",
@@ -600,6 +614,7 @@ const translations: Record<AppLanguage, Translations> = {
 		denied: "허용 안 됨",
 		grant: "허용",
 		checking: "확인 중...",
+		openSystemSettings: "설정 열기",
 		quit: "종료",
 		rememberApiKeys: "API 키 저장",
 		rememberApiKeysDesc: "재시작 후에도 API 키 유지",
@@ -607,6 +622,7 @@ const translations: Record<AppLanguage, Translations> = {
 		clipboardOps: "클립보드 작업",
 		clipboardOpsDesc: "선택 텍스트 가져오기/치환을 위해 클립보드를 임시로 변경합니다",
 		clipboardOpsWarning: "클립보드의 이미지/파일이 사라질 수 있습니다",
+		clipboardOpsConfirmEnable: "클립보드 작업을 활성화할까요? 클립보드의 이미지/파일이 사라질 수 있습니다.",
 		clipboardOpsDisabled: "클립보드 작업이 비활성화되었습니다",
 		replaceUnavailableLinux: "Linux에서는 선택 문장 치환이 지원되지 않습니다",
 		ttsUnavailable: "이 환경에서는 음성 읽기를 사용할 수 없습니다",

@@ -6,7 +6,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { listen, emit, TauriEvent } from "@tauri-apps/api/event";
+  import { listen, emit } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import {
     enable as enableAutostart,
@@ -81,7 +81,7 @@
   let autoStartEnabled = $state(false);
   let startMinimized = $state(false);
   let ocrEngine = $state<"paddle" | "windows">("paddle");
-  let clipboardOpsEnabled = $state(true);
+  let clipboardOpsEnabled = $state(false);
 
   let historyAnimating = $state(false);
   let historyAnimTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1215,11 +1215,7 @@
       return;
     }
     if (e.key === "Escape") {
-      if (isCompactMode) {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
-        await getCurrentWindow().hide();
-        return;
-      }
+      e.preventDefault();
 
       // Blur active element to prevent focus rings after closing
       if (document.activeElement instanceof HTMLElement) {
@@ -1228,6 +1224,22 @@
 
       if (actionMenuOpenId !== null) {
         actionMenuOpenId = null;
+        return;
+      }
+      if (showSourceLangMenu) {
+        showSourceLangMenu = false;
+        return;
+      }
+      if (showTargetLangMenu) {
+        showTargetLangMenu = false;
+        return;
+      }
+      if (styleOverflowOpen) {
+        styleOverflowOpen = false;
+        return;
+      }
+      if (compactStylesOpen) {
+        compactStylesOpen = false;
         return;
       }
 
@@ -1249,6 +1261,12 @@
       }
       if (showHistory) {
         showHistory = false;
+        return;
+      }
+
+      if (isCompactMode) {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        await getCurrentWindow().hide();
         return;
       }
     }
@@ -1665,6 +1683,14 @@
   let isSparkling = $state(false);
   let canReplaceSelection = $derived(clipboardOpsEnabled && !isLinux);
 
+  function toggleClipboardOps() {
+    if (!clipboardOpsEnabled) {
+      const approved = confirm(t(appLanguage, "clipboardOpsConfirmEnable"));
+      if (!approved) return;
+    }
+    clipboardOpsEnabled = !clipboardOpsEnabled;
+  }
+
   function applySourceLangFromSync(lang: string, detected?: string) {
     if (lang === AUTO_DETECT_LABEL) {
       isAutoDetect = true;
@@ -1706,6 +1732,16 @@
     targetLang = lang;
     showTargetLangMenu = false;
     scheduleSyncSharedState();
+  }
+
+  function formatHistoryLanguage(lang: string, isAuto = false) {
+    if (isAuto && lang && lang !== AUTO_DETECT_LABEL) {
+      return `${t(appLanguage, "autoDetect")} (${getTargetLanguageName(appLanguage, lang)})`;
+    }
+    if (isAuto || lang === AUTO_DETECT_LABEL) {
+      return t(appLanguage, "autoDetect");
+    }
+    return getTargetLanguageName(appLanguage, lang);
   }
 
   // Prevent same-language translation if allowRewrite is false
@@ -1985,7 +2021,7 @@
       textareaEl.style.overflowY = "auto";
     } else {
       textareaEl.style.height = scrollHeight + "px";
-      textareaEl.style.overflowY = "hidden";
+      textareaEl.style.overflowY = "auto";
     }
 
     // Update scroll fade
@@ -3173,6 +3209,7 @@
               onscroll={checkScroll}
               class:long-text={isLongText}
               class="compact-textarea"
+              aria-label={t(appLanguage, "inputPlaceholder")}
               placeholder={t(appLanguage, "inputPlaceholder")}
             ></textarea>
             <div class="fade-overlay"></div>
@@ -4151,6 +4188,7 @@
               oninput={handleInputChange}
               onscroll={checkScroll}
               class:long-text={isLongText}
+              aria-label={t(appLanguage, "inputPlaceholder")}
               placeholder={t(appLanguage, "inputPlaceholder")}
             ></textarea>
             <div class="fade-overlay"></div>
@@ -5367,8 +5405,7 @@
                         {t(appLanguage, "clipboardOpsDesc")}
                       </span>
                       <button
-                        onclick={() =>
-                          (clipboardOpsEnabled = !clipboardOpsEnabled)}
+                        onclick={toggleClipboardOps}
                         style="
                         width: 44px; 
                         height: 24px; 
@@ -5449,7 +5486,7 @@
                               class="permission-btn"
                               style="margin-left: 8px;"
                             >
-                              設定を開く
+                              {t(appLanguage, "openSystemSettings")}
                             </button>
                           {/if}
                         </div>
@@ -5491,7 +5528,7 @@
                               class="permission-btn"
                               style="margin-left: 8px;"
                             >
-                              設定を開く
+                              {t(appLanguage, "openSystemSettings")}
                             </button>
                           {/if}
                         </div>
@@ -6222,7 +6259,9 @@
                             <span
                               >{new Date(item.timestamp).toLocaleString()}</span
                             >
-                            <span>{item.sourceLang} → {item.targetLang}</span>
+                            <span
+                              >{formatHistoryLanguage(item.sourceLang, item.isAutoDetect)} → {formatHistoryLanguage(item.targetLang)}</span
+                            >
                           </div>
                           <div class="history-source">{item.sourceText}</div>
                           <div class="history-preview">
@@ -6295,7 +6334,9 @@
                             <span
                               >{new Date(item.timestamp).toLocaleString()}</span
                             >
-                            <span>{item.sourceLang} → {item.targetLang}</span>
+                            <span
+                              >{formatHistoryLanguage(item.sourceLang, item.isAutoDetect)} → {formatHistoryLanguage(item.targetLang)}</span
+                            >
                           </div>
                           <div class="history-source">{item.sourceText}</div>
                           <div class="history-preview">
@@ -7465,6 +7506,11 @@
     width: 100%;
   }
 
+  .textarea-container:focus-within {
+    border-radius: 10px;
+    box-shadow: 0 0 0 2px rgba(var(--primary-rgb, 59, 130, 246), 0.28);
+  }
+
   textarea {
     width: 100%;
     min-height: 40px;
@@ -7476,11 +7522,43 @@
     outline: none;
     font-family: inherit;
     line-height: 1.5;
-    overflow: hidden;
+    overflow-y: auto;
     display: block;
     max-height: 200px;
     padding-bottom: 20px;
     padding-right: 44px;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.32) transparent;
+  }
+
+  textarea::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  textarea::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  textarea::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.32);
+    border-radius: 8px;
+  }
+
+  textarea::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.45);
+  }
+
+  :global([data-theme="light"]) textarea {
+    scrollbar-color: rgba(0, 0, 0, 0.32) transparent;
+  }
+
+  :global([data-theme="light"]) textarea::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.32);
+  }
+
+  :global([data-theme="light"]) textarea::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.45);
   }
 
   .textarea-actions {

@@ -1,4 +1,10 @@
 use std::collections::HashMap;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use std::borrow::Cow;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use std::fs;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -10,7 +16,7 @@ use tauri_plugin_log::{Target, TargetKind};
 use serde::Serialize;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use arboard::Clipboard;
+use arboard::{Clipboard, ImageData};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use mouse_position::mouse_position::Mouse;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -51,7 +57,8 @@ struct ShortcutConfig(Mutex<String>);
 
 impl Default for ShortcutConfig {
     fn default() -> Self {
-        Self(Mutex::new(DEFAULT_SHORTCUT.to_string()))
+        // Keep runtime state empty at boot so initial registration always runs.
+        Self(Mutex::new(String::new()))
     }
 }
 
@@ -87,7 +94,7 @@ struct ClipboardOpsEnabled(Mutex<bool>);
 
 impl Default for ClipboardOpsEnabled {
     fn default() -> Self {
-        Self(Mutex::new(true))
+        Self(Mutex::new(false))
     }
 }
 
@@ -197,6 +204,57 @@ fn set_clipboard_ops_enabled(enabled: bool, state: State<'_, ClipboardOpsEnabled
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+enum ClipboardBackup {
+    Text(String),
+    Image {
+        width: usize,
+        height: usize,
+        bytes: Vec<u8>,
+    },
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn backup_clipboard(clipboard: &mut Clipboard) -> Option<ClipboardBackup> {
+    if let Ok(text) = clipboard.get_text() {
+        return Some(ClipboardBackup::Text(text));
+    }
+
+    if let Ok(image) = clipboard.get_image() {
+        return Some(ClipboardBackup::Image {
+            width: image.width,
+            height: image.height,
+            bytes: image.bytes.into_owned(),
+        });
+    }
+
+    None
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn restore_clipboard(clipboard: &mut Clipboard, backup: Option<ClipboardBackup>) {
+    let Some(backup) = backup else {
+        return;
+    };
+
+    match backup {
+        ClipboardBackup::Text(text) => {
+            let _ = clipboard.set_text(text);
+        }
+        ClipboardBackup::Image {
+            width,
+            height,
+            bytes,
+        } => {
+            let _ = clipboard.set_image(ImageData {
+                width,
+                height,
+                bytes: Cow::Owned(bytes),
+            });
+        }
+    }
+}
+
 #[tauri::command]
 fn replace_selection(app: AppHandle, text: String) -> Result<(), String> {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -216,7 +274,7 @@ fn replace_selection(app: AppHandle, text: String) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(120));
 
         let mut clipboard = Clipboard::new().map_err(|e| e.to_string())?;
-        let original_text = clipboard.get_text().ok();
+        let original_clipboard = backup_clipboard(&mut clipboard);
         clipboard.set_text(text).map_err(|e| e.to_string())?;
         std::thread::sleep(Duration::from_millis(40));
 
@@ -229,9 +287,7 @@ fn replace_selection(app: AppHandle, text: String) -> Result<(), String> {
 
         std::thread::sleep(Duration::from_millis(250));
 
-        if let Some(orig) = original_text {
-            let _ = clipboard.set_text(orig);
-        }
+        restore_clipboard(&mut clipboard, original_clipboard);
     }
     Ok(())
 }
@@ -525,8 +581,8 @@ fn capture_selected_text() -> Option<String> {
 
     let mut clipboard = Clipboard::new().ok()?;
 
-    // Preserve original content
-    let original_text = clipboard.get_text().ok();
+    // Preserve original content (text/image)
+    let original_clipboard = backup_clipboard(&mut clipboard);
 
     // Clear clipboard
     let _ = clipboard.set_text("");
@@ -557,10 +613,8 @@ fn capture_selected_text() -> Option<String> {
         }
     }
 
-    // Restore original
-    if let Some(orig) = original_text {
-        let _ = clipboard.set_text(orig);
-    }
+    // Restore original clipboard content
+    restore_clipboard(&mut clipboard, original_clipboard);
 
     result
 }
@@ -593,6 +647,33 @@ fn trigger_quick_open(app: AppHandle) {
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn shortcut_file_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|dir| dir.join("shortcut.txt"))
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn load_persisted_shortcut(app: &AppHandle) -> Option<String> {
+    let path = shortcut_file_path(app)?;
+    let content = fs::read_to_string(path).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn persist_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), String> {
+    let path = shortcut_file_path(app)
+        .ok_or_else(|| "Failed to resolve app config path".to_string())?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(path, shortcut.trim()).map_err(|e| e.to_string())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn register_shortcut(
     app: &AppHandle,
     state: &ShortcutConfig,
@@ -608,22 +689,24 @@ fn register_shortcut(
         .lock()
         .map_err(|_| ShortcutError("Shortcut lock failed".into()))?;
 
-    if current.as_str() == trimmed {
+    let manager = app.global_shortcut();
+    let already_registered = manager.is_registered(trimmed);
+    if current.as_str() == trimmed && already_registered {
         return Ok(());
     }
 
-    let manager = app.global_shortcut();
+    if !already_registered {
+        manager
+            .on_shortcut(trimmed, move |app: &AppHandle, _shortcut, event| {
+                if event.state != ShortcutState::Pressed {
+                    return;
+                }
+                trigger_quick_open(app.clone());
+            })
+            .map_err(|err| ShortcutError(err.to_string()))?;
+    }
 
-    manager
-        .on_shortcut(trimmed, move |app: &AppHandle, _shortcut, event| {
-            if event.state != ShortcutState::Pressed {
-                return;
-            }
-            trigger_quick_open(app.clone());
-        })
-        .map_err(|err| ShortcutError(err.to_string()))?;
-
-    if !current.is_empty() {
+    if !current.is_empty() && current.as_str() != trimmed {
         let _ = manager.unregister(current.as_str());
     }
 
@@ -638,7 +721,9 @@ fn update_shortcut(
     state: State<'_, ShortcutConfig>,
     shortcut: String,
 ) -> Result<(), String> {
-    register_shortcut(&app, state.inner(), &shortcut).map_err(|err| err.0)
+    register_shortcut(&app, state.inner(), &shortcut).map_err(|err| err.0)?;
+    persist_shortcut(&app, &shortcut)?;
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -741,47 +826,52 @@ fn clamp_window_to_monitor(
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn ensure_main_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        return Ok(window);
+    }
+
+    let mut builder = tauri::WebviewWindowBuilder::new(
+        app,
+        MAIN_WINDOW_LABEL,
+        tauri::WebviewUrl::App("/?view=main".into()),
+    );
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .title("Howlingual")
+            .inner_size(800.0, 600.0)
+            .min_inner_size(600.0, 400.0)
+            .title_bar_style(tauri::TitleBarStyle::Transparent)
+            .hidden_title(true);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder
+            .title("Howlingual")
+            .inner_size(800.0, 600.0)
+            .min_inner_size(600.0, 400.0)
+            .decorations(false)
+            .transparent(true)
+            .shadow(true);
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        builder = builder
+            .title("Howlingual")
+            .inner_size(800.0, 600.0)
+            .min_inner_size(600.0, 400.0);
+    }
+
+    builder.visible(false).build()
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn show_main_window(app: &AppHandle, cursor_pos: Option<(i32, i32)>) -> tauri::Result<()> {
-    let window = if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        window
-    } else {
-        let mut builder = tauri::WebviewWindowBuilder::new(
-            app,
-            MAIN_WINDOW_LABEL,
-            tauri::WebviewUrl::App("/?view=main".into()),
-        );
-
-        #[cfg(target_os = "macos")]
-        {
-            builder = builder
-                .title("Howlingual")
-                .inner_size(800.0, 600.0)
-                .min_inner_size(600.0, 400.0)
-                .title_bar_style(tauri::TitleBarStyle::Transparent)
-                .hidden_title(true);
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            builder = builder
-                .title("Howlingual")
-                .inner_size(800.0, 600.0)
-                .min_inner_size(600.0, 400.0)
-                .decorations(false)
-                .transparent(true)
-                .shadow(true);
-        }
-
-        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-        {
-            builder = builder
-                .title("Howlingual")
-                .inner_size(800.0, 600.0)
-                .min_inner_size(600.0, 400.0);
-        }
-
-        builder.build()?
-    };
+    let window = ensure_main_window(app)?;
 
     // Position window near cursor if available
     if let Some((cursor_x, cursor_y)) = cursor_pos {
@@ -1042,8 +1132,20 @@ fn setup_global_shortcut(
     app: &AppHandle,
     state: &ShortcutConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let saved = load_persisted_shortcut(app);
+    if let Some(shortcut) = saved {
+        if register_shortcut(app, state, &shortcut).is_ok() {
+            return Ok(());
+        }
+        log::info!(
+            "[shortcut] Saved shortcut is invalid, falling back to default: {}",
+            shortcut
+        );
+    }
+
     register_shortcut(app, state, DEFAULT_SHORTCUT)
         .map_err(|err| Box::new(err) as Box<dyn std::error::Error>)?;
+    let _ = persist_shortcut(app, DEFAULT_SHORTCUT);
     Ok(())
 }
 
@@ -1667,6 +1769,9 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             check_screen_capture_permission();
 
+            #[cfg(target_os = "macos")]
+            let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             let _app_handle = app.handle();
 
             #[cfg(target_os = "macos")]
@@ -1695,6 +1800,7 @@ pub fn run() {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 let shortcut_state = app.state::<ShortcutConfig>();
+                ensure_main_window(&app.handle())?;
                 ensure_compact_window(&app.handle())?;
                 setup_tray(&app.handle())?;
                 setup_global_shortcut(&app.handle(), shortcut_state.inner())?;
