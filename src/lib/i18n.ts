@@ -58,7 +58,10 @@ interface Translations {
 	appLanguage: string;
 	save: string;
 	close: string;
+	closeSettings: string;
 	back: string;
+	minimize: string;
+	maximize: string;
 	editStyle: string;
 	cancel: string;
 	allowRewrite: string;
@@ -114,6 +117,11 @@ interface Translations {
 	tabRecent: string;
 	tabFavorites: string;
 	saveToFavorites: string;
+	favoriteCurrentTranslation: string;
+	toggleFavorite: string;
+	deleteFavorite: string;
+	moveUp: string;
+	moveDown: string;
 	autoRunQuick: string;
 	autoRunQuickDesc: string;
 	ocrHint: string;
@@ -142,6 +150,11 @@ interface Translations {
 	usageWeeklyTrend: string;
 	usageCountLabel: string;
 	usageTokensLabel: string;
+	waitLabel: string;
+	generationLabel: string;
+	totalLabel: string;
+	inputLabel: string;
+	outputLabel: string;
 	usageReset: string;
 	translationSending: string;
 	translationWaitingModel: string;
@@ -205,6 +218,11 @@ const translations: Record<AppLanguage, Translations> = {
 		usageWeeklyTrend: "1週間の推移",
 		usageCountLabel: "回数",
 		usageTokensLabel: "トークン",
+		waitLabel: "待機",
+		generationLabel: "生成",
+		totalLabel: "合計",
+		inputLabel: "入力",
+		outputLabel: "出力",
 		usageReset: "0時更新",
 		explanation: "解説",
 		settingsTitle: "設定",
@@ -236,7 +254,10 @@ const translations: Record<AppLanguage, Translations> = {
 		appLanguage: "アプリ言語",
 		save: "保存",
 		close: "閉じる",
+		closeSettings: "設定を閉じる",
 		back: "戻る",
+		minimize: "最小化",
+		maximize: "最大化",
 		editStyle: "文体を編集",
 		cancel: "キャンセル",
 		allowRewrite: "同一言語の翻訳(リライト)を許可",
@@ -290,6 +311,11 @@ const translations: Record<AppLanguage, Translations> = {
 		tabRecent: "最近",
 		tabFavorites: "保存済み",
 		saveToFavorites: "保存",
+		favoriteCurrentTranslation: "現在の翻訳を保存",
+		toggleFavorite: "保存状態を切り替える",
+		deleteFavorite: "保存済み項目を削除",
+		moveUp: "上へ移動",
+		moveDown: "下へ移動",
 		autoRunQuick: "クイック翻訳の自動実行",
 		autoRunQuickDesc: "ショートカット呼出時に自動で翻訳を開始します",
 		ocrHint: "翻訳する範囲を選択してください",
@@ -367,6 +393,11 @@ const translations: Record<AppLanguage, Translations> = {
 		usageWeeklyTrend: "Weekly trend",
 		usageCountLabel: "Count",
 		usageTokensLabel: "Tokens",
+		waitLabel: "Wait",
+		generationLabel: "Gen",
+		totalLabel: "Total",
+		inputLabel: "In",
+		outputLabel: "Out",
 		usageReset: "Resets at 00:00",
 		explanation: "Explanation",
 		settingsTitle: "Settings",
@@ -398,7 +429,10 @@ const translations: Record<AppLanguage, Translations> = {
 		appLanguage: "App Language",
 		save: "Save",
 		close: "Close",
+		closeSettings: "Close settings",
 		back: "Back",
+		minimize: "Minimize",
+		maximize: "Maximize",
 		editStyle: "Edit Style",
 		cancel: "Cancel",
 		allowRewrite: "Allow rewrite (same language)",
@@ -452,6 +486,11 @@ const translations: Record<AppLanguage, Translations> = {
 		tabRecent: "Recent",
 		tabFavorites: "Saved",
 		saveToFavorites: "Save",
+		favoriteCurrentTranslation: "Save current translation",
+		toggleFavorite: "Toggle favorite",
+		deleteFavorite: "Delete saved item",
+		moveUp: "Move up",
+		moveDown: "Move down",
 		autoRunQuick: "Auto-run Quick Translate",
 		autoRunQuickDesc: "Automatically start translation when shortcut is pressed",
 		ocrHint: "Select area to translate",
@@ -529,6 +568,11 @@ const translations: Record<AppLanguage, Translations> = {
 		usageWeeklyTrend: "一周趋势",
 		usageCountLabel: "次数",
 		usageTokensLabel: "代币",
+		waitLabel: "等待",
+		generationLabel: "生成",
+		totalLabel: "总计",
+		inputLabel: "输入",
+		outputLabel: "输出",
 		usageReset: "0点更新",
 		explanation: "解说",
 		settingsTitle: "设置",
@@ -560,7 +604,10 @@ const translations: Record<AppLanguage, Translations> = {
 		appLanguage: "应用语言",
 		save: "保存",
 		close: "关闭",
+		closeSettings: "关闭设置",
 		back: "返回",
+		minimize: "最小化",
+		maximize: "最大化",
 		editStyle: "编辑风格",
 		cancel: "取消",
 		allowRewrite: "允许重写（相同语言）",
@@ -614,6 +661,11 @@ const translations: Record<AppLanguage, Translations> = {
 		tabRecent: "最近",
 		tabFavorites: "已保存",
 		saveToFavorites: "保存",
+		favoriteCurrentTranslation: "保存当前翻译",
+		toggleFavorite: "切换收藏状态",
+		deleteFavorite: "删除已保存项目",
+		moveUp: "上移",
+		moveDown: "下移",
 		autoRunQuick: "快速翻译自动执行",
 		autoRunQuickDesc: "按快捷键时自动开始翻译",
 		ocrHint: "请选择要翻译的区域",
@@ -691,6 +743,11 @@ const translations: Record<AppLanguage, Translations> = {
 		usageWeeklyTrend: "1주 추이",
 		usageCountLabel: "횟수",
 		usageTokensLabel: "토큰",
+		waitLabel: "대기",
+		generationLabel: "생성",
+		totalLabel: "합계",
+		inputLabel: "입력",
+		outputLabel: "출력",
 		usageReset: "0시 갱신",
 		explanation: "설명",
 		settingsTitle: "설정",
@@ -722,7 +779,10 @@ const translations: Record<AppLanguage, Translations> = {
 		appLanguage: "앱 언어",
 		save: "저장",
 		close: "닫기",
+		closeSettings: "설정 닫기",
 		back: "뒤로",
+		minimize: "최소화",
+		maximize: "최대화",
 		editStyle: "문체 편집",
 		cancel: "취소",
 		allowRewrite: "동일 언어 번역(리라이트) 허용",
@@ -776,6 +836,11 @@ const translations: Record<AppLanguage, Translations> = {
 		tabRecent: "최근",
 		tabFavorites: "저장됨",
 		saveToFavorites: "저장",
+		favoriteCurrentTranslation: "현재 번역 저장",
+		toggleFavorite: "저장 상태 전환",
+		deleteFavorite: "저장된 항목 삭제",
+		moveUp: "위로 이동",
+		moveDown: "아래로 이동",
 		autoRunQuick: "빠른 번역 자동 실행",
 		autoRunQuickDesc: "단축키 호출 시 자동으로 번역을 시작합니다",
 		ocrHint: "번역할 영역을 선택하세요",
@@ -841,6 +906,16 @@ export function getLanguageName(code: AppLanguage): string {
 		ko: "한국어",
 	};
 	return names[code];
+}
+
+export function getLanguageLocale(code: AppLanguage): string {
+	const locales: Record<AppLanguage, string> = {
+		ja: "ja-JP",
+		en: "en-US",
+		zh: "zh-CN",
+		ko: "ko-KR",
+	};
+	return locales[code];
 }
 
 // Style name mapping for localization

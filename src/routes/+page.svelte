@@ -30,6 +30,7 @@
   import {
     t,
     getLanguageName,
+    getLanguageLocale,
     getStyleName,
     getTargetLanguageName,
     type AppLanguage,
@@ -3025,10 +3026,32 @@
     refreshUsageStats();
   }
 
+  function getAppLocale() {
+    return getLanguageLocale(appLanguage);
+  }
+
+  function formatLocalizedNumber(value: number) {
+    return new Intl.NumberFormat(getAppLocale()).format(value);
+  }
+
+  function formatLocalizedDateTime(
+    value: number | string | Date,
+    options: Intl.DateTimeFormatOptions = {
+      dateStyle: "medium",
+      timeStyle: "short",
+    },
+  ) {
+    const date = value instanceof Date ? value : new Date(value);
+    return new Intl.DateTimeFormat(getAppLocale(), options).format(date);
+  }
+
   const shortDate = (dateKey: string) => {
-    const [_, m, d] = dateKey.split("-");
-    if (!m || !d) return dateKey;
-    return `${m}/${d}`;
+    const [year, month, day] = dateKey.split("-").map((part) => Number(part));
+    if (!year || !month || !day) return dateKey;
+    return formatLocalizedDateTime(new Date(year, month - 1, day), {
+      month: "numeric",
+      day: "numeric",
+    });
   };
 
   let weeklyMaxCount = $derived(
@@ -3273,8 +3296,8 @@
           onclick={async () => {
             await getCurrentWindow().hide();
           }}
-          aria-label="Close"
-          title="Close"
+          aria-label={t(appLanguage, "close")}
+          title={t(appLanguage, "close")}
         >
           <svg
             width="12"
@@ -3724,7 +3747,7 @@
           <div class="tech-info-display" transition:fade>
             <div class="tech-row">
               <span class="tech-item">
-                <span class="tech-label">Wait:</span>
+                <span class="tech-label">{t(appLanguage, "waitLabel")}:</span>
                 {#if isTranslating && !techMetrics.firstTokenReceived}
                   {techMetrics.time.toFixed(1)}s
                 {:else}
@@ -3734,7 +3757,9 @@
               {#if techMetrics.streamMode}
                 <span class="tech-divider">→</span>
                 <span class="tech-item">
-                  <span class="tech-label">Gen:</span>
+                  <span class="tech-label"
+                    >{t(appLanguage, "generationLabel")}:</span
+                  >
                   {#if isTranslating}
                     {techMetrics.genTime.toFixed(1)}s
                   {:else}
@@ -3744,19 +3769,19 @@
               {/if}
               <span class="tech-divider">=</span>
               <span class="tech-item">
-                <span class="tech-label">Total:</span>
+                <span class="tech-label">{t(appLanguage, "totalLabel")}:</span>
                 {techMetrics.time.toFixed(1)}s
               </span>
             </div>
             <div class="tech-row">
               <span class="tech-item">
-                <span class="tech-label">Model:</span>
+                <span class="tech-label">{t(appLanguage, "usingModel")}:</span>
                 {techMetrics.model}
               </span>
               <span class="tech-divider">|</span>
               <span class="tech-item tech-tokens">
                 <span class="token-row">
-                  <span class="tech-label">↑</span>
+                  <span class="tech-label">{t(appLanguage, "inputLabel")}:</span>
                   {#if isTranslating && !techMetrics.isReal}
                     <span class="loading-dots-inline">...</span>
                   {:else}
@@ -3764,7 +3789,7 @@
                   {/if}
                 </span>
                 <span class="token-row">
-                  <span class="tech-label">↓</span>
+                  <span class="tech-label">{t(appLanguage, "outputLabel")}:</span>
                   {#if isTranslating && !techMetrics.isReal}
                     <span class="loading-dots-inline">...</span>
                   {:else}
@@ -4142,7 +4167,7 @@
                   toggleFavorite(itemToSave);
                   if (starAnimatingId === "") triggerStarAnim("current");
                 }}
-                aria-label="Favorite current translation"
+                aria-label={t(appLanguage, "favoriteCurrentTranslation")}
               >
                 <svg
                   class="save-star-icon"
@@ -4246,7 +4271,7 @@
           <button
             class="win-btn-inline minimize"
             onclick={() => getCurrentWindow().minimize()}
-            title="Minimize"
+            title={t(appLanguage, "minimize")}
           >
             <svg
               width="10"
@@ -4263,7 +4288,7 @@
           <button
             class="win-btn-inline maximize"
             onclick={() => getCurrentWindow().toggleMaximize()}
-            title="Maximize"
+            title={t(appLanguage, "maximize")}
           >
             <svg
               width="8"
@@ -4287,7 +4312,7 @@
           <button
             class="win-btn-inline close"
             onclick={() => hideWindow()}
-            title="Close"
+            title={t(appLanguage, "close")}
           >
             <svg
               width="8"
@@ -4778,7 +4803,7 @@
         {#if showTechInfo && (isTranslating || techMetrics.time > 0)}
           <div class="tech-info-display" transition:fade>
             <span class="tech-item">
-              <span class="tech-label">Wait:</span>
+              <span class="tech-label">{t(appLanguage, "waitLabel")}:</span>
               {#if isTranslating && !techMetrics.firstTokenReceived}
                 {techMetrics.time.toFixed(1)}s
               {:else}
@@ -4788,7 +4813,7 @@
             {#if techMetrics.streamMode}
               <span class="tech-divider">→</span>
               <span class="tech-item">
-                <span class="tech-label">Gen:</span>
+                <span class="tech-label">{t(appLanguage, "generationLabel")}:</span>
                 {#if isTranslating}
                   {techMetrics.genTime.toFixed(1)}s
                 {:else}
@@ -4798,18 +4823,18 @@
             {/if}
             <span class="tech-divider">=</span>
             <span class="tech-item">
-              <span class="tech-label">Total:</span>
+              <span class="tech-label">{t(appLanguage, "totalLabel")}:</span>
               {techMetrics.time.toFixed(1)}s
             </span>
             <span class="tech-divider">|</span>
             <span class="tech-item">
-              <span class="tech-label">Model:</span>
+              <span class="tech-label">{t(appLanguage, "usingModel")}:</span>
               {techMetrics.model}
             </span>
             <span class="tech-divider">|</span>
             <span class="tech-item tech-tokens">
               <span class="token-row">
-                <span class="tech-label">In:</span>
+                <span class="tech-label">{t(appLanguage, "inputLabel")}:</span>
                 {#if isTranslating && !techMetrics.isReal}
                   <div
                     class="skeleton-line"
@@ -4820,7 +4845,7 @@
                 {/if}
               </span>
               <span class="token-row">
-                <span class="tech-label">Out:</span>
+                <span class="tech-label">{t(appLanguage, "outputLabel")}:</span>
                 {#if isTranslating && !techMetrics.isReal}
                   <div
                     class="skeleton-line"
@@ -5223,7 +5248,7 @@
                   toggleFavorite(itemToSave);
                   if (starAnimatingId === "") triggerStarAnim("current");
                 }}
-                aria-label="Favorite current translation"
+                aria-label={t(appLanguage, "favoriteCurrentTranslation")}
               >
                 <svg
                   class="save-star-icon"
@@ -5265,7 +5290,7 @@
     onkeydown={(e) => (e.key === "Enter" || e.key === " ") && closeSettings()}
     role="button"
     tabindex="0"
-    aria-label="Close settings"
+    aria-label={t(appLanguage, "closeSettings")}
   >
     <div
       class="settings-panel glass history-panel"
@@ -5722,7 +5747,7 @@
                         position: relative;
                         transition: background 0.2s;
                       "
-                        aria-label="Toggle autostart"
+                        aria-label={t(appLanguage, "autoStart")}
                       >
                         <div
                           style="
@@ -5767,7 +5792,7 @@
                         position: relative;
                         transition: background 0.2s;
                       "
-                        aria-label="Toggle start minimized"
+                        aria-label={t(appLanguage, "startMinimized")}
                       >
                         <div
                           style="
@@ -6114,7 +6139,7 @@
                         position: relative;
                         transition: background 0.2s;
                       "
-                        aria-label="Toggle remember api keys"
+                        aria-label={t(appLanguage, "rememberApiKeys")}
                       >
                         <div
                           style="
@@ -6326,7 +6351,7 @@
                                 class="icon-btn-small"
                                 onclick={() => moveStyle(i, "up")}
                                 disabled={i === 0}
-                                title="Move Up"
+                                title={t(appLanguage, "moveUp")}
                               >
                                 <svg
                                   width="16"
@@ -6343,7 +6368,7 @@
                                 class="icon-btn-small"
                                 onclick={() => moveStyle(i, "down")}
                                 disabled={i === customStyles.length - 1}
-                                title="Move Down"
+                                title={t(appLanguage, "moveDown")}
                               >
                                 <svg
                                   width="16"
@@ -6453,7 +6478,7 @@
                               "今日のトークン"}
                           </span>
                           <span class="usage-value">
-                            {usageToday.tokens.toLocaleString()}
+                            {formatLocalizedNumber(usageToday.tokens)}
                           </span>
                         </div>
                       </div>
@@ -6473,7 +6498,7 @@
                               viewBox={`0 0 ${usageChartMetrics.width} ${usageChartConfig.height}`}
                               preserveAspectRatio="xMidYMid meet"
                               role="img"
-                              aria-label="Weekly usage trend"
+                              aria-label={t(appLanguage, "usageWeeklyTrend")}
                               onmouseleave={clearUsageHover}
                             >
                               <line
@@ -6567,7 +6592,9 @@
                                   <span class="legend-dot tokens"></span>
                                   <span>
                                     {t(appLanguage, "usageTokensLabel") ||
-                                      "トークン"}: {usageHover.day.tokens.toLocaleString()}
+                                      "トークン"}: {formatLocalizedNumber(
+                                      usageHover.day.tokens,
+                                    )}
                                   </span>
                                 </div>
                               </div>
@@ -6699,7 +6726,7 @@
                         >
                           <div class="history-meta">
                             <span
-                              >{new Date(item.timestamp).toLocaleString()}</span
+                              >{formatLocalizedDateTime(item.timestamp)}</span
                             >
                             <span
                               >{formatHistoryLanguage(item.sourceLang, item.isAutoDetect)} → {formatHistoryLanguage(item.targetLang)}</span
@@ -6736,7 +6763,7 @@
                             class:active={isFavoritedById(item.id)}
                             class:animating={starAnimatingId === item.id}
                             onclick={() => toggleFavorite(item)}
-                            aria-label="Toggle favorite"
+                            aria-label={t(appLanguage, "toggleFavorite")}
                           >
                             <svg
                               width="16"
@@ -6756,7 +6783,7 @@
                           <button
                             class="icon-btn-small delete-btn"
                             onclick={() => deleteHistoryItem(item.id)}
-                            aria-label="Delete"
+                            aria-label={t(appLanguage, "delete")}
                           >
                             <svg
                               width="14"
@@ -6794,7 +6821,7 @@
                         >
                           <div class="history-meta">
                             <span
-                              >{new Date(item.timestamp).toLocaleString()}</span
+                              >{formatLocalizedDateTime(item.timestamp)}</span
                             >
                             <span
                               >{formatHistoryLanguage(item.sourceLang, item.isAutoDetect)} → {formatHistoryLanguage(item.targetLang)}</span
@@ -6831,7 +6858,7 @@
                               class="icon-btn-small"
                               onclick={() => moveFavorite(i, "up")}
                               disabled={i === 0}
-                              aria-label="Move up"
+                              aria-label={t(appLanguage, "moveUp")}
                             >
                               <svg
                                 width="14"
@@ -6848,7 +6875,7 @@
                               class="icon-btn-small"
                               onclick={() => moveFavorite(i, "down")}
                               disabled={i === favorites.length - 1}
-                              aria-label="Move down"
+                              aria-label={t(appLanguage, "moveDown")}
                             >
                               <svg
                                 width="14"
@@ -6865,7 +6892,7 @@
                           <button
                             class="icon-btn-small delete-btn"
                             onclick={() => deleteFavorite(item.id)}
-                            aria-label="Delete favorite"
+                            aria-label={t(appLanguage, "deleteFavorite")}
                           >
                             <svg
                               width="14"
