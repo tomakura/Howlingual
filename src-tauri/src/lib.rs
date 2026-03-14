@@ -15,6 +15,8 @@ use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_log::{Target, TargetKind};
 use serde::Serialize;
 
+mod translation_backend;
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use arboard::{Clipboard, ImageData};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -104,6 +106,12 @@ struct CapturedImages(Mutex<HashMap<String, image::RgbaImage>>);
 impl Default for CapturedImages {
     fn default() -> Self {
         Self(Mutex::new(HashMap::new()))
+    }
+}
+
+fn clear_captured_images(app: &AppHandle) {
+    if let Ok(mut captured) = app.state::<CapturedImages>().0.lock() {
+        captured.clear();
     }
 }
 
@@ -206,6 +214,7 @@ fn set_clipboard_ops_enabled(enabled: bool, state: State<'_, ClipboardOpsEnabled
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 enum ClipboardBackup {
+    Empty,
     Text(String),
     Image {
         width: usize,
@@ -215,29 +224,32 @@ enum ClipboardBackup {
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn backup_clipboard(clipboard: &mut Clipboard) -> Option<ClipboardBackup> {
+fn backup_clipboard(clipboard: &mut Clipboard) -> Result<ClipboardBackup, String> {
     if let Ok(text) = clipboard.get_text() {
-        return Some(ClipboardBackup::Text(text));
+        return if text.is_empty() {
+            Ok(ClipboardBackup::Empty)
+        } else {
+            Ok(ClipboardBackup::Text(text))
+        };
     }
 
     if let Ok(image) = clipboard.get_image() {
-        return Some(ClipboardBackup::Image {
+        return Ok(ClipboardBackup::Image {
             width: image.width,
             height: image.height,
             bytes: image.bytes.into_owned(),
         });
     }
 
-    None
+    Err("Clipboard contents cannot be safely preserved".into())
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn restore_clipboard(clipboard: &mut Clipboard, backup: Option<ClipboardBackup>) {
-    let Some(backup) = backup else {
-        return;
-    };
-
+fn restore_clipboard(clipboard: &mut Clipboard, backup: ClipboardBackup) {
     match backup {
+        ClipboardBackup::Empty => {
+            let _ = clipboard.set_text(String::new());
+        }
         ClipboardBackup::Text(text) => {
             let _ = clipboard.set_text(text);
         }
@@ -252,6 +264,15 @@ fn restore_clipboard(clipboard: &mut Clipboard, backup: Option<ClipboardBackup>)
                 bytes: Cow::Owned(bytes),
             });
         }
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn wait_for_clipboard_settle(total_ms: u64, step_ms: u64) {
+    let mut elapsed = 0;
+    while elapsed < total_ms {
+        std::thread::sleep(Duration::from_millis(step_ms));
+        elapsed += step_ms;
     }
 }
 
@@ -271,21 +292,21 @@ fn replace_selection(app: AppHandle, text: String) -> Result<(), String> {
         if let Some(window) = app.get_webview_window(COMPACT_WINDOW_LABEL) {
             let _ = window.hide();
         }
-        std::thread::sleep(Duration::from_millis(120));
+        wait_for_clipboard_settle(120, 20);
 
         let mut clipboard = Clipboard::new().map_err(|e| e.to_string())?;
-        let original_clipboard = backup_clipboard(&mut clipboard);
+        let original_clipboard = backup_clipboard(&mut clipboard)?;
         clipboard.set_text(text).map_err(|e| e.to_string())?;
-        std::thread::sleep(Duration::from_millis(40));
+        wait_for_clipboard_settle(80, 20);
 
         #[cfg(windows)]
-        send_paste_shortcut();
+        send_paste_shortcut()?;
         #[cfg(target_os = "macos")]
-        send_paste_shortcut();
+        send_paste_shortcut()?;
         #[cfg(all(not(windows), not(target_os = "macos")))]
-        send_paste_shortcut();
+        send_paste_shortcut()?;
 
-        std::thread::sleep(Duration::from_millis(250));
+        wait_for_clipboard_settle(600, 50);
 
         restore_clipboard(&mut clipboard, original_clipboard);
     }
@@ -302,7 +323,7 @@ fn get_cursor_position() -> Option<(i32, i32)> {
 
 // Windows: Use SendInput API for keyboard simulation
 #[cfg(windows)]
-fn send_copy_shortcut() {
+fn send_copy_shortcut() -> Result<(), String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
         VK_C, VK_CONTROL, VK_LWIN, VK_MENU, VK_SHIFT,
@@ -429,11 +450,12 @@ fn send_copy_shortcut() {
 
     // Wait a bit for the copy to complete
     std::thread::sleep(Duration::from_millis(50));
+    Ok(())
 }
 
 // Windows: Use SendInput API for keyboard simulation (Paste)
 #[cfg(windows)]
-fn send_paste_shortcut() {
+fn send_paste_shortcut() -> Result<(), String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
         VK_CONTROL, VK_V,
@@ -495,11 +517,12 @@ fn send_paste_shortcut() {
     log::info!("[paste] SendInput result: {}", result);
 
     std::thread::sleep(Duration::from_millis(50));
+    Ok(())
 }
 
 // macOS: Use CGEventPost for keyboard simulation
 #[cfg(target_os = "macos")]
-fn send_copy_shortcut() {
+fn send_copy_shortcut() -> Result<(), String> {
     use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
@@ -509,7 +532,7 @@ fn send_copy_shortcut() {
         Ok(source) => source,
         Err(_) => {
             log::info!("[copy] macOS CGEventSource unavailable");
-            return;
+            return Err("macOS keyboard simulation unavailable".into());
         }
     };
 
@@ -523,11 +546,12 @@ fn send_copy_shortcut() {
     }
 
     std::thread::sleep(Duration::from_millis(30));
+    Ok(())
 }
 
 // macOS: Use CGEventPost for keyboard simulation (Paste)
 #[cfg(target_os = "macos")]
-fn send_paste_shortcut() {
+fn send_paste_shortcut() -> Result<(), String> {
     use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
@@ -537,7 +561,7 @@ fn send_paste_shortcut() {
         Ok(source) => source,
         Err(_) => {
             log::info!("[paste] macOS CGEventSource unavailable");
-            return;
+            return Err("macOS keyboard simulation unavailable".into());
         }
     };
 
@@ -551,49 +575,113 @@ fn send_paste_shortcut() {
     }
 
     std::thread::sleep(Duration::from_millis(30));
+    Ok(())
 }
 
-// Linux: Placeholder
 #[cfg(all(
     not(windows),
     not(target_os = "macos"),
     not(any(target_os = "android", target_os = "ios"))
 ))]
-fn send_copy_shortcut() {
-    log::info!("[copy] Linux keyboard simulation not yet implemented");
+fn command_exists(command: &str) -> bool {
+    Command::new("sh")
+        .arg("-lc")
+        .arg(format!("command -v {command} >/dev/null 2>&1"))
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
-// Linux: Placeholder (Paste)
 #[cfg(all(
     not(windows),
     not(target_os = "macos"),
     not(any(target_os = "android", target_os = "ios"))
 ))]
-fn send_paste_shortcut() {
-    log::info!("[paste] Linux keyboard simulation not yet implemented");
+fn linux_session_type() -> String {
+    std::env::var("XDG_SESSION_TYPE").unwrap_or_default().to_lowercase()
+}
+
+#[cfg(all(
+    not(windows),
+    not(target_os = "macos"),
+    not(any(target_os = "android", target_os = "ios"))
+))]
+fn run_linux_input(command: &str) -> Result<(), String> {
+    let status = Command::new("sh")
+        .arg("-lc")
+        .arg(command)
+        .status()
+        .map_err(|error| error.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Linux input helper failed: {command}"))
+    }
+}
+
+#[cfg(all(
+    not(windows),
+    not(target_os = "macos"),
+    not(any(target_os = "android", target_os = "ios"))
+))]
+fn send_copy_shortcut() -> Result<(), String> {
+    let session = linux_session_type();
+    if session == "x11" && command_exists("xdotool") {
+        return run_linux_input("xdotool key --clearmodifiers ctrl+c");
+    }
+    if session == "wayland" {
+        if command_exists("wtype") {
+            return run_linux_input("wtype -M ctrl c -m ctrl");
+        }
+        if command_exists("ydotool") {
+            return run_linux_input("ydotool key 29:1 46:1 46:0 29:0");
+        }
+    }
+    Err("Linux selection copy requires xdotool (X11) or wtype/ydotool (Wayland)".into())
+}
+
+#[cfg(all(
+    not(windows),
+    not(target_os = "macos"),
+    not(any(target_os = "android", target_os = "ios"))
+))]
+fn send_paste_shortcut() -> Result<(), String> {
+    let session = linux_session_type();
+    if session == "x11" && command_exists("xdotool") {
+        return run_linux_input("xdotool key --clearmodifiers ctrl+v");
+    }
+    if session == "wayland" {
+        if command_exists("wtype") {
+            return run_linux_input("wtype -M ctrl v -m ctrl");
+        }
+        if command_exists("ydotool") {
+            return run_linux_input("ydotool key 29:1 47:1 47:0 29:0");
+        }
+    }
+    Err("Linux selection paste requires xdotool (X11) or wtype/ydotool (Wayland)".into())
 }
 
 // Windows: UI Automation implementation
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn capture_selected_text() -> Option<String> {
+fn capture_selected_text() -> Result<Option<String>, String> {
     log::info!("[capture] Starting text capture via Clipboard Hack...");
 
-    let mut clipboard = Clipboard::new().ok()?;
+    let mut clipboard = Clipboard::new().map_err(|e| e.to_string())?;
 
     // Preserve original content (text/image)
-    let original_clipboard = backup_clipboard(&mut clipboard);
+    let original_clipboard = backup_clipboard(&mut clipboard)?;
 
     // Clear clipboard
-    let _ = clipboard.set_text("");
+    clipboard.set_text("").map_err(|e| e.to_string())?;
 
     // Simulate Ctrl+C
     #[cfg(windows)]
-    send_copy_shortcut();
+    send_copy_shortcut()?;
     #[cfg(target_os = "macos")]
-    send_copy_shortcut();
+    send_copy_shortcut()?;
     #[cfg(all(not(windows), not(target_os = "macos")))]
-    send_copy_shortcut();
+    send_copy_shortcut()?;
 
     // Poll for text - use shorter timeout for responsiveness, but more retries
     let mut result = None;
@@ -616,7 +704,7 @@ fn capture_selected_text() -> Option<String> {
     // Restore original clipboard content
     restore_clipboard(&mut clipboard, original_clipboard);
 
-    result
+    Ok(result)
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -632,7 +720,13 @@ fn trigger_quick_open(app: AppHandle) {
         .map(|g| *g)
         .unwrap_or(true);
     let selection = if clipboard_enabled {
-        capture_selected_text()
+        match capture_selected_text() {
+            Ok(value) => value,
+            Err(error) => {
+                log::warn!("[shortcut] Failed to capture selection: {}", error);
+                None
+            }
+        }
     } else {
         None
     };
@@ -895,17 +989,17 @@ fn show_main_window(app: &AppHandle, cursor_pos: Option<(i32, i32)>) -> tauri::R
                     let logical_h = size.height as f64 / scale;
                     let cursor_x = cursor_x as f64;
                     let cursor_y = cursor_y as f64;
-                    return cursor_x >= logical_x
+                    cursor_x >= logical_x
                         && cursor_x < logical_x + logical_w
                         && cursor_y >= logical_y
-                        && cursor_y < logical_y + logical_h;
+                        && cursor_y < logical_y + logical_h
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
-                    return cursor_x >= pos.x
+                    cursor_x >= pos.x
                         && cursor_x < pos.x + size.width as i32
                         && cursor_y >= pos.y
-                        && cursor_y < pos.y + size.height as i32;
+                        && cursor_y < pos.y + size.height as i32
                 }
             })
             .or_else(|| window.primary_monitor().ok().flatten());
@@ -993,17 +1087,17 @@ fn show_compact_window(
                     let logical_h = size.height as f64 / scale;
                     let cursor_x = cursor_x as f64;
                     let cursor_y = cursor_y as f64;
-                    return cursor_x >= logical_x
+                    cursor_x >= logical_x
                         && cursor_x < logical_x + logical_w
                         && cursor_y >= logical_y
-                        && cursor_y < logical_y + logical_h;
+                        && cursor_y < logical_y + logical_h
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
-                    return cursor_x >= pos.x
+                    cursor_x >= pos.x
                         && cursor_x < pos.x + size.width as i32
                         && cursor_y >= pos.y
-                        && cursor_y < pos.y + size.height as i32;
+                        && cursor_y < pos.y + size.height as i32
                 }
             })
             .or_else(|| window.primary_monitor().ok().flatten());
@@ -1054,14 +1148,12 @@ fn show_compact_window(
     window.set_focus()?;
     let _ = app.emit("window_shown", "compact");
 
-    // Store text in PendingText state for frontend to retrieve
-    if let Ok(mut pending) = app.state::<PendingText>().0.lock() {
-        *pending = text.clone();
+    if let Some(payload) = text {
+        if let Ok(mut pending) = app.state::<PendingText>().0.lock() {
+            *pending = Some(payload.clone());
+        }
+        let _ = app.emit("text_captured", payload);
     }
-
-    // Alwaus emit event! If None, emit empty string to clear/reset UI
-    let payload = text.unwrap_or_default();
-    let _ = app.emit("text_captured", payload);
 
     // Store cursor position for later use (e.g., opening main window)
     if let Ok(mut pos) = app.state::<LastCursorPos>().0.lock() {
@@ -1170,7 +1262,7 @@ fn handover_to_main(app: AppHandle, text: String) {
 
         // Show main window
         let cursor_pos = app.state::<LastCursorPos>().0.lock().ok().and_then(|g| *g);
-        if let Ok(_) = show_main_window(&app, cursor_pos) {
+        if show_main_window(&app, cursor_pos).is_ok() {
             // Emit event specifically for main window
             let _ = app.emit("handover_data", text);
         }
@@ -1374,6 +1466,7 @@ async fn finish_selection_ocr(
     );
 
     if x < 0 || y < 0 {
+        clear_captured_images(&app);
         return Err("Selection out of bounds (negative coordinates)".into());
     }
 
@@ -1381,6 +1474,7 @@ async fn finish_selection_ocr(
     let y_u32 = y as u32;
 
     if x_u32 >= image_width || y_u32 >= image_height {
+        clear_captured_images(&app);
         return Err("Selection out of bounds (start point outside image)".into());
     }
 
@@ -1388,6 +1482,7 @@ async fn finish_selection_ocr(
     let max_height = image_height.saturating_sub(y_u32);
 
     if width == 0 || height == 0 || width > max_width || height > max_height {
+        clear_captured_images(&app);
         return Err("Selection out of bounds (invalid width/height)".into());
     }
 
@@ -1445,6 +1540,7 @@ async fn complete_ocr_flow(app: AppHandle, text: String) -> Result<(), String> {
     if let Err(e) = close_capture_windows(&app) {
         log::info!("[ocr] Warning: Failed to close capture windows: {}", e);
     }
+    clear_captured_images(&app);
 
     // Determine where to go back to based on origin state
     let origin = {
@@ -1477,16 +1573,10 @@ async fn complete_ocr_flow(app: AppHandle, text: String) -> Result<(), String> {
 
 #[tauri::command]
 fn cancel_selection_ocr(app: AppHandle) {
-    // Close capture windows and clear state only if closure succeeds
     if let Err(e) = close_capture_windows(&app) {
         log::info!("[ocr] Warning: Failed to close some capture windows: {}", e);
-        // Don't clear state if windows might still be active
-    } else {
-        // Only clear the state if all windows were successfully closed
-        if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
-            lock.clear();
-        }
     }
+    clear_captured_images(&app);
 
     // Restore original window
     let origin = {
@@ -1523,7 +1613,7 @@ async fn run_ocr(_app: AppHandle, image: image::RgbaImage) -> Result<String, Str
         use image::DynamicImage;
         let dyn_img = DynamicImage::ImageRgba8(image);
         log::info!("[ocr] Running macOS Native Vision OCR...");
-        return macos_ocr::perform_ocr(dyn_img);
+        macos_ocr::perform_ocr(dyn_img)
     }
 
     // 2. Windows Native OCR (Restored)
@@ -1688,11 +1778,15 @@ fn request_permissions(permission_type: String) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn open_settings_url(url: &str) -> Result<(), String> {
-    Command::new("open")
+    let status = Command::new("open")
         .arg(url)
         .status()
         .map_err(|e| e.to_string())?;
-    Ok(())
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Failed to open settings URL: {url}"))
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1708,19 +1802,6 @@ fn open_screen_recording_settings() -> Result<(), String> {
 #[tauri::command]
 fn open_accessibility_settings() -> Result<(), String> {
     open_settings_url("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-}
-
-#[cfg(target_os = "macos")]
-fn check_screen_capture_permission() {
-    unsafe {
-        let has_access = CGPreflightScreenCaptureAccess();
-        log::info!("[main] Screen Capture Access Preflight: {}", has_access);
-        if !has_access {
-            log::info!("[main] Requesting Screen Capture Access...");
-            let requested = CGRequestScreenCaptureAccess();
-            log::info!("[main] Screen Capture Access Requested: {}", requested);
-        }
-    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1747,6 +1828,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             update_shortcut,
+            translation_backend::sync_translation_context,
+            translation_backend::request_translation_state,
+            translation_backend::start_translation,
+            translation_backend::stop_translation,
+            translation_backend::set_api_key,
+            translation_backend::clear_api_key,
+            translation_backend::get_api_key_status,
             open_main_window,
             get_pending_text,
             get_handover_text,
@@ -1767,12 +1855,7 @@ pub fn run() {
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
-            check_screen_capture_permission();
-
-            #[cfg(target_os = "macos")]
-            let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-
-            let _app_handle = app.handle();
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
@@ -1790,6 +1873,7 @@ pub fn run() {
             app.manage(ClipboardOpsEnabled::default());
             app.manage(CapturedImages::default());
             app.manage(OcrOriginState::default());
+            app.manage(translation_backend::TranslationBackendState::default());
             #[cfg(windows)]
             {
                 app.manage(PaddleOcrState(Mutex::new(None)));
@@ -1800,10 +1884,10 @@ pub fn run() {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 let shortcut_state = app.state::<ShortcutConfig>();
-                ensure_main_window(&app.handle())?;
-                ensure_compact_window(&app.handle())?;
-                setup_tray(&app.handle())?;
-                setup_global_shortcut(&app.handle(), shortcut_state.inner())?;
+                ensure_main_window(app.handle())?;
+                ensure_compact_window(app.handle())?;
+                setup_tray(app.handle())?;
+                setup_global_shortcut(app.handle(), shortcut_state.inner())?;
             }
 
             Ok(())

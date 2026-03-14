@@ -95,6 +95,7 @@ interface Translations {
 	clipboardOpsDesc: string;
 	clipboardOpsWarning: string;
 	clipboardOpsConfirmEnable: string;
+	clipboardOpsConfirmReplace: string;
 	clipboardOpsDisabled: string;
 	replaceUnavailableLinux: string;
 	ttsUnavailable: string;
@@ -117,6 +118,7 @@ interface Translations {
 	autoRunQuickDesc: string;
 	ocrHint: string;
 	ocrCancelHint: string;
+	ocrReading: string;
 	// Empty state
 	emptyTitle: string;
 	emptyDescription: string;
@@ -141,6 +143,38 @@ interface Translations {
 	usageCountLabel: string;
 	usageTokensLabel: string;
 	usageReset: string;
+	translationSending: string;
+	translationWaitingModel: string;
+	translationGenerating: string;
+	translationStopped: string;
+	usingModel: string;
+	sourceEstimate: string;
+	translationCandidates: string;
+	modelFast: string;
+	modelBalanced: string;
+	modelDeliberate: string;
+	modelGood: string;
+	modelBest: string;
+	modelRecommended: string;
+	modelReasoningSlow: string;
+	modelStreamingGreat: string;
+	modelStreamingNormal: string;
+	modelStreamingDelayed: string;
+	apiKeyStored: string;
+	apiKeySession: string;
+	apiKeyUnset: string;
+	providerReady: string;
+	providerSetupNeeded: string;
+	providerRecommendedModel: string;
+	historyLoad: string;
+	historyRetry: string;
+	errorApiKeyMissing: string;
+	errorQuota: string;
+	errorModelUnavailable: string;
+	errorRateLimit: string;
+	errorActionFixKeys: string;
+	errorActionOpenSettings: string;
+	streamingFallbackNote: string;
 }
 
 const translations: Record<AppLanguage, Translations> = {
@@ -239,6 +273,7 @@ const translations: Record<AppLanguage, Translations> = {
 		clipboardOpsDesc: "選択テキスト取得/置換のため、一時的にクリップボードを書き換えます",
 		clipboardOpsWarning: "画像やファイルのクリップボード内容が失われる可能性があります",
 		clipboardOpsConfirmEnable: "クリップボード操作を有効化しますか？画像やファイルが失われる可能性があります。",
+		clipboardOpsConfirmReplace: "選択中のテキストを置換します。クリップボード内容が失われる可能性があります。続けますか？",
 		clipboardOpsDisabled: "クリップボード操作が無効です",
 		replaceUnavailableLinux: "Linuxでは選択文の置換は未対応です",
 		ttsUnavailable: "この環境では読み上げが利用できません",
@@ -259,6 +294,7 @@ const translations: Record<AppLanguage, Translations> = {
 		autoRunQuickDesc: "ショートカット呼出時に自動で翻訳を開始します",
 		ocrHint: "翻訳する範囲を選択してください",
 		ocrCancelHint: "Escキーでキャンセル",
+		ocrReading: "文字を読み取り中...",
 		emptyTitle: "テキストを入力してください",
 		emptyDescription: "AIが複数の翻訳候補と詳しい解説を提供します",
 		emptyHintType: "テキストを直接入力",
@@ -271,6 +307,38 @@ const translations: Record<AppLanguage, Translations> = {
 		showMore: "もっと見る",
 		moreItems: "件",
 		showLess: "折りたたむ",
+		translationSending: "送信中...",
+		translationWaitingModel: "モデル応答待ち...",
+		translationGenerating: "生成中...",
+		translationStopped: "停止済み",
+		usingModel: "モデル",
+		sourceEstimate: "ソース推定",
+		translationCandidates: "候補数",
+		modelFast: "速い",
+		modelBalanced: "バランス",
+		modelDeliberate: "考えてから返す",
+		modelGood: "標準品質",
+		modelBest: "高品質",
+		modelRecommended: "おすすめ",
+		modelReasoningSlow: "初速は遅めですが、品質を優先するモデルです。",
+		modelStreamingGreat: "ストリーミング向き",
+		modelStreamingNormal: "通常のストリーミング",
+		modelStreamingDelayed: "初速は遅め",
+		apiKeyStored: "保存済み",
+		apiKeySession: "このセッションのみ",
+		apiKeyUnset: "未設定",
+		providerReady: "このプロバイダーはすぐ使えます。",
+		providerSetupNeeded: "まず API キーを入れると使えるようになります。",
+		providerRecommendedModel: "推奨モデル",
+		historyLoad: "読み込む",
+		historyRetry: "再翻訳",
+		errorApiKeyMissing: "API キーが未設定です。AI タブから追加してください。",
+		errorQuota: "利用上限または課金設定を確認してください。",
+		errorModelUnavailable: "このモデルは現在利用できません。別のモデルに切り替えてください。",
+		errorRateLimit: "リクエストが多すぎます。少し待って再試行してください。",
+		errorActionFixKeys: "AI 設定を開く",
+		errorActionOpenSettings: "設定を開く",
+		streamingFallbackNote: "このモデルは一括表示寄りです。途中表示は控えめになります。",
 	},
 	en: {
 		settings: "Settings",
@@ -367,6 +435,7 @@ const translations: Record<AppLanguage, Translations> = {
 		clipboardOpsDesc: "Temporarily overwrites clipboard to capture/replace selected text",
 		clipboardOpsWarning: "Images/files in the clipboard may be lost",
 		clipboardOpsConfirmEnable: "Enable clipboard operations? Images/files in the clipboard may be lost.",
+		clipboardOpsConfirmReplace: "Replace the selected text? Clipboard contents may be lost.",
 		clipboardOpsDisabled: "Clipboard operations are disabled",
 		replaceUnavailableLinux: "Replace selection is not supported on Linux",
 		ttsUnavailable: "Text-to-speech is not available in this environment",
@@ -387,6 +456,7 @@ const translations: Record<AppLanguage, Translations> = {
 		autoRunQuickDesc: "Automatically start translation when shortcut is pressed",
 		ocrHint: "Select area to translate",
 		ocrCancelHint: "Press Esc to cancel",
+		ocrReading: "Reading text...",
 		emptyTitle: "Enter text to translate",
 		emptyDescription: "AI will provide multiple translation options with detailed explanations",
 		emptyHintType: "Type text directly",
@@ -399,6 +469,38 @@ const translations: Record<AppLanguage, Translations> = {
 		showMore: "Show more",
 		moreItems: "items",
 		showLess: "Show less",
+		translationSending: "Sending...",
+		translationWaitingModel: "Waiting for model...",
+		translationGenerating: "Generating...",
+		translationStopped: "Stopped",
+		usingModel: "Model",
+		sourceEstimate: "Source guess",
+		translationCandidates: "Candidates",
+		modelFast: "Fast",
+		modelBalanced: "Balanced",
+		modelDeliberate: "Thinks first",
+		modelGood: "Standard quality",
+		modelBest: "High quality",
+		modelRecommended: "Recommended",
+		modelReasoningSlow: "This reasoning model starts slower but usually gives better output.",
+		modelStreamingGreat: "Great for streaming",
+		modelStreamingNormal: "Normal streaming",
+		modelStreamingDelayed: "Slower first token",
+		apiKeyStored: "Stored",
+		apiKeySession: "Session only",
+		apiKeyUnset: "Unset",
+		providerReady: "This provider is ready to use.",
+		providerSetupNeeded: "Add an API key first to use this provider.",
+		providerRecommendedModel: "Recommended model",
+		historyLoad: "Load",
+		historyRetry: "Retry",
+		errorApiKeyMissing: "API key is missing. Add it from the AI tab.",
+		errorQuota: "Check your quota or billing settings for this provider.",
+		errorModelUnavailable: "This model is unavailable right now. Switch to another model.",
+		errorRateLimit: "Too many requests. Wait a moment and try again.",
+		errorActionFixKeys: "Open AI settings",
+		errorActionOpenSettings: "Open Settings",
+		streamingFallbackNote: "This model may feel closer to one-shot output than live streaming.",
 	},
 	zh: {
 		settings: "设置",
@@ -495,6 +597,7 @@ const translations: Record<AppLanguage, Translations> = {
 		clipboardOpsDesc: "为获取/替换选中文本会临时改写剪贴板",
 		clipboardOpsWarning: "剪贴板中的图片/文件可能会丢失",
 		clipboardOpsConfirmEnable: "要启用剪贴板操作吗？剪贴板中的图片/文件可能会丢失。",
+		clipboardOpsConfirmReplace: "要替换选中文本吗？剪贴板内容可能会丢失。",
 		clipboardOpsDisabled: "剪贴板操作已禁用",
 		replaceUnavailableLinux: "Linux 上不支持替换选中文本",
 		ttsUnavailable: "此环境不支持朗读功能",
@@ -515,6 +618,7 @@ const translations: Record<AppLanguage, Translations> = {
 		autoRunQuickDesc: "按快捷键时自动开始翻译",
 		ocrHint: "请选择要翻译的区域",
 		ocrCancelHint: "按 Esc 取消",
+		ocrReading: "正在识别文字...",
 		emptyTitle: "请输入要翻译的文本",
 		emptyDescription: "AI将提供多种翻译选项并附详细说明",
 		emptyHintType: "直接输入文本",
@@ -527,6 +631,38 @@ const translations: Record<AppLanguage, Translations> = {
 		showMore: "更多",
 		moreItems: "项",
 		showLess: "收起",
+		translationSending: "发送中...",
+		translationWaitingModel: "等待模型响应...",
+		translationGenerating: "生成中...",
+		translationStopped: "已停止",
+		usingModel: "模型",
+		sourceEstimate: "源语言推测",
+		translationCandidates: "候选数",
+		modelFast: "快速",
+		modelBalanced: "均衡",
+		modelDeliberate: "先思考再回答",
+		modelGood: "标准质量",
+		modelBest: "高质量",
+		modelRecommended: "推荐",
+		modelReasoningSlow: "这类推理模型首字较慢，但通常质量更高。",
+		modelStreamingGreat: "适合流式显示",
+		modelStreamingNormal: "普通流式",
+		modelStreamingDelayed: "首字较慢",
+		apiKeyStored: "已保存",
+		apiKeySession: "仅本次会话",
+		apiKeyUnset: "未设置",
+		providerReady: "该提供商已可直接使用。",
+		providerSetupNeeded: "先填写 API Key 才能使用该提供商。",
+		providerRecommendedModel: "推荐模型",
+		historyLoad: "加载",
+		historyRetry: "重新翻译",
+		errorApiKeyMissing: "API Key 尚未设置，请在 AI 标签页中添加。",
+		errorQuota: "请检查该提供商的额度或计费设置。",
+		errorModelUnavailable: "该模型当前不可用，请切换到其他模型。",
+		errorRateLimit: "请求过于频繁，请稍后再试。",
+		errorActionFixKeys: "打开 AI 设置",
+		errorActionOpenSettings: "打开设置",
+		streamingFallbackNote: "这个模型更接近一次性返回，途中显示会较少。",
 	},
 	ko: {
 		settings: "설정",
@@ -623,6 +759,7 @@ const translations: Record<AppLanguage, Translations> = {
 		clipboardOpsDesc: "선택 텍스트 가져오기/치환을 위해 클립보드를 임시로 변경합니다",
 		clipboardOpsWarning: "클립보드의 이미지/파일이 사라질 수 있습니다",
 		clipboardOpsConfirmEnable: "클립보드 작업을 활성화할까요? 클립보드의 이미지/파일이 사라질 수 있습니다.",
+		clipboardOpsConfirmReplace: "선택한 텍스트를 바꿀까요? 클립보드 내용이 사라질 수 있습니다.",
 		clipboardOpsDisabled: "클립보드 작업이 비활성화되었습니다",
 		replaceUnavailableLinux: "Linux에서는 선택 문장 치환이 지원되지 않습니다",
 		ttsUnavailable: "이 환경에서는 음성 읽기를 사용할 수 없습니다",
@@ -643,6 +780,7 @@ const translations: Record<AppLanguage, Translations> = {
 		autoRunQuickDesc: "단축키 호출 시 자동으로 번역을 시작합니다",
 		ocrHint: "번역할 영역을 선택하세요",
 		ocrCancelHint: "Esc를 눌러 취소",
+		ocrReading: "텍스트를 읽는 중...",
 		emptyTitle: "번역할 텍스트를 입력하세요",
 		emptyDescription: "AI가 여러 번역 옵션과 자세한 설명을 제공합니다",
 		emptyHintType: "텍스트 직접 입력",
@@ -655,6 +793,38 @@ const translations: Record<AppLanguage, Translations> = {
 		showMore: "더 보기",
 		moreItems: "개",
 		showLess: "접기",
+		translationSending: "전송 중...",
+		translationWaitingModel: "모델 응답 대기 중...",
+		translationGenerating: "생성 중...",
+		translationStopped: "중지됨",
+		usingModel: "모델",
+		sourceEstimate: "원문 추정",
+		translationCandidates: "후보 수",
+		modelFast: "빠름",
+		modelBalanced: "균형형",
+		modelDeliberate: "생각 후 응답",
+		modelGood: "표준 품질",
+		modelBest: "고품질",
+		modelRecommended: "추천",
+		modelReasoningSlow: "이 추론형 모델은 첫 응답이 느리지만 보통 품질이 더 좋습니다.",
+		modelStreamingGreat: "스트리밍에 적합",
+		modelStreamingNormal: "일반 스트리밍",
+		modelStreamingDelayed: "첫 응답이 느림",
+		apiKeyStored: "저장됨",
+		apiKeySession: "이번 세션만",
+		apiKeyUnset: "미설정",
+		providerReady: "이 제공업체는 바로 사용할 수 있습니다.",
+		providerSetupNeeded: "먼저 API 키를 입력해야 사용할 수 있습니다.",
+		providerRecommendedModel: "추천 모델",
+		historyLoad: "불러오기",
+		historyRetry: "다시 번역",
+		errorApiKeyMissing: "API 키가 없습니다. AI 탭에서 추가하세요.",
+		errorQuota: "이 제공업체의 사용량 한도 또는 결제 설정을 확인하세요.",
+		errorModelUnavailable: "이 모델은 지금 사용할 수 없습니다. 다른 모델로 바꾸세요.",
+		errorRateLimit: "요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
+		errorActionFixKeys: "AI 설정 열기",
+		errorActionOpenSettings: "설정 열기",
+		streamingFallbackNote: "이 모델은 실시간 스트리밍보다 한 번에 반환되는 느낌이 더 강할 수 있습니다.",
 	},
 };
 

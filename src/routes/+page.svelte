@@ -6,7 +6,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { listen, emit } from "@tauri-apps/api/event";
+  import { listen } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import {
     enable as enableAutostart,
@@ -15,14 +15,17 @@
   } from "@tauri-apps/plugin-autostart";
   import { type AiModel } from "$lib/ai_service";
   import {
-    AI_MODELS,
     DEFAULT_MODELS_BY_PROVIDER,
+    type AiModelEntry,
     type AiProvider,
     getDefaultModelForProvider,
     getModelEntry,
+    getModelsForProvider,
+    getRecommendedModelForProvider,
     getProviderForModel,
     isAiProvider,
   } from "$lib/ai_models";
+  import { getExecutionPlan } from "$lib/translation_policy";
   import CaptureOverlay from "$lib/components/CaptureOverlay.svelte";
   import {
     t,
@@ -48,12 +51,43 @@
   let selectedModel = $state<AiModel>(
     DEFAULT_MODELS_BY_PROVIDER.openai as AiModel,
   );
-  let apiKeys = $state({
+  const EMPTY_API_KEYS = {
     gemini: "",
     openai: "",
     anthropic: "",
     groq: "",
     cerebras: "",
+  };
+  type ApiKeyStore = typeof EMPTY_API_KEYS;
+  const API_KEY_PROVIDERS: AiProvider[] = [
+    "openai",
+    "gemini",
+    "anthropic",
+    "groq",
+    "cerebras",
+  ];
+  type ApiKeyPresence = "unset" | "session" | "stored";
+  type TranslationPhase =
+    | "idle"
+    | "submitting"
+    | "waiting_model"
+    | "streaming"
+    | "stopped"
+    | "error";
+  let apiKeys = $state<ApiKeyStore>({ ...EMPTY_API_KEYS });
+  let apiKeyStatus = $state<Record<AiProvider, ApiKeyPresence>>({
+    openai: "unset",
+    gemini: "unset",
+    anthropic: "unset",
+    groq: "unset",
+    cerebras: "unset",
+  });
+  let apiKeyDirty = $state<Record<AiProvider, boolean>>({
+    openai: false,
+    gemini: false,
+    anthropic: false,
+    groq: false,
+    cerebras: false,
   });
   let rememberApiKeys = $state(true);
   let defaultTargetLang = $state("日本語");
@@ -82,6 +116,10 @@
   let startMinimized = $state(false);
   let ocrEngine = $state<"paddle" | "windows">("paddle");
   let clipboardOpsEnabled = $state(false);
+  let translationPhase = $state<TranslationPhase>("idle");
+  let latestTranslationRunId = 0;
+  let latestTranslationUpdatedAt = 0;
+  let apiKeySyncTimer: ReturnType<typeof setTimeout> | null = null;
 
   let historyAnimating = $state(false);
   let historyAnimTimer: ReturnType<typeof setTimeout> | null = null;
@@ -206,6 +244,389 @@
     return "英語";
   }
 
+  function normalizeApiKeyStatus(raw: any): Record<AiProvider, ApiKeyPresence> {
+    const normalizePresence = (value: unknown): ApiKeyPresence => {
+      if (value === "stored" || value === "session" || value === "unset") {
+        return value;
+      }
+      return value ? "stored" : "unset";
+    };
+
+    return {
+      openai: normalizePresence(raw?.openai),
+      gemini: normalizePresence(raw?.gemini),
+      anthropic: normalizePresence(raw?.anthropic),
+      groq: normalizePresence(raw?.groq),
+      cerebras: normalizePresence(raw?.cerebras),
+    };
+  }
+
+  async function refreshApiKeyStatus() {
+    try {
+      const status = await invoke<any>("get_api_key_status");
+      const normalized = normalizeApiKeyStatus(status);
+      apiKeyStatus = normalized;
+      return normalized;
+    } catch (error) {
+      console.warn("Failed to fetch API key status", error);
+      return apiKeyStatus;
+    }
+  }
+
+  async function syncApiKeysToBackend() {
+    const dirtyProviders = API_KEY_PROVIDERS.filter((provider) => apiKeyDirty[provider]);
+    if (!dirtyProviders.length) return;
+
+    for (const provider of dirtyProviders) {
+      try {
+        const value = apiKeys[provider].trim();
+        const status = value
+          ? await invoke<any>("set_api_key", {
+              payload: { provider, value, persist: rememberApiKeys },
+            })
+          : await invoke<any>("clear_api_key", {
+              payload: { provider },
+            });
+        apiKeyStatus = normalizeApiKeyStatus(status);
+      } catch (error) {
+        console.warn(`Failed to sync ${provider} API key`, error);
+      }
+    }
+
+    apiKeyDirty = {
+      openai: false,
+      gemini: false,
+      anthropic: false,
+      groq: false,
+      cerebras: false,
+    };
+  }
+
+  function scheduleApiKeySync() {
+    if (apiKeySyncTimer) {
+      clearTimeout(apiKeySyncTimer);
+    }
+    apiKeySyncTimer = setTimeout(() => {
+      apiKeySyncTimer = null;
+      void syncApiKeysToBackend();
+    }, 180);
+  }
+
+  function markApiKeyDirty(provider: AiProvider) {
+    apiKeyDirty = { ...apiKeyDirty, [provider]: true };
+    scheduleApiKeySync();
+  }
+
+  function toggleRememberApiKeys() {
+    rememberApiKeys = !rememberApiKeys;
+    apiKeyDirty = {
+      openai: true,
+      gemini: true,
+      anthropic: true,
+      groq: true,
+      cerebras: true,
+    };
+    scheduleApiKeySync();
+  }
+
+  function normalizeTranslationPhase(value: unknown): TranslationPhase {
+    if (
+      value === "idle" ||
+      value === "submitting" ||
+      value === "waiting_model" ||
+      value === "streaming" ||
+      value === "stopped" ||
+      value === "error"
+    ) {
+      return value;
+    }
+    return "idle";
+  }
+
+  function getApiKeyPresenceLabel(presence: ApiKeyPresence) {
+    if (presence === "stored") return t(appLanguage, "apiKeyStored");
+    if (presence === "session") return t(appLanguage, "apiKeySession");
+    return t(appLanguage, "apiKeyUnset");
+  }
+
+  function getModelSpeedLabel(model: AiModelEntry | null) {
+    if (!model) return "";
+    if (model.speed === "fast") return t(appLanguage, "modelFast");
+    if (model.speed === "deliberate") return t(appLanguage, "modelDeliberate");
+    return t(appLanguage, "modelBalanced");
+  }
+
+  function getModelQualityLabel(model: AiModelEntry | null) {
+    if (!model) return "";
+    return model.quality === "best"
+      ? t(appLanguage, "modelBest")
+      : t(appLanguage, "modelGood");
+  }
+
+  function getModelStreamingLabel(model: AiModelEntry | null) {
+    if (!model) return "";
+    if (model.streamingExperience === "great") {
+      return t(appLanguage, "modelStreamingGreat");
+    }
+    if (model.streamingExperience === "delayed") {
+      return t(appLanguage, "modelStreamingDelayed");
+    }
+    return t(appLanguage, "modelStreamingNormal");
+  }
+
+  function getModelUsageLabel(model: AiModelEntry | null) {
+    if (!model) return "";
+    if (model.recommended) return t(appLanguage, "modelRecommended");
+    if (model.reasoning) return t(appLanguage, "modelReasoningSlow");
+    return getModelSpeedLabel(model);
+  }
+
+  function decorateModelLabel(model: AiModelEntry) {
+    const tags = [
+      model.recommended ? t(appLanguage, "modelRecommended") : "",
+      getModelSpeedLabel(model),
+      model.reasoning ? t(appLanguage, "modelReasoningSlow") : "",
+    ].filter(Boolean);
+    return tags.length ? `${model.label} · ${tags.join(" / ")}` : model.label;
+  }
+
+  function getTranslationPhaseLabel() {
+    if (translationPhase === "submitting") {
+      return t(appLanguage, "translationSending");
+    }
+    if (translationPhase === "waiting_model") {
+      return t(appLanguage, "translationWaitingModel");
+    }
+    if (translationPhase === "streaming") {
+      return t(appLanguage, "translationGenerating");
+    }
+    if (translationPhase === "stopped") {
+      return t(appLanguage, "translationStopped");
+    }
+    if (translationPhase === "error") {
+      return t(appLanguage, "denied");
+    }
+    return t(appLanguage, "translating");
+  }
+
+  function getTranslationPhaseHint() {
+    if (
+      currentModelMeta?.reasoning &&
+      (translationPhase === "submitting" || translationPhase === "waiting_model")
+    ) {
+      return t(appLanguage, "modelReasoningSlow");
+    }
+    if (translationExecutionPlan.reason === "model_unsupported") {
+      return t(appLanguage, "streamingFallbackNote");
+    }
+    return "";
+  }
+
+  function getFriendlyErrorMessage(raw: string) {
+    const lower = raw.toLowerCase();
+    if (!raw) return "";
+    if (lower.includes("api key") && lower.includes("not configured")) {
+      return t(appLanguage, "errorApiKeyMissing");
+    }
+    if (
+      lower.includes("insufficient_quota") ||
+      lower.includes("billing") ||
+      lower.includes("quota")
+    ) {
+      return t(appLanguage, "errorQuota");
+    }
+    if (lower.includes("rate limit") || lower.includes("http 429")) {
+      return t(appLanguage, "errorRateLimit");
+    }
+    if (
+      lower.includes("model") &&
+      (lower.includes("not found") ||
+        lower.includes("unsupported") ||
+        lower.includes("unavailable"))
+    ) {
+      return t(appLanguage, "errorModelUnavailable");
+    }
+    return raw;
+  }
+
+  function getErrorAction(raw: string) {
+    const lower = raw.toLowerCase();
+    if (lower.includes("api key") && lower.includes("not configured")) {
+      return {
+        label: t(appLanguage, "errorActionFixKeys"),
+        action: () => {
+          settingsTab = "api";
+          showSettings = true;
+        },
+      };
+    }
+    if (
+      lower.includes("screen recording") ||
+      lower.includes("画面収録") ||
+      lower.includes("accessibility")
+    ) {
+      return {
+        label: t(appLanguage, "errorActionOpenSettings"),
+        action: async () => {
+          if (lower.includes("accessibility")) {
+            await invoke("open_accessibility_settings");
+            return;
+          }
+          await invoke("open_screen_recording_settings");
+        },
+      };
+    }
+    return null;
+  }
+
+  function isRemoteStateNewer(payload: any) {
+    const updatedAt = Number(payload?.updatedAt ?? 0);
+    const runId = Number(payload?.runId ?? 0);
+    return (
+      updatedAt > latestTranslationUpdatedAt ||
+      (updatedAt === latestTranslationUpdatedAt &&
+        runId >= latestTranslationRunId)
+    );
+  }
+
+  function markRemoteState(payload: any) {
+    latestTranslationRunId = Number(payload?.runId ?? latestTranslationRunId);
+    latestTranslationUpdatedAt = Number(
+      payload?.updatedAt ?? latestTranslationUpdatedAt,
+    );
+  }
+
+  function applyTranslationUpdate(payload: any) {
+    if (!payload || !isRemoteStateNewer(payload)) {
+      return;
+    }
+    markRemoteState(payload);
+
+    if (payload.inputQuery !== undefined && payload.inputQuery !== inputQuery) {
+      const hasResults =
+        Array.isArray(payload.translations) &&
+        payload.translations.some((t: any) => t?.text);
+      if (textareaEl && document.activeElement === textareaEl) {
+        if (!payload.isTranslating && !hasResults) {
+          return;
+        }
+      }
+    }
+
+    if (isTranslating && !payload.isTranslating) {
+      if (
+        payload.translations &&
+        payload.translations.length > 0 &&
+        payload.translations.some((t: any) => t.text)
+      ) {
+        const newEntry: HistoryItem = {
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          sourceText: payload.inputQuery ?? inputQuery,
+          sourceLang: payload.detectedLang || payload.sourceLang || sourceLang,
+          targetLang: payload.targetLang || targetLang,
+          isAutoDetect: isAutoDetect,
+          detectedLang: payload.detectedLang || detectedLang || "",
+          translations: payload.translations.map((t: any) => ({
+            text: t.text,
+            reason: t.reason,
+          })),
+          detailedExplanation: payload.detailedExplanation
+            ? $state.snapshot(payload.detailedExplanation)
+            : null,
+          styleLevels: payload.styleLevels
+            ? $state.snapshot(payload.styleLevels)
+            : {},
+          provider: selectedProvider,
+          model: payload.currentModel || selectedModel,
+        };
+        history = [newEntry, ...history].slice(0, 50);
+        localStorage.setItem("howlingual_history", JSON.stringify(history));
+        persistLastResult();
+
+        const usageTokens = Math.max(
+          0,
+          (payload.techMetrics?.inputTokens ?? 0) +
+            (payload.techMetrics?.outputTokens ?? 0),
+        );
+        recordUsage(1, usageTokens);
+      }
+      lastTranslatedText = payload.inputQuery ?? inputQuery;
+    }
+
+    isTranslating = Boolean(payload.isTranslating);
+    translationPhase = normalizeTranslationPhase(
+      payload.phase ?? (payload.isTranslating ? "waiting_model" : "idle"),
+    );
+    if (!payload.isTranslating) {
+      if (!isAutoDetect || inputQuery.trim().length >= 5 || !inputQuery.trim()) {
+        isDetecting = false;
+      }
+    }
+    translations = Array.isArray(payload.translations) ? payload.translations : [];
+
+    if ("detailedExplanation" in payload) {
+      detailedExplanation = payload.detailedExplanation || null;
+      showExplanation = Boolean(payload.detailedExplanation);
+    } else if (payload.isTranslating) {
+      detailedExplanation = null;
+      showExplanation = false;
+    }
+    if ("errorMessage" in payload) {
+      errorMessage = payload.errorMessage || "";
+      if (payload.errorMessage) {
+        translationPhase = "error";
+      }
+    }
+    if (payload.inputQuery !== undefined && payload.inputQuery !== inputQuery) {
+      inputQuery = payload.inputQuery;
+    }
+
+    if (!isAutoDetect || inputQuery.trim().length >= 5) {
+      if (payload.sourceLang) {
+        if (isAutoDetect && payload.sourceLang !== AUTO_DETECT_LABEL) {
+          const incoming = payload.detectedLang || payload.sourceLang;
+          const localDetect = detectLanguageSimple(inputQuery);
+          detectedLang = localDetect === "日本語" ? "日本語" : incoming;
+          isDetecting = false;
+        } else {
+          applySourceLangFromSync(payload.sourceLang, payload.detectedLang);
+        }
+      } else if (payload.detectedLang && isAutoDetect) {
+        const localDetect = detectLanguageSimple(inputQuery);
+        detectedLang =
+          localDetect === "日本語" ? "日本語" : payload.detectedLang;
+        isDetecting = false;
+      }
+    }
+
+    if (payload.targetLang) {
+      targetLang = payload.targetLang;
+    }
+
+    if (payload.styleLevels) {
+      styleLevels = normalizeStyleLevels(
+        { ...styleLevels, ...payload.styleLevels },
+        customStyles,
+      );
+    }
+
+    if (payload.techMetrics) {
+      syncTechMetrics(payload.techMetrics);
+    }
+
+    void tick().then(autoResize);
+  }
+
+  async function requestTranslationState() {
+    try {
+      const payload = await invoke<any>("request_translation_state");
+      applyTranslationUpdate(payload);
+    } catch (error) {
+      console.warn("Failed to request translation state", error);
+    }
+  }
+
   // Custom Styles
   type CustomStyle = {
     id: string;
@@ -287,10 +708,26 @@
     }
   });
 
-  let availableModels = $state([...AI_MODELS]);
-
-  let filteredModels = $derived(
-    availableModels.filter((m) => m.provider === selectedProvider),
+  let availableModels = $derived(getModelsForProvider(selectedProvider));
+  let filteredModels = $derived(availableModels);
+  let currentModelMeta = $derived(getModelEntry(selectedModel));
+  let recommendedModelForProvider = $derived(
+    getRecommendedModelForProvider(selectedProvider),
+  );
+  let providerOrder = $derived.by(() =>
+    [...API_KEY_PROVIDERS].sort((a, b) => {
+      const aConfigured = apiKeyStatus[a] === "unset" ? 1 : 0;
+      const bConfigured = apiKeyStatus[b] === "unset" ? 1 : 0;
+      if (aConfigured !== bConfigured) return aConfigured - bConfigured;
+      return API_KEY_PROVIDERS.indexOf(a) - API_KEY_PROVIDERS.indexOf(b);
+    }),
+  );
+  let translationExecutionPlan = $derived(
+    getExecutionPlan({
+      provider: selectedProvider,
+      model: selectedModel,
+      streamingDisplay: true,
+    }),
   );
 
 
@@ -321,7 +758,6 @@
     }
 
     try {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
       isCompactMode = getCurrentWindow().label === "compact";
       await tick();
       autoResize();
@@ -338,8 +774,10 @@
   onMount(() => {
     const params = new URLSearchParams(window.location.search);
     const viewParam = params.get("view");
+    let unlistenCompactFocus: (() => void) | null = null;
 
     void detectWindowMode();
+    void refreshApiKeyStatus();
     const saved = localStorage.getItem("howlingual_settings");
     if (saved) {
       try {
@@ -420,7 +858,6 @@
     if (viewParam === "main") {
       (async () => {
         try {
-          const { getCurrentWindow } = await import("@tauri-apps/api/window");
           const window = getCurrentWindow();
           if (!startMinimized) {
             await window.show();
@@ -435,157 +872,45 @@
     }
     // Quick Mode Reset on Focus
     if (viewParam === "compact") {
-      import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+      void (async () => {
         const win = getCurrentWindow();
-        win.listen("tauri://focus", async () => {
+        unlistenCompactFocus = await win.listen("tauri://focus", async () => {
           // Disabled auto-reset on focus as per user feedback ("annoying")
           // and to prevent race condition with text_captured event which focuses window
-          /*
-          if (!isTranslating && !isWaitingForOCR && !isOpeningMain) {
-            console.log("[QuickMode] Focus detected, resetting state.");
-            inputQuery = "";
-            translations = translations.map((t) => ({
-              ...t,
-              text: "",
-              reason: "",
-            }));
-            await emit("sync_input_command", {
-              text: "",
-              resetTranslations: true,
-            });
-          }
-          */
         });
-      });
+      })();
     }
 
+    if (!rememberApiKeys) {
+      apiKeyDirty = {
+        openai: true,
+        gemini: true,
+        anthropic: true,
+        groq: true,
+        cerebras: true,
+      };
+      scheduleApiKeySync();
+    }
+
+    void refreshApiKeyStatus();
     settingsReady = true;
+
+    return () => {
+      if (unlistenCompactFocus) {
+        unlistenCompactFocus();
+      }
+    };
   });
 
   // Service Integration
   onMount(() => {
     let unlisten: () => void;
     (async () => {
-      // Sync state on load
       console.log("[UI] Requesting Sync State...");
-      await emit("request_sync_state");
+      await requestTranslationState();
 
       unlisten = await listen<any>("translation_update", (event) => {
-        const p = event.payload;
-
-        // --- ECHO GUARD ---
-        // Ignore updates for old input text to prevent "jumpy" UI when typing fast.
-        // During active detection or translation, the service might echo old states.
-        if (p.inputQuery !== undefined && p.inputQuery !== inputQuery) {
-          // If this window is focused/typing, ignore stale echoes unless real translation is flowing.
-          const hasResults =
-            Array.isArray(p.translations) &&
-            p.translations.some((t: any) => t?.text);
-          if (textareaEl && document.activeElement === textareaEl) {
-            if (!p.isTranslating && !hasResults) {
-              return;
-            }
-          }
-        }
-
-        // Detect completion for History Saving
-        if (isTranslating && !p.isTranslating) {
-          // Translation just finished
-          if (
-            p.translations &&
-            p.translations.length > 0 &&
-            p.translations.some((t: any) => t.text)
-          ) {
-            const newEntry: HistoryItem = {
-              id: crypto.randomUUID(),
-              timestamp: Date.now(),
-              sourceText: p.inputQuery || inputQuery,
-              sourceLang: p.detectedLang || p.sourceLang || sourceLang,
-              targetLang: p.targetLang || targetLang,
-              isAutoDetect: isAutoDetect,
-              detectedLang: p.detectedLang || detectedLang || "",
-              translations: p.translations.map((t: any) => ({
-                text: t.text,
-                reason: t.reason,
-              })),
-              detailedExplanation: p.detailedExplanation
-                ? $state.snapshot(p.detailedExplanation)
-                : null,
-              styleLevels: p.styleLevels ? $state.snapshot(p.styleLevels) : {},
-            };
-            history = [newEntry, ...history].slice(0, 50);
-            localStorage.setItem("howlingual_history", JSON.stringify(history));
-
-            persistLastResult(); // Helper function
-
-            const usageTokens = Math.max(
-              0,
-              (p.techMetrics?.inputTokens ?? 0) +
-                (p.techMetrics?.outputTokens ?? 0),
-            );
-            recordUsage(1, usageTokens);
-          }
-          lastTranslatedText = p.inputQuery || inputQuery;
-        }
-
-        isTranslating = p.isTranslating;
-        if (!p.isTranslating) {
-          // Only stop detecting if we're not in the manual threshold-waiting state
-          if (
-            !isAutoDetect ||
-            inputQuery.trim().length >= 5 ||
-            !inputQuery.trim()
-          ) {
-            isDetecting = false;
-          }
-        }
-        translations = p.translations; // Direct sync
-
-        if ("detailedExplanation" in p) {
-          detailedExplanation = p.detailedExplanation || null;
-          showExplanation = Boolean(p.detailedExplanation);
-        } else if (p.isTranslating) {
-          detailedExplanation = null;
-          showExplanation = false;
-        }
-        if ("errorMessage" in p) {
-          errorMessage = p.errorMessage || "";
-        }
-        if (p.inputQuery && p.inputQuery !== inputQuery) {
-          inputQuery = p.inputQuery;
-        }
-
-        // Sync Language Settings
-        // Only accept updates if we have enough text to trust the backend (or if manual)
-        // This prevents "flash" updates where backend sees 1 char and says "English"
-        if (!isAutoDetect || inputQuery.trim().length >= 5) {
-          if (p.sourceLang) {
-            if (isAutoDetect && p.sourceLang !== AUTO_DETECT_LABEL) {
-              const incoming = p.detectedLang || p.sourceLang;
-              const localDetect = detectLanguageSimple(inputQuery);
-              detectedLang = localDetect === "日本語" ? "日本語" : incoming;
-              isDetecting = false;
-            } else {
-              applySourceLangFromSync(p.sourceLang, p.detectedLang);
-            }
-          } else if (p.detectedLang && isAutoDetect) {
-            const localDetect = detectLanguageSimple(inputQuery);
-            detectedLang = localDetect === "日本語" ? "日本語" : p.detectedLang;
-            isDetecting = false;
-          }
-        }
-
-        if (p.targetLang) {
-          targetLang = p.targetLang;
-        }
-
-        // Sync Metrics
-        if (p.techMetrics) {
-          syncTechMetrics(p.techMetrics);
-        }
-
-        // Auto-resize if needed
-        void tick().then(autoResize);
+        applyTranslationUpdate(event.payload);
       });
     })();
 
@@ -699,7 +1024,6 @@
 
       // Ensure window is visible and focused
       try {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
         const currentWindow = getCurrentWindow();
         await currentWindow.show();
         await currentWindow.setFocus();
@@ -795,19 +1119,9 @@
   // Auto-save settings when changed
   $effect(() => {
     if (!settingsReady) return;
-    const sanitizedApiKeys = rememberApiKeys
-      ? apiKeys
-      : {
-          gemini: "",
-          openai: "",
-          anthropic: "",
-          groq: "",
-          cerebras: "",
-        };
     const settings = {
       model: selectedModel,
       provider: selectedProvider,
-      apiKeys: sanitizedApiKeys,
       defaultTargetLang: defaultTargetLang,
       theme: theme,
       appLanguage: appLanguage,
@@ -912,7 +1226,7 @@
   }
 
   function ensureModelMatchesProvider() {
-    const valid = availableModels.some(
+    const valid = getModelsForProvider(selectedProvider).some(
       (m) => m.provider === selectedProvider && m.value === selectedModel,
     );
     if (!valid) {
@@ -952,13 +1266,6 @@
 
     if (parsed.rememberApiKeys !== undefined)
       rememberApiKeys = parsed.rememberApiKeys;
-    const shouldApplyKeys =
-      parsed.rememberApiKeys !== undefined
-        ? parsed.rememberApiKeys
-        : rememberApiKeys;
-    if (parsed.apiKeys && shouldApplyKeys) {
-      apiKeys = { ...apiKeys, ...parsed.apiKeys };
-    }
     if (parsed.defaultTargetLang)
       defaultTargetLang = parsed.defaultTargetLang;
     if (parsed.theme) theme = parsed.theme;
@@ -982,9 +1289,7 @@
     document.documentElement.setAttribute("data-theme", theme);
   }
 
-  let styleLevels: Record<string, number> = $state(
-    normalizeStyleLevels({}, customStyles),
-  );
+  let styleLevels: Record<string, number> = $state({});
   // Prevent initial auto-save from overwriting loaded values
   let styleLevelsReady = $state(false);
   let styleLevelsSaveTimer: number | null = null;
@@ -1051,7 +1356,7 @@
     // 保存されていたモデルを復元
     if (lastSelectedModels[provider]) {
       // 保存されたモデルがまだ利用可能か確認
-      const savedModelExists = availableModels.some(
+      const savedModelExists = getModelsForProvider(provider).some(
         (m) =>
           m.value === lastSelectedModels[provider] && m.provider === provider,
       );
@@ -1132,8 +1437,8 @@
   const settingsTabOrder = [
     "appearance",
     "translation",
-    "system",
     "api",
+    "system",
     "styles",
     "about",
   ];
@@ -1174,6 +1479,24 @@
   }
 
   function getApiKeyPlaceholder(provider: AiProvider) {
+    if (!apiKeys[provider] && apiKeyStatus[provider] !== "unset") {
+      if (apiKeyStatus[provider] === "session") {
+        return appLanguage === "ja"
+          ? "このセッションで使用中"
+          : appLanguage === "zh"
+            ? "当前会话可用"
+            : appLanguage === "ko"
+              ? "현재 세션에서 사용 중"
+              : "Available for this session";
+      }
+      return appLanguage === "ja"
+        ? "安全に保存済み"
+        : appLanguage === "zh"
+          ? "已安全保存"
+          : appLanguage === "ko"
+            ? "안전하게 저장됨"
+            : "Stored securely";
+    }
     switch (provider) {
       case "gemini":
         return "AIza...";
@@ -1256,7 +1579,7 @@
         return;
       }
       if (showSettings) {
-        showSettings = false;
+        closeSettings();
         return;
       }
       if (showHistory) {
@@ -1265,7 +1588,6 @@
       }
 
       if (isCompactMode) {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
         await getCurrentWindow().hide();
         return;
       }
@@ -1431,7 +1753,6 @@
 
       // Hide the quick window after handover
       try {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
         const currentWindow = getCurrentWindow();
         if (currentWindow.label === "compact") {
           await currentWindow.hide();
@@ -1491,7 +1812,7 @@
 
         await tick();
         await autoResize();
-        await emit("request_sync_state");
+        await requestTranslationState();
       } else {
         // Valid JSON but not our state object? Treat as text.
         await applyQuickText(typeof data === "string" ? data : payload);
@@ -1514,6 +1835,7 @@
     detailedExplanation = null;
     showExplanation = false;
     errorMessage = "";
+    translationPhase = "idle";
     autoScrollEnabled = true;
     lastStreamCharCount = 0;
     // Reset tech metrics
@@ -1554,15 +1876,17 @@
   let syncTimer: ReturnType<typeof setTimeout> | null = null;
 
   async function syncSharedState(resetTranslations = false) {
-    await emit("sync_input_command", {
-      text: inputQuery,
-      sourceLang,
-      detectedLang,
-      isDetecting,
-      targetLang,
-      styles: $state.snapshot(styleLevels),
-      candidateCount: translationCount,
-      resetTranslations,
+    await invoke("sync_translation_context", {
+      payload: {
+        inputQuery,
+        sourceLang,
+        detectedLang,
+        isDetecting,
+        targetLang,
+        styleLevels: $state.snapshot(styleLevels),
+        candidateCount: translationCount,
+        resetTranslations,
+      },
     });
   }
 
@@ -1829,6 +2153,8 @@
         : t(appLanguage, "clipboardOpsDisabled");
       return;
     }
+    const approved = confirm(t(appLanguage, "clipboardOpsConfirmReplace"));
+    if (!approved) return;
     try {
       await invoke("replace_selection", { text });
       replacedId = id;
@@ -2236,6 +2562,8 @@
     sourceText: string;
     sourceLang: string;
     targetLang: string;
+    provider?: AiProvider;
+    model?: string;
     isAutoDetect?: boolean;
     detectedLang?: string;
     translations: { text: string; reason: string }[];
@@ -2389,6 +2717,8 @@
   function loadHistory(item: HistoryItem) {
     inputQuery = item.sourceText;
     lastTranslatedText = item.sourceText;
+    errorMessage = "";
+    translationPhase = "idle";
     // We try to match sourceLang/targetLang to available options if possible,
     // or just set them if they are strings.
     // For now assuming strings are compatible.
@@ -2435,9 +2765,19 @@
       styleLevels = { ...styleLevels, ...item.styleLevels };
     }
 
+    if (item.provider || item.model) {
+      syncProviderAndModel(item.model, item.provider);
+    }
+
     persistLastResult();
 
     showHistory = false;
+  }
+
+  async function rerunHistory(item: HistoryItem) {
+    loadHistory(item);
+    await tick();
+    await startTranslation();
   }
 
   function clearHistory() {
@@ -2763,8 +3103,16 @@
   }
   async function startTranslation() {
     if (isTranslating || !inputQuery.trim()) return;
+    if (apiKeyStatus[selectedProvider] === "unset") {
+      settingsTab = "api";
+      showSettings = true;
+      errorMessage = t(appLanguage, "errorApiKeyMissing");
+      translationPhase = "error";
+      return;
+    }
     syncShowTechInfoFromStorage();
     isTranslating = true;
+    translationPhase = "submitting";
     autoScrollEnabled = true; // Enable auto-scroll for new translation
     showExplanation = false; // Hide explanation during translation
     showSourceLangMenu = false; // Close menu if open
@@ -2803,23 +3151,25 @@
       const styleMeta = Object.fromEntries(
         customStyles.map((s) => [s.id, { name: s.name, prompt: s.prompt }]),
       );
-      await emit("start_translation_command", {
-        text: inputQuery,
-        sourceLang,
-        targetLang,
-        styles: styleLevels,
-        styleMeta,
-        model: currentModel,
-        provider: selectedProvider,
-        explanationLang: getLanguageName(appLanguage),
-        apiKeys: $state.snapshot(apiKeys),
-        initialTokens: Math.ceil(inputQuery.length / 1.5) + 40,
-        candidateCount: translationCount,
+      await invoke("start_translation", {
+        payload: {
+          text: inputQuery,
+          sourceLang,
+          targetLang,
+          styles: $state.snapshot(styleLevels),
+          styleMeta,
+          model: currentModel,
+          provider: selectedProvider,
+          explanationLang: getLanguageName(appLanguage),
+          initialTokens: Math.ceil(inputQuery.length / 1.5) + 40,
+          candidateCount: translationCount,
+        },
       });
     } catch (error) {
       console.error("Translation failed:", error);
       errorMessage = "Translation failed: " + String(error);
       isTranslating = false;
+      translationPhase = "error";
     }
   }
 
@@ -2827,8 +3177,9 @@
 
   async function stopTranslation() {
     isTranslating = false;
+    translationPhase = "stopped";
     try {
-      await emit("stop_translation_command");
+      await invoke("stop_translation");
     } catch (e) {
       console.error("Failed to stop translation:", e);
     }
@@ -2920,7 +3271,6 @@
           onpointerdown={(e) => e.stopPropagation()}
           onmousedown={(e) => e.stopPropagation()}
           onclick={async () => {
-            const { getCurrentWindow } = await import("@tauri-apps/api/window");
             await getCurrentWindow().hide();
           }}
           aria-label="Close"
@@ -3451,8 +3801,22 @@
                 <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
             </div>
-            <p class="error-message">{errorMessage}</p>
+            <div class="error-copy">
+              <p class="error-message">{getFriendlyErrorMessage(errorMessage)}</p>
+              {#if getErrorAction(errorMessage)}
+                <button
+                  class="error-action-btn"
+                  onclick={() => void getErrorAction(errorMessage)?.action()}
+                >
+                  {getErrorAction(errorMessage)?.label}
+                </button>
+              {/if}
+            </div>
           </div>
+        {/if}
+
+        {#if translationPhase === "stopped" && !errorMessage}
+          <div class="status-display">{t(appLanguage, "translationStopped")}</div>
         {/if}
 
         <!-- Translation Results -->
@@ -4495,8 +4859,22 @@
                 <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
             </div>
-            <p class="error-message">{errorMessage}</p>
+            <div class="error-copy">
+              <p class="error-message">{getFriendlyErrorMessage(errorMessage)}</p>
+              {#if getErrorAction(errorMessage)}
+                <button
+                  class="error-action-btn"
+                  onclick={() => void getErrorAction(errorMessage)?.action()}
+                >
+                  {getErrorAction(errorMessage)?.label}
+                </button>
+              {/if}
+            </div>
           </div>
+        {/if}
+
+        {#if translationPhase === "stopped" && !errorMessage}
+          <div class="status-display">{t(appLanguage, "translationStopped")}</div>
         {/if}
 
         <!-- Translation Results -->
@@ -4605,15 +4983,29 @@
                 class="shortcut-hint"
                 style="margin-bottom: 8px; text-align: center;"
               >
-                {techMetrics.firstTokenReceived
-                  ? "ストリーム受信中..."
-                  : "ストリーム待機中..."}
+                {getTranslationPhaseLabel()}
                 {#if techMetrics.time > 0}
                   <span style="margin-left: 6px;"
                     >({techMetrics.time.toFixed(1)}s)</span
                   >
                 {/if}
               </div>
+              <div class="loading-meta-row">
+                <span class="loading-meta-pill">
+                  {t(appLanguage, "usingModel")}:
+                  {currentModelMeta?.label || techMetrics.model || selectedModel}
+                </span>
+                <span class="loading-meta-pill">
+                  {t(appLanguage, "sourceEstimate")}:
+                  {detectedLang || sourceLang}
+                </span>
+                <span class="loading-meta-pill">
+                  {t(appLanguage, "translationCandidates")}: {translationCount}
+                </span>
+              </div>
+              {#if getTranslationPhaseHint()}
+                <div class="loading-phase-note">{getTranslationPhaseHint()}</div>
+              {/if}
               {#each Array.from({ length: translationCount }, (_, i) => i + 1) as idx}
                 <div
                   class="skeleton-card"
@@ -5001,17 +5393,17 @@
             </button>
             <button
               class="settings-tab vertical"
-              class:active={settingsTab === "system"}
-              onclick={() => changeTab("system")}
-            >
-              {t(appLanguage, "tabSystem")}
-            </button>
-            <button
-              class="settings-tab vertical"
               class:active={settingsTab === "api"}
               onclick={() => changeTab("api")}
             >
               {t(appLanguage, "tabAi")}
+            </button>
+            <button
+              class="settings-tab vertical"
+              class:active={settingsTab === "system"}
+              onclick={() => changeTab("system")}
+            >
+              {t(appLanguage, "tabSystem")}
             </button>
             <button
               class="settings-tab vertical"
@@ -5418,7 +5810,7 @@
                         position: relative;
                         transition: background 0.2s;
                       "
-                        aria-label="Toggle clipboard ops"
+                        aria-label={t(appLanguage, "clipboardOps")}
                       >
                         <div
                           style="
@@ -5677,41 +6069,25 @@
 
                   <!-- Provider Switcher -->
                   <div class="provider-switcher">
-                    <button
-                      class="provider-btn"
-                      class:active={selectedProvider === "openai"}
-                      onclick={() => selectProvider("openai")}
-                    >
-                      OpenAI
-                    </button>
-                    <button
-                      class="provider-btn"
-                      class:active={selectedProvider === "gemini"}
-                      onclick={() => selectProvider("gemini")}
-                    >
-                      Gemini
-                    </button>
-                    <button
-                      class="provider-btn"
-                      class:active={selectedProvider === "anthropic"}
-                      onclick={() => selectProvider("anthropic")}
-                    >
-                      Anthropic
-                    </button>
-                    <button
-                      class="provider-btn"
-                      class:active={selectedProvider === "groq"}
-                      onclick={() => selectProvider("groq")}
-                    >
-                      Groq
-                    </button>
-                    <button
-                      class="provider-btn"
-                      class:active={selectedProvider === "cerebras"}
-                      onclick={() => selectProvider("cerebras")}
-                    >
-                      Cerebras
-                    </button>
+                    {#each providerOrder as provider}
+                      <button
+                        class="provider-btn"
+                        class:active={selectedProvider === provider}
+                        class:ready={apiKeyStatus[provider] !== "unset"}
+                        onclick={() => selectProvider(provider)}
+                      >
+                        <span>{provider === "openai"
+                          ? "OpenAI"
+                          : provider === "gemini"
+                            ? "Gemini"
+                            : provider === "anthropic"
+                              ? "Anthropic"
+                              : provider === "groq"
+                                ? "Groq"
+                                : "Cerebras"}</span>
+                        <small>{getApiKeyPresenceLabel(apiKeyStatus[provider])}</small>
+                      </button>
+                    {/each}
                   </div>
 
                   <div class="settings-section">
@@ -5725,8 +6101,7 @@
                         {t(appLanguage, "rememberApiKeysDesc")}
                       </span>
                       <button
-                        onclick={() =>
-                          (rememberApiKeys = !rememberApiKeys)}
+                        onclick={toggleRememberApiKeys}
                         style="
                         width: 44px; 
                         height: 24px; 
@@ -5762,16 +6137,34 @@
 
                   <!-- API Key for Selected Provider -->
                   <div class="settings-section">
-                    <label class="settings-label" for="api-key-input">
-                      {getApiKeyLabel(selectedProvider)}
-                    </label>
+                    <div
+                      class="settings-label"
+                      style="display: flex; align-items: center; justify-content: space-between; gap: 12px;"
+                    >
+                      <label for="api-key-input">
+                        {getApiKeyLabel(selectedProvider)}
+                      </label>
+                      <span
+                        class:api-indicator={true}
+                        class:set={apiKeyStatus[selectedProvider] !== "unset"}
+                        class:not-set={apiKeyStatus[selectedProvider] === "unset"}
+                      >
+                        {getApiKeyPresenceLabel(apiKeyStatus[selectedProvider])}
+                      </span>
+                    </div>
                     <input
                       id="api-key-input"
                       type="password"
                       class="settings-input"
                       bind:value={apiKeys[selectedProvider]}
+                      oninput={() => markApiKeyDirty(selectedProvider)}
                       placeholder={getApiKeyPlaceholder(selectedProvider)}
                     />
+                    <div class="settings-note">
+                      {apiKeyStatus[selectedProvider] === "unset"
+                        ? t(appLanguage, "providerSetupNeeded")
+                        : t(appLanguage, "providerReady")}
+                    </div>
                   </div>
 
                   <!-- Model Selection (Filtered) -->
@@ -5785,9 +6178,58 @@
                       bind:value={selectedModel}
                     >
                       {#each filteredModels as model}
-                        <option value={model.value}>{model.label}</option>
+                        <option value={model.value}>{decorateModelLabel(model)}</option>
                       {/each}
                     </select>
+                    {#if currentModelMeta}
+                      <div class="model-summary-card">
+                        <div class="model-summary-top">
+                          <strong>{currentModelMeta.label}</strong>
+                          {#if currentModelMeta.recommended}
+                            <span class="model-summary-badge recommended">
+                              {t(appLanguage, "modelRecommended")}
+                            </span>
+                          {/if}
+                        </div>
+                        <div class="model-summary-tags">
+                          <span class="model-summary-badge">
+                            {getModelUsageLabel(currentModelMeta)}
+                          </span>
+                          <span class="model-summary-badge">
+                            {getModelQualityLabel(currentModelMeta)}
+                          </span>
+                          <span class="model-summary-badge">
+                            {getModelStreamingLabel(currentModelMeta)}
+                          </span>
+                        </div>
+                        {#if currentModelMeta.reasoning}
+                          <div class="settings-note top">
+                            {t(appLanguage, "modelReasoningSlow")}
+                          </div>
+                        {/if}
+                        {#if translationExecutionPlan.reason === "model_unsupported"}
+                          <div class="settings-note top">
+                            {t(appLanguage, "streamingFallbackNote")}
+                          </div>
+                        {/if}
+                        {#if recommendedModelForProvider && selectedModel !== recommendedModelForProvider.value}
+                          <button
+                            class="settings-card-row provider-docs-btn"
+                            onclick={() =>
+                              (selectedModel = recommendedModelForProvider.value as AiModel)}
+                          >
+                            <div class="provider-docs-text">
+                              <div class="provider-docs-title">
+                                {t(appLanguage, "providerRecommendedModel")}
+                              </div>
+                              <div class="provider-docs-action">
+                                {recommendedModelForProvider.label}
+                              </div>
+                            </div>
+                          </button>
+                        {/if}
+                      </div>
+                    {/if}
                   </div>
 
                   {#if selectedProviderDoc}
@@ -6263,12 +6705,32 @@
                               >{formatHistoryLanguage(item.sourceLang, item.isAutoDetect)} → {formatHistoryLanguage(item.targetLang)}</span
                             >
                           </div>
+                          {#if item.model}
+                            <div class="history-meta secondary">
+                              <span>{item.model}</span>
+                              {#if item.provider}
+                                <span>{item.provider}</span>
+                              {/if}
+                            </div>
+                          {/if}
                           <div class="history-source">{item.sourceText}</div>
                           <div class="history-preview">
                             {item.translations[0]?.text}
                           </div>
                         </button>
                         <div class="history-item-actions">
+                          <button
+                            class="history-action-btn"
+                            onclick={() => loadHistory(item)}
+                          >
+                            {t(appLanguage, "historyLoad")}
+                          </button>
+                          <button
+                            class="history-action-btn primary"
+                            onclick={() => void rerunHistory(item)}
+                          >
+                            {t(appLanguage, "historyRetry")}
+                          </button>
                           <button
                             class="star-btn small"
                             class:active={isFavoritedById(item.id)}
@@ -6338,12 +6800,32 @@
                               >{formatHistoryLanguage(item.sourceLang, item.isAutoDetect)} → {formatHistoryLanguage(item.targetLang)}</span
                             >
                           </div>
+                          {#if item.model}
+                            <div class="history-meta secondary">
+                              <span>{item.model}</span>
+                              {#if item.provider}
+                                <span>{item.provider}</span>
+                              {/if}
+                            </div>
+                          {/if}
                           <div class="history-source">{item.sourceText}</div>
                           <div class="history-preview">
                             {item.translations[0]?.text}
                           </div>
                         </button>
                         <div class="history-item-actions vertical">
+                          <button
+                            class="history-action-btn"
+                            onclick={() => loadHistory(item)}
+                          >
+                            {t(appLanguage, "historyLoad")}
+                          </button>
+                          <button
+                            class="history-action-btn primary"
+                            onclick={() => void rerunHistory(item)}
+                          >
+                            {t(appLanguage, "historyRetry")}
+                          </button>
                           <div class="move-actions">
                             <button
                               class="icon-btn-small"
@@ -6733,139 +7215,16 @@
     overflow-y: auto;
   }
 
-  .compact-style-wrapper {
-    position: relative;
-    display: inline-flex;
-  }
-
-  .compact-style-chip {
-    align-self: flex-start;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    color: var(--text-main);
-    font-size: 12px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .compact-style-chip:hover {
-    background: rgba(255, 255, 255, 0.12);
-  }
-
-  .compact-style-chip.open {
-    background: rgba(59, 130, 246, 0.2);
-    border-color: rgba(59, 130, 246, 0.35);
-    color: #93c5fd;
-  }
-
   .chip-text {
     font-weight: 600;
     font-size: 11px;
     letter-spacing: 0.3px;
   }
 
-  .chip-count {
-    min-width: 16px;
-    height: 16px;
-    border-radius: 999px;
-    padding: 0 4px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(59, 130, 246, 0.3);
-    color: #bfdbfe;
-    font-size: 10px;
-    font-weight: 600;
-  }
-
-  .chip-chevron {
-    transition: transform 0.2s var(--easing);
-  }
-
-  .compact-style-chip.open .chip-chevron {
-    transform: rotate(180deg);
-  }
-
-  .compact-style-dropdown {
-    position: absolute;
-    top: calc(100% + 8px);
-    left: 0;
-    min-width: 280px;
-    max-height: 300px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    overflow-y: auto;
-    padding: 6px;
-    border-radius: 12px;
-    z-index: 1200;
-  }
-
-  .compact-style-dropdown .style-chip {
-    width: 100%;
-    justify-content: flex-start;
-    padding: 8px 12px;
-    font-size: 13px;
-  }
-
-  .style-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 6px 10px;
-    border-radius: 10px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.04);
-    color: var(--text-main);
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .style-row:hover {
-    background: rgba(255, 255, 255, 0.08);
-  }
-
-  .style-name {
-    font-size: 12px;
-    font-weight: 500;
-  }
-
-  .level-meter {
-    width: 64px;
-    height: 6px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.12);
-    overflow: hidden;
-  }
-
-  .level-fill {
-    display: block;
-    height: 100%;
-    border-radius: 999px;
-    background: var(--primary-color);
-    opacity: 0.6;
-    transition: width 0.2s var(--easing);
-  }
-
-  .style-row[data-level="1"] .level-fill {
-    opacity: 0.45;
-  }
-
-  .style-row[data-level="2"] .level-fill {
-    opacity: 0.8;
-  }
-
   .output-area.compact-output {
     gap: 10px;
   }
 
-  .compact-action-btn,
   .compact-ocr-btn {
     width: 32px;
     height: 32px;
@@ -6880,7 +7239,6 @@
     transition: all 0.2s ease;
   }
 
-  .compact-action-btn:hover,
   .compact-ocr-btn:hover {
     background: rgba(255, 255, 255, 0.2);
   }
@@ -6916,14 +7274,6 @@
     font-size: 26px;
     color: var(--text-main);
     background: none;
-  }
-
-  .header-right {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    justify-content: flex-end;
-    width: fit-content;
   }
 
   .header-drag-spacer {
@@ -7793,10 +8143,6 @@
     transition: opacity 0.4s var(--easing);
   }
 
-  .card-inner-content.content-fade {
-    opacity: 0;
-  }
-
   .candidate-actions.hide {
     display: none;
   }
@@ -7866,44 +8212,6 @@
     margin-top: 0;
   }
 
-  .empty-state-visual {
-    position: relative;
-  }
-
-  .empty-icon-wrapper {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 96px;
-    height: 96px;
-    border-radius: 24px;
-    background: linear-gradient(
-      135deg,
-      rgba(99, 102, 241, 0.1),
-      rgba(34, 211, 238, 0.1)
-    );
-    border: 1px solid var(--border-color);
-  }
-
-  .empty-icon {
-    color: var(--primary-color);
-    opacity: 0.8;
-    animation: floatSoft 4s ease-in-out infinite;
-  }
-
-  .empty-icon-glow {
-    position: absolute;
-    inset: -20px;
-    background: radial-gradient(
-      circle,
-      var(--primary-glow) 0%,
-      transparent 70%
-    );
-    opacity: 0.5;
-    animation: pulse 3s ease-in-out infinite;
-  }
-
   @keyframes floatSoft {
     0%,
     100% {
@@ -7965,14 +8273,6 @@
     font-size: 16px;
   }
 
-  :global([data-theme="light"]) .empty-icon-wrapper {
-    background: linear-gradient(
-      135deg,
-      rgba(99, 102, 241, 0.08),
-      rgba(8, 145, 178, 0.08)
-    );
-  }
-
   :global([data-theme="light"]) .empty-hint {
     background: rgba(0, 0, 0, 0.02);
   }
@@ -7986,6 +8286,27 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+  }
+
+  .loading-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .loading-meta-pill {
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .loading-phase-note {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.5;
   }
 
   .skeleton-card {
@@ -8082,6 +8403,40 @@
     border: 1px solid rgba(248, 113, 113, 0.2);
     margin-top: 10px;
     animation: fadeIn 0.3s ease-out;
+  }
+
+  .error-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .error-action-btn {
+    border: 1px solid rgba(248, 113, 113, 0.3);
+    background: rgba(248, 113, 113, 0.12);
+    color: #fecaca;
+    border-radius: 999px;
+    padding: 8px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .error-action-btn:hover {
+    background: rgba(248, 113, 113, 0.18);
+    transform: translateY(-1px);
+  }
+
+  .status-display {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    background: rgba(96, 165, 250, 0.08);
+    border: 1px solid rgba(96, 165, 250, 0.14);
+    color: #93c5fd;
+    font-size: 13px;
+    text-align: center;
   }
 
   /* ... skipping error-icon-wrapper ... */
@@ -8295,7 +8650,8 @@
   }
 
   /* コピーボタン: 紙が重なるように上に移動 */
-  .copy-btn.animating .copy-icon {
+  .icon-btn.animating .copy-icon,
+  .copy-item.animating .copy-icon {
     animation: copySlide 0.6s var(--easing);
   }
 
@@ -8335,11 +8691,13 @@
     opacity: 0;
   }
 
-  .speak-btn.animating .wave-2 {
+  .icon-btn.animating .wave-2,
+  .speak-item.animating .wave-2 {
     animation: wavePulse 1.2s ease-in-out;
   }
 
-  .speak-btn.animating .wave-3 {
+  .icon-btn.animating .wave-3,
+  .speak-item.animating .wave-3 {
     animation: wavePulse 1.2s ease-in-out 0.15s;
   }
 
@@ -8363,7 +8721,8 @@
   }
 
   /* Copy button feedback */
-  .copy-btn.copied {
+  .icon-btn.copied,
+  .copy-item.copied {
     color: #22c55e;
     background: rgba(34, 197, 94, 0.15);
   }
@@ -8517,6 +8876,14 @@
     font-size: 11px;
     color: var(--text-muted);
     margin-bottom: 6px;
+  }
+
+  .history-meta.secondary {
+    gap: 8px;
+    justify-content: flex-start;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .history-source {
@@ -8809,10 +9176,33 @@
     display: flex;
     gap: 4px;
     align-items: center;
+    flex-wrap: wrap;
   }
 
   .history-item-actions.vertical {
     flex-direction: column;
+  }
+
+  .history-action-btn {
+    border: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-muted);
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .history-action-btn:hover {
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .history-action-btn.primary {
+    color: #bfdbfe;
+    border-color: rgba(96, 165, 250, 0.24);
+    background: rgba(59, 130, 246, 0.12);
   }
 
   .move-actions {
@@ -9117,6 +9507,8 @@
   /* Provider Switcher */
   .provider-switcher {
     display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
     background: rgba(0, 0, 0, 0.2);
     padding: 4px;
     border-radius: 8px;
@@ -9126,6 +9518,7 @@
 
   .provider-btn {
     flex: 1;
+    min-width: 132px;
     padding: 8px;
     background: transparent;
     border: none;
@@ -9135,6 +9528,15 @@
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-start;
+  }
+
+  .provider-btn small {
+    font-size: 10px;
+    opacity: 0.85;
   }
 
   .provider-btn:hover {
@@ -9142,10 +9544,72 @@
     background: rgba(255, 255, 255, 0.05);
   }
 
+  .provider-btn.ready:not(.active) {
+    color: var(--text-main);
+  }
+
   .provider-btn.active {
     background: rgba(59, 130, 246, 0.2);
     color: #60a5fa;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  }
+
+  .api-indicator {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .api-indicator.set {
+    background: rgba(34, 197, 94, 0.12);
+    color: #4ade80;
+  }
+
+  .api-indicator.not-set {
+    background: rgba(248, 113, 113, 0.12);
+    color: #fca5a5;
+  }
+
+  .model-summary-card {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-color);
+  }
+
+  .model-summary-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .model-summary-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .model-summary-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-muted);
+  }
+
+  .model-summary-badge.recommended {
+    color: #bfdbfe;
+    background: rgba(59, 130, 246, 0.16);
   }
 
   .provider-docs-btn {
@@ -9490,21 +9954,31 @@
   :global([data-theme="light"]) .provider-btn:hover {
     background: rgba(0, 0, 0, 0.05);
   }
+  :global([data-theme="light"]) .provider-btn.ready:not(.active) {
+    color: #1f2937;
+  }
   :global([data-theme="light"]) .provider-docs-btn {
     background: rgba(0, 0, 0, 0.03);
   }
   :global([data-theme="light"]) .provider-docs-btn:hover {
     background: rgba(0, 0, 0, 0.08);
   }
+  :global([data-theme="light"]) .loading-meta-pill,
+  :global([data-theme="light"]) .model-summary-card,
+  :global([data-theme="light"]) .history-action-btn {
+    background: rgba(0, 0, 0, 0.03);
+  }
+  :global([data-theme="light"]) .status-display {
+    background: rgba(59, 130, 246, 0.08);
+    color: #2563eb;
+  }
+  :global([data-theme="light"]) .error-action-btn {
+    color: #b91c1c;
+  }
 
   /* Theme buttons */
   :global([data-theme="light"]) .theme-btn:hover {
     background: rgba(0, 0, 0, 0.05);
-  }
-
-  /* Toggle switch */
-  :global([data-theme="light"]) .toggle-switch {
-    background: rgba(0, 0, 0, 0.15);
   }
 
   /* Styles list in settings */
@@ -9514,11 +9988,6 @@
   }
   :global([data-theme="light"]) .style-item-card:hover {
     background: rgba(0, 0, 0, 0.05);
-  }
-
-  /* Confirmation dialog */
-  :global([data-theme="light"]) .confirm-dialog {
-    background: rgba(255, 255, 255, 0.98);
   }
 
   /* Rich buttons */
@@ -9538,16 +10007,6 @@
   /* Close button */
   :global([data-theme="light"]) .close-btn:hover {
     background: rgba(0, 0, 0, 0.08);
-  }
-
-  /* Settings row borders */
-  :global([data-theme="light"]) .settings-row {
-    border-color: rgba(0, 0, 0, 0.08);
-  }
-
-  /* Section titles */
-  :global([data-theme="light"]) .settings-section h3 {
-    color: #333;
   }
 
   /* Description text */
@@ -9589,12 +10048,6 @@
   }
   :global([data-theme="light"]) .star-btn.active {
     color: #f59e0b;
-  }
-
-  /* Style editor */
-  :global([data-theme="light"]) .style-editor-panel {
-    background: rgba(0, 0, 0, 0.02);
-    border-color: rgba(0, 0, 0, 0.08);
   }
 
   /* API Key indicator */
@@ -9648,32 +10101,6 @@
     background: rgba(59, 130, 246, 0.12);
     border-color: rgba(59, 130, 246, 0.2);
     color: #2563eb;
-  }
-
-  :global([data-theme="light"]) .compact-style-chip {
-    background: rgba(0, 0, 0, 0.05);
-    border-color: rgba(0, 0, 0, 0.12);
-    color: #1a1a1a;
-  }
-
-  :global([data-theme="light"]) .compact-style-chip.open {
-    background: rgba(59, 130, 246, 0.12);
-    border-color: rgba(59, 130, 246, 0.2);
-    color: #2563eb;
-  }
-
-  :global([data-theme="light"]) .chip-count {
-    background: rgba(59, 130, 246, 0.2);
-    color: #1d4ed8;
-  }
-
-  :global([data-theme="light"]) .style-row {
-    background: rgba(0, 0, 0, 0.03);
-    border-color: rgba(0, 0, 0, 0.1);
-  }
-
-  :global([data-theme="light"]) .level-meter {
-    background: rgba(0, 0, 0, 0.08);
   }
 
   /* Fixed width for language buttons to prevent jitter */
@@ -9772,12 +10199,6 @@
     font-size: 26px;
     font-weight: 700;
     color: var(--text-main);
-  }
-
-  .usage-sub {
-    font-size: 11px;
-    color: var(--text-muted);
-    opacity: 0.8;
   }
 
   .usage-chart-card {
@@ -9940,9 +10361,7 @@
   }
 
   /* Prevent logo from being dragged */
-  .about-logo-wrapper img,
-  img[alt*="Logo"],
-  img[alt*="logo"] {
+  .about-logo-wrapper img {
     -webkit-user-drag: none;
     user-select: none;
     pointer-events: none;
@@ -10026,62 +10445,6 @@
     opacity: 1;
     color: var(--text-main);
   }
-  /* Custom Window Controls */
-  .app-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  .header-right {
-    display: flex;
-    align-items: center;
-    padding-right: 16px;
-    height: 100%;
-  }
-
-  .window-controls {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-
-  .win-btn {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: transform 0.1s;
-    overflow: hidden;
-  }
-
-  .win-btn:hover svg {
-    opacity: 1 !important;
-  }
-
-  .win-btn.close {
-    background: #ff5f56;
-    border: 1px solid #e0443e;
-  }
-  .win-btn.minimize {
-    background: #ffbd2e;
-    border: 1px solid #dea123;
-  }
-  .win-btn.maximize {
-    background: #27c93f;
-    border: 1px solid #1aab29;
-  }
-
-  .win-btn:active {
-    filter: brightness(0.9);
-  }
-
   /* Card Stack UI */
   .stack-indicator {
     width: 100%;
@@ -10175,13 +10538,11 @@
     color: #dc2626;
   }
 
-  :global([data-theme="light"]) .compact-action-btn,
   :global([data-theme="light"]) .compact-ocr-btn {
     background: rgba(0, 0, 0, 0.05);
     color: rgba(0, 0, 0, 0.7);
   }
 
-  :global([data-theme="light"]) .compact-action-btn:hover,
   :global([data-theme="light"]) .compact-ocr-btn:hover {
     background: rgba(0, 0, 0, 0.1);
     color: rgba(0, 0, 0, 0.9);
