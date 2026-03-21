@@ -114,12 +114,12 @@ function buildModel(
 }
 
 export const AI_MODELS: AiModelEntry[] = [
+	buildModel("GPT-5.4", "gpt-5.4", "openai", { quality: "best" }),
 	buildModel("GPT-5.4 Mini", "gpt-5.4-mini", "openai", {
 		speed: "fast",
 		quality: "good",
 		streamingExperience: "great",
 	}),
-	buildModel("GPT-5.4", "gpt-5.4", "openai", { quality: "best" }),
 	buildModel("GPT-5.4 Nano", "gpt-5.4-nano", "openai", {
 		speed: "fast",
 		quality: "good",
@@ -131,9 +131,6 @@ export const AI_MODELS: AiModelEntry[] = [
 		quality: "best",
 		streamingExperience: "delayed",
 	}),
-	buildModel("GPT-5 Chat (Latest)", "gpt-5-chat-latest", "openai", {
-		quality: "best",
-	}),
 	buildModel("GPT-5", "gpt-5", "openai"),
 	buildModel("GPT-5 Mini", "gpt-5-mini", "openai", {
 		speed: "fast",
@@ -142,6 +139,9 @@ export const AI_MODELS: AiModelEntry[] = [
 	buildModel("GPT-5 Nano", "gpt-5-nano", "openai", {
 		speed: "fast",
 		streamingExperience: "great",
+	}),
+	buildModel("GPT-5 Chat (Latest)", "gpt-5-chat-latest", "openai", {
+		quality: "best",
 	}),
 	buildModel("GPT-5.3 Chat (Latest)", "gpt-5.3-chat-latest", "openai", {
 		speed: "balanced",
