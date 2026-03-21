@@ -114,12 +114,12 @@ function buildModel(
 }
 
 export const AI_MODELS: AiModelEntry[] = [
-	buildModel("GPT-5.4", "gpt-5.4", "openai", { quality: "best" }),
 	buildModel("GPT-5.4 Mini", "gpt-5.4-mini", "openai", {
 		speed: "fast",
 		quality: "good",
 		streamingExperience: "great",
 	}),
+	buildModel("GPT-5.4", "gpt-5.4", "openai", { quality: "best" }),
 	buildModel("GPT-5.4 Nano", "gpt-5.4-nano", "openai", {
 		speed: "fast",
 		quality: "good",
@@ -131,6 +131,18 @@ export const AI_MODELS: AiModelEntry[] = [
 		quality: "best",
 		streamingExperience: "delayed",
 	}),
+	buildModel("GPT-5 Chat (Latest)", "gpt-5-chat-latest", "openai", {
+		quality: "best",
+	}),
+	buildModel("GPT-5", "gpt-5", "openai"),
+	buildModel("GPT-5 Mini", "gpt-5-mini", "openai", {
+		speed: "fast",
+		streamingExperience: "great",
+	}),
+	buildModel("GPT-5 Nano", "gpt-5-nano", "openai", {
+		speed: "fast",
+		streamingExperience: "great",
+	}),
 	buildModel("GPT-5.3 Chat (Latest)", "gpt-5.3-chat-latest", "openai", {
 		speed: "balanced",
 		quality: "best",
@@ -141,18 +153,6 @@ export const AI_MODELS: AiModelEntry[] = [
 	}),
 	buildModel("GPT-5.1", "gpt-5.1", "openai"),
 	buildModel("GPT-5.1 Chat (Latest)", "gpt-5.1-chat-latest", "openai"),
-	buildModel("GPT-5", "gpt-5", "openai"),
-	buildModel("GPT-5 Chat (Latest)", "gpt-5-chat-latest", "openai", {
-		quality: "best",
-	}),
-	buildModel("GPT-5 Mini", "gpt-5-mini", "openai", {
-		speed: "fast",
-		streamingExperience: "great",
-	}),
-	buildModel("GPT-5 Nano", "gpt-5-nano", "openai", {
-		speed: "fast",
-		streamingExperience: "great",
-	}),
 	buildModel("GPT-4.1", "gpt-4.1", "openai"),
 	buildModel("GPT-4.1 Mini", "gpt-4.1-mini", "openai", {
 		speed: "fast",
@@ -357,12 +357,6 @@ const MODEL_PROVIDER_MAP = new Map<string, AiProvider>(
 	AI_MODELS.map((model) => [model.value, model.provider]),
 );
 
-const MODEL_SORT_RANK: Record<ModelSpeed, number> = {
-	fast: 0,
-	balanced: 1,
-	deliberate: 2,
-};
-
 export function isAiProvider(value: unknown): value is AiProvider {
 	return (
 		value === "openai" ||
@@ -409,10 +403,5 @@ export function getRecommendedModelForProvider(provider: AiProvider): AiModelEnt
 }
 
 export function getModelsForProvider(provider: AiProvider): AiModelEntry[] {
-	return AI_MODELS.filter((model) => model.provider === provider).sort((a, b) => {
-		if (a.recommended !== b.recommended) return a.recommended ? -1 : 1;
-		if (a.speed !== b.speed) return MODEL_SORT_RANK[a.speed] - MODEL_SORT_RANK[b.speed];
-		if (a.quality !== b.quality) return a.quality === "best" ? -1 : 1;
-		return a.label.localeCompare(b.label);
-	});
+	return AI_MODELS.filter((model) => model.provider === provider);
 }

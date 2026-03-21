@@ -3081,6 +3081,20 @@
   }
   async function startTranslation() {
     if (isTranslating || !inputQuery.trim()) return;
+    const localApiKey = apiKeys[selectedProvider].trim();
+    if (localApiKey) {
+      apiKeyDirty = { ...apiKeyDirty, [selectedProvider]: true };
+      await syncApiKeysToBackend();
+    } else {
+      const latestStatus = await refreshApiKeyStatus();
+      if (latestStatus[selectedProvider] === "unset") {
+        settingsTab = "api";
+        showSettings = true;
+        errorMessage = t(appLanguage, "errorApiKeyMissing");
+        translationPhase = "error";
+        return;
+      }
+    }
     if (apiKeyStatus[selectedProvider] === "unset") {
       settingsTab = "api";
       showSettings = true;
@@ -6115,18 +6129,10 @@
                   <div class="settings-section">
                     <div
                       class="settings-label"
-                      style="display: flex; align-items: center; justify-content: space-between; gap: 12px;"
                     >
                       <label for="api-key-input">
                         {getApiKeyLabel(selectedProvider)}
                       </label>
-                      <span
-                        class:api-indicator={true}
-                        class:set={apiKeyStatus[selectedProvider] !== "unset"}
-                        class:not-set={apiKeyStatus[selectedProvider] === "unset"}
-                      >
-                        {getApiKeyPresenceLabel(apiKeyStatus[selectedProvider])}
-                      </span>
                     </div>
                     <input
                       id="api-key-input"
@@ -9456,25 +9462,6 @@
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   }
 
-  .api-indicator {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 8px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 600;
-  }
-
-  .api-indicator.set {
-    background: rgba(34, 197, 94, 0.12);
-    color: #4ade80;
-  }
-
-  .api-indicator.not-set {
-    background: rgba(248, 113, 113, 0.12);
-    color: #fca5a5;
-  }
-
   .provider-docs-btn {
     display: flex;
     align-items: center;
@@ -9910,16 +9897,6 @@
   }
   :global([data-theme="light"]) .star-btn.active {
     color: #f59e0b;
-  }
-
-  /* API Key indicator */
-  :global([data-theme="light"]) .api-indicator.set {
-    background: rgba(34, 197, 94, 0.1);
-    color: #16a34a;
-  }
-  :global([data-theme="light"]) .api-indicator.not-set {
-    background: rgba(239, 68, 68, 0.1);
-    color: #dc2626;
   }
 
   /* Tab content */
