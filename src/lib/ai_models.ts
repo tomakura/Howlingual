@@ -131,6 +131,16 @@ export const AI_MODELS: AiModelEntry[] = [
 		quality: "good",
 		streamingExperience: "great",
 	}),
+	buildModel("GPT-5.3 Chat (Latest)", "gpt-5.3-chat-latest", "openai", {
+		speed: "balanced",
+		quality: "best",
+	}),
+	buildModel("GPT-5.2", "gpt-5.2", "openai", { quality: "best" }),
+	buildModel("GPT-5.2 Chat (Latest)", "gpt-5.2-chat-latest", "openai", {
+		quality: "best",
+	}),
+	buildModel("GPT-5.1", "gpt-5.1", "openai"),
+	buildModel("GPT-5.1 Chat (Latest)", "gpt-5.1-chat-latest", "openai"),
 	buildModel("GPT-5", "gpt-5", "openai"),
 	buildModel("GPT-5 Chat (Latest)", "gpt-5-chat-latest", "openai", {
 		quality: "best",
@@ -143,16 +153,6 @@ export const AI_MODELS: AiModelEntry[] = [
 		speed: "fast",
 		streamingExperience: "great",
 	}),
-	buildModel("GPT-5.3 Chat (Latest)", "gpt-5.3-chat-latest", "openai", {
-		speed: "balanced",
-		quality: "best",
-	}),
-	buildModel("GPT-5.2", "gpt-5.2", "openai", { quality: "best" }),
-	buildModel("GPT-5.2 Chat (Latest)", "gpt-5.2-chat-latest", "openai", {
-		quality: "best",
-	}),
-	buildModel("GPT-5.1", "gpt-5.1", "openai"),
-	buildModel("GPT-5.1 Chat (Latest)", "gpt-5.1-chat-latest", "openai"),
 	buildModel("GPT-4.1", "gpt-4.1", "openai"),
 	buildModel("GPT-4.1 Mini", "gpt-4.1-mini", "openai", {
 		speed: "fast",
