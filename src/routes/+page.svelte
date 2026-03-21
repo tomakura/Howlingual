@@ -362,6 +362,13 @@
     return t(appLanguage, "apiKeyUnset");
   }
 
+  function getDisplayedApiKeyPresence(provider: AiProvider): ApiKeyPresence {
+    if (apiKeys[provider].trim()) {
+      return "session";
+    }
+    return apiKeyStatus[provider];
+  }
+
   function getTranslationPhaseLabel() {
     if (translationPhase === "submitting") {
       return t(appLanguage, "translationSending");
@@ -6072,7 +6079,7 @@
                       <button
                         class="provider-btn"
                         class:active={selectedProvider === provider}
-                        class:ready={apiKeyStatus[provider] !== "unset"}
+                        class:ready={getDisplayedApiKeyPresence(provider) !== "unset"}
                         onclick={() => selectProvider(provider)}
                       >
                         <span>{provider === "openai"
@@ -6084,7 +6091,7 @@
                               : provider === "groq"
                                 ? "Groq"
                                 : "Cerebras"}</span>
-                        <small>{getApiKeyPresenceLabel(apiKeyStatus[provider])}</small>
+                        <small>{getApiKeyPresenceLabel(getDisplayedApiKeyPresence(provider))}</small>
                       </button>
                     {/each}
                   </div>
