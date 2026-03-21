@@ -152,6 +152,7 @@ pub struct StartTranslationPayload {
     pub style_meta: HashMap<String, StyleMeta>,
     pub model: String,
     pub provider: String,
+    pub api_key: Option<String>,
     pub explanation_lang: Option<String>,
     pub initial_tokens: Option<u64>,
     pub candidate_count: Option<u8>,
@@ -1570,16 +1571,21 @@ pub fn set_api_key(
     payload: ApiKeyPayload,
 ) -> Result<ApiKeyStatus, String> {
     with_backend_state(&state, |inner| {
-        if payload.value.trim().is_empty() {
+        let value = payload.value.trim().to_string();
+
+        if value.is_empty() {
             inner.session_api_keys.remove(&payload.provider);
             let _ = clear_saved_api_key(&payload.provider);
         } else if payload.persist {
-            set_saved_api_key(&payload.provider, payload.value.trim())?;
+            inner
+                .session_api_keys
+                .insert(payload.provider.clone(), value.clone());
+            set_saved_api_key(&payload.provider, &value)?;
             inner.session_api_keys.remove(&payload.provider);
         } else {
             inner
                 .session_api_keys
-                .insert(payload.provider.clone(), payload.value.clone());
+                .insert(payload.provider.clone(), value);
             let _ = clear_saved_api_key(&payload.provider);
         }
         Ok(api_key_statuses(inner))
@@ -1669,7 +1675,12 @@ pub fn start_translation(
             match app_handle.state::<TranslationBackendState>().0.lock() {
                 Ok(inner) => (
                     inner.state.run_id,
-                    resolve_api_key(&inner, payload.provider.as_str()),
+                    payload
+                        .api_key
+                        .as_ref()
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty())
+                        .or_else(|| resolve_api_key(&inner, payload.provider.as_str())),
                 ),
                 Err(_) => {
                     log::error!("[translation] state lock failed");

@@ -296,6 +296,7 @@
         console.warn(`Failed to sync ${provider} API key`, error);
         hadFailure = true;
         nextDirty[provider] = true;
+        await refreshApiKeyStatus();
       }
     }
 
@@ -3109,13 +3110,6 @@
         return;
       }
     }
-    if (apiKeyStatus[selectedProvider] === "unset") {
-      settingsTab = "api";
-      showSettings = true;
-      errorMessage = t(appLanguage, "errorApiKeyMissing");
-      translationPhase = "error";
-      return;
-    }
     syncShowTechInfoFromStorage();
     isTranslating = true;
     translationPhase = "submitting";
@@ -3166,6 +3160,7 @@
           styleMeta,
           model: currentModel,
           provider: selectedProvider,
+          apiKey: localApiKey || null,
           explanationLang: getLanguageName(appLanguage),
           initialTokens: Math.ceil(inputQuery.length / 1.5) + 40,
           candidateCount: translationCount,
