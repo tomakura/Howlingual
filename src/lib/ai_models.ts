@@ -16,7 +16,7 @@ export type AiModelEntry = {
 };
 
 export const DEFAULT_MODELS_BY_PROVIDER: Record<AiProvider, string> = {
-	openai: "gpt-5-mini",
+	openai: "gpt-5.4-mini",
 	gemini: "gemini-2.5-flash",
 	anthropic: "claude-sonnet-4-20250514",
 	groq: "openai/gpt-oss-20b",
@@ -115,6 +115,16 @@ function buildModel(
 
 export const AI_MODELS: AiModelEntry[] = [
 	buildModel("GPT-5.4", "gpt-5.4", "openai", { quality: "best" }),
+	buildModel("GPT-5.4 Mini", "gpt-5.4-mini", "openai", {
+		speed: "fast",
+		quality: "good",
+		streamingExperience: "great",
+	}),
+	buildModel("GPT-5.4 Nano", "gpt-5.4-nano", "openai", {
+		speed: "fast",
+		quality: "good",
+		streamingExperience: "great",
+	}),
 	buildModel("GPT-5.4 Pro", "gpt-5.4-pro", "openai", {
 		reasoning: true,
 		speed: "deliberate",
@@ -303,6 +313,8 @@ export const STREAMING_MODELS_BY_PROVIDER: Record<AiProvider, string[]> = {
 	],
 	openai: [
 		"gpt-5.4",
+		"gpt-5.4-mini",
+		"gpt-5.4-nano",
 		"gpt-5.3-chat-latest",
 		"gpt-5.2",
 		"gpt-5.2-chat-latest",
