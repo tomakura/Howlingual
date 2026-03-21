@@ -275,7 +275,10 @@
 
   async function syncApiKeysToBackend() {
     const dirtyProviders = API_KEY_PROVIDERS.filter((provider) => apiKeyDirty[provider]);
-    if (!dirtyProviders.length) return;
+    if (!dirtyProviders.length) return true;
+
+    let hadFailure = false;
+    const nextDirty = { ...apiKeyDirty };
 
     for (const provider of dirtyProviders) {
       try {
@@ -288,18 +291,16 @@
               payload: { provider },
             });
         apiKeyStatus = normalizeApiKeyStatus(status);
+        nextDirty[provider] = false;
       } catch (error) {
         console.warn(`Failed to sync ${provider} API key`, error);
+        hadFailure = true;
+        nextDirty[provider] = true;
       }
     }
 
-    apiKeyDirty = {
-      openai: false,
-      gemini: false,
-      anthropic: false,
-      groq: false,
-      cerebras: false,
-    };
+    apiKeyDirty = nextDirty;
+    return !hadFailure;
   }
 
   function scheduleApiKeySync() {
@@ -310,6 +311,17 @@
       apiKeySyncTimer = null;
       void syncApiKeysToBackend();
     }, 180);
+  }
+
+  async function flushPendingApiKeySync() {
+    if (apiKeySyncTimer) {
+      clearTimeout(apiKeySyncTimer);
+      apiKeySyncTimer = null;
+    }
+    if (!API_KEY_PROVIDERS.some((provider) => apiKeyDirty[provider])) {
+      return true;
+    }
+    return syncApiKeysToBackend();
   }
 
   function markApiKeyDirty(provider: AiProvider) {
@@ -1642,7 +1654,8 @@
     showSettings = true;
   }
 
-  function closeSettings() {
+  async function closeSettings() {
+    await flushPendingApiKeySync();
     showSettings = false;
   }
 
@@ -3081,6 +3094,7 @@
   }
   async function startTranslation() {
     if (isTranslating || !inputQuery.trim()) return;
+    await flushPendingApiKeySync();
     const localApiKey = apiKeys[selectedProvider].trim();
     if (localApiKey) {
       apiKeyDirty = { ...apiKeyDirty, [selectedProvider]: true };
