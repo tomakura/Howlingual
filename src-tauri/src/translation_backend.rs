@@ -1485,17 +1485,18 @@ fn resolve_api_key(inner: &TranslationBackendInner, provider: &str) -> Option<St
 }
 
 fn api_key_presence(inner: &TranslationBackendInner, provider: &str) -> ApiKeyPresence {
+    let has_saved = load_saved_api_key(provider).is_some();
     let has_session = inner
         .session_api_keys
         .get(provider)
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
 
+    if has_saved {
+        return ApiKeyPresence::Stored;
+    }
     if has_session {
         return ApiKeyPresence::Session;
-    }
-    if load_saved_api_key(provider).is_some() {
-        return ApiKeyPresence::Stored;
     }
     ApiKeyPresence::Unset
 }
@@ -1581,7 +1582,6 @@ pub fn set_api_key(
                 .session_api_keys
                 .insert(payload.provider.clone(), value.clone());
             set_saved_api_key(&payload.provider, &value)?;
-            inner.session_api_keys.remove(&payload.provider);
         } else {
             inner
                 .session_api_keys
