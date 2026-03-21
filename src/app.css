@@ -20,23 +20,7 @@
 @font-face {
 	font-family: 'IBM Plex Sans JP';
 	src: url('./Fonts/IBM_Plex_Sans_JP/IBMPlexSansJP-Regular.ttf') format('truetype');
-	font-weight: 400;
-	font-style: normal;
-	font-display: swap;
-}
-
-@font-face {
-	font-family: 'IBM Plex Sans JP';
-	src: url('./Fonts/IBM_Plex_Sans_JP/IBMPlexSansJP-Medium.ttf') format('truetype');
-	font-weight: 500;
-	font-style: normal;
-	font-display: swap;
-}
-
-@font-face {
-	font-family: 'IBM Plex Sans JP';
-	src: url('./Fonts/IBM_Plex_Sans_JP/IBMPlexSansJP-Bold.ttf') format('truetype');
-	font-weight: 700;
+	font-weight: 400 700;
 	font-style: normal;
 	font-display: swap;
 }

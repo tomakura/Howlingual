@@ -248,6 +248,8 @@ const OPENAI_STREAMING_MODELS: &[&str] = &[
     "o1",
 ];
 
+const OPENAI_RESPONSES_ONLY_MODELS: &[&str] = &["gpt-5.4-pro"];
+
 const GEMINI_STREAMING_MODELS: &[&str] = &[
     "gemini-3-pro-preview",
     "gemini-3-flash-preview",
@@ -370,6 +372,10 @@ fn is_streaming_model_supported(provider: &str, model: &str) -> bool {
     };
 
     supported_models.contains(&model)
+}
+
+fn is_openai_responses_only_model(model: &str) -> bool {
+    OPENAI_RESPONSES_ONLY_MODELS.contains(&model)
 }
 
 fn build_execution_plan(provider: &str, model: &str) -> ExecutionPlanPayload {
@@ -580,6 +586,39 @@ fn usage_from_value(value: &Value) -> Option<UsageMetadata> {
             input_tokens: input.unwrap_or_default(),
             output_tokens: output.unwrap_or_default(),
         }),
+    }
+}
+
+fn response_output_text(value: &Value) -> Option<String> {
+    let mut parts = Vec::new();
+
+    for item in value
+        .get("output")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if item.get("type").and_then(Value::as_str) != Some("message") {
+            continue;
+        }
+        for content in item
+            .get("content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if content.get("type").and_then(Value::as_str) == Some("output_text") {
+                if let Some(text) = content.get("text").and_then(Value::as_str) {
+                    parts.push(text);
+                }
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(""))
     }
 }
 
@@ -861,6 +900,51 @@ async fn call_openai_like(
         .ok_or_else(|| "OpenAI-compatible response content missing".to_string())?;
     response_from_json(
         extract_json(content)?,
+        data.get("usage").and_then(usage_from_value),
+    )
+}
+
+async fn call_openai_responses(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    system_prompt: &str,
+    user_prompt: &str,
+) -> Result<ProviderResponse, String> {
+    let body = json!({
+        "model": model,
+        "instructions": system_prompt,
+        "input": user_prompt,
+        "text": {
+            "format": {
+                "type": "json_object"
+            }
+        },
+        "reasoning": {
+            "effort": "medium"
+        }
+    });
+
+    let response = client
+        .post("https://api.openai.com/v1/responses")
+        .headers(bearer_headers(api_key)?)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let status = response.status();
+    let text = response.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("HTTP {}: {}", status.as_u16(), text));
+    }
+
+    let data = serde_json::from_str::<Value>(&text).map_err(|e| e.to_string())?;
+    let content = response_output_text(&data)
+        .ok_or_else(|| "OpenAI Responses output text missing".to_string())?;
+
+    response_from_json(
+        extract_json(&content)?,
         data.get("usage").and_then(usage_from_value),
     )
 }
@@ -1315,15 +1399,19 @@ async fn translate_with_provider(
 ) -> Result<ProviderResponse, String> {
     match provider {
         "openai" => {
-            call_openai_like(
-                client,
-                "https://api.openai.com/v1/chat/completions",
-                api_key,
-                model,
-                system_prompt,
-                user_prompt,
-            )
-            .await
+            if is_openai_responses_only_model(model) {
+                call_openai_responses(client, api_key, model, system_prompt, user_prompt).await
+            } else {
+                call_openai_like(
+                    client,
+                    "https://api.openai.com/v1/chat/completions",
+                    api_key,
+                    model,
+                    system_prompt,
+                    user_prompt,
+                )
+                .await
+            }
         }
         "groq" => {
             call_openai_like(

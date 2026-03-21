@@ -21,7 +21,6 @@
     getDefaultModelForProvider,
     getModelEntry,
     getModelsForProvider,
-    getRecommendedModelForProvider,
     getProviderForModel,
     isAiProvider,
   } from "$lib/ai_models";
@@ -350,47 +349,6 @@
     return t(appLanguage, "apiKeyUnset");
   }
 
-  function getModelSpeedLabel(model: AiModelEntry | null) {
-    if (!model) return "";
-    if (model.speed === "fast") return t(appLanguage, "modelFast");
-    if (model.speed === "deliberate") return t(appLanguage, "modelDeliberate");
-    return t(appLanguage, "modelBalanced");
-  }
-
-  function getModelQualityLabel(model: AiModelEntry | null) {
-    if (!model) return "";
-    return model.quality === "best"
-      ? t(appLanguage, "modelBest")
-      : t(appLanguage, "modelGood");
-  }
-
-  function getModelStreamingLabel(model: AiModelEntry | null) {
-    if (!model) return "";
-    if (model.streamingExperience === "great") {
-      return t(appLanguage, "modelStreamingGreat");
-    }
-    if (model.streamingExperience === "delayed") {
-      return t(appLanguage, "modelStreamingDelayed");
-    }
-    return t(appLanguage, "modelStreamingNormal");
-  }
-
-  function getModelUsageLabel(model: AiModelEntry | null) {
-    if (!model) return "";
-    if (model.recommended) return t(appLanguage, "modelRecommended");
-    if (model.reasoning) return t(appLanguage, "modelReasoningSlow");
-    return getModelSpeedLabel(model);
-  }
-
-  function decorateModelLabel(model: AiModelEntry) {
-    const tags = [
-      model.recommended ? t(appLanguage, "modelRecommended") : "",
-      getModelSpeedLabel(model),
-      model.reasoning ? t(appLanguage, "modelReasoningSlow") : "",
-    ].filter(Boolean);
-    return tags.length ? `${model.label} · ${tags.join(" / ")}` : model.label;
-  }
-
   function getTranslationPhaseLabel() {
     if (translationPhase === "submitting") {
       return t(appLanguage, "translationSending");
@@ -712,9 +670,6 @@
   let availableModels = $derived(getModelsForProvider(selectedProvider));
   let filteredModels = $derived(availableModels);
   let currentModelMeta = $derived(getModelEntry(selectedModel));
-  let recommendedModelForProvider = $derived(
-    getRecommendedModelForProvider(selectedProvider),
-  );
   let providerOrder = $derived.by(() =>
     [...API_KEY_PROVIDERS].sort((a, b) => {
       const aConfigured = apiKeyStatus[a] === "unset" ? 1 : 0;
@@ -5017,10 +4972,6 @@
               </div>
               <div class="loading-meta-row">
                 <span class="loading-meta-pill">
-                  {t(appLanguage, "usingModel")}:
-                  {currentModelMeta?.label || techMetrics.model || selectedModel}
-                </span>
-                <span class="loading-meta-pill">
                   {t(appLanguage, "sourceEstimate")}:
                   {detectedLang || sourceLang}
                 </span>
@@ -6185,11 +6136,6 @@
                       oninput={() => markApiKeyDirty(selectedProvider)}
                       placeholder={getApiKeyPlaceholder(selectedProvider)}
                     />
-                    <div class="settings-note">
-                      {apiKeyStatus[selectedProvider] === "unset"
-                        ? t(appLanguage, "providerSetupNeeded")
-                        : t(appLanguage, "providerReady")}
-                    </div>
                   </div>
 
                   <!-- Model Selection (Filtered) -->
@@ -6203,68 +6149,13 @@
                       bind:value={selectedModel}
                     >
                       {#each filteredModels as model}
-                        <option value={model.value}>{decorateModelLabel(model)}</option>
+                        <option value={model.value}>{model.label}</option>
                       {/each}
                     </select>
-                    {#if currentModelMeta}
-                      <div class="model-summary-card">
-                        <div class="model-summary-top">
-                          <strong>{currentModelMeta.label}</strong>
-                          {#if currentModelMeta.recommended}
-                            <span class="model-summary-badge recommended">
-                              {t(appLanguage, "modelRecommended")}
-                            </span>
-                          {/if}
-                        </div>
-                        <div class="model-summary-tags">
-                          <span class="model-summary-badge">
-                            {getModelUsageLabel(currentModelMeta)}
-                          </span>
-                          <span class="model-summary-badge">
-                            {getModelQualityLabel(currentModelMeta)}
-                          </span>
-                          <span class="model-summary-badge">
-                            {getModelStreamingLabel(currentModelMeta)}
-                          </span>
-                        </div>
-                        {#if currentModelMeta.reasoning}
-                          <div class="settings-note top">
-                            {t(appLanguage, "modelReasoningSlow")}
-                          </div>
-                        {/if}
-                        {#if translationExecutionPlan.reason === "model_unsupported"}
-                          <div class="settings-note top">
-                            {t(appLanguage, "streamingFallbackNote")}
-                          </div>
-                        {/if}
-                        {#if recommendedModelForProvider && selectedModel !== recommendedModelForProvider.value}
-                          <button
-                            class="settings-card-row provider-docs-btn"
-                            onclick={() =>
-                              (selectedModel = recommendedModelForProvider.value as AiModel)}
-                          >
-                            <div class="provider-docs-text">
-                              <div class="provider-docs-title">
-                                {t(appLanguage, "providerRecommendedModel")}
-                              </div>
-                              <div class="provider-docs-action">
-                                {recommendedModelForProvider.label}
-                              </div>
-                            </div>
-                          </button>
-                        {/if}
-                      </div>
-                    {/if}
                   </div>
 
                   {#if selectedProviderDoc}
                     <div class="settings-section">
-                      <div class="settings-label">
-                        {t(appLanguage, "apiOverview")}
-                      </div>
-                      <div class="settings-note top">
-                        {t(appLanguage, "apiOverviewDesc")}
-                      </div>
                       <button
                         class="settings-card-row provider-docs-btn"
                         onclick={() => openProviderDocs(selectedProviderDoc.url)}
@@ -6747,12 +6638,6 @@
                         </button>
                         <div class="history-item-actions">
                           <button
-                            class="history-action-btn"
-                            onclick={() => loadHistory(item)}
-                          >
-                            {t(appLanguage, "historyLoad")}
-                          </button>
-                          <button
                             class="history-action-btn primary"
                             onclick={() => void rerunHistory(item)}
                           >
@@ -6841,12 +6726,6 @@
                           </div>
                         </button>
                         <div class="history-item-actions vertical">
-                          <button
-                            class="history-action-btn"
-                            onclick={() => loadHistory(item)}
-                          >
-                            {t(appLanguage, "historyLoad")}
-                          </button>
                           <button
                             class="history-action-btn primary"
                             onclick={() => void rerunHistory(item)}
@@ -7013,10 +6892,6 @@
     font-size: 12px;
     line-height: 1.4;
     color: var(--text-muted);
-  }
-  .settings-note.top {
-    margin-top: 0;
-    margin-bottom: 8px;
   }
   .container {
     display: flex;
@@ -9600,45 +9475,6 @@
     color: #fca5a5;
   }
 
-  .model-summary-card {
-    margin-top: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 14px;
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid var(--border-color);
-  }
-
-  .model-summary-top {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    align-items: center;
-  }
-
-  .model-summary-tags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .model-summary-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 8px;
-    border-radius: 999px;
-    font-size: 11px;
-    background: rgba(255, 255, 255, 0.06);
-    color: var(--text-muted);
-  }
-
-  .model-summary-badge.recommended {
-    color: #bfdbfe;
-    background: rgba(59, 130, 246, 0.16);
-  }
-
   .provider-docs-btn {
     display: flex;
     align-items: center;
@@ -9991,7 +9827,6 @@
     background: rgba(0, 0, 0, 0.08);
   }
   :global([data-theme="light"]) .loading-meta-pill,
-  :global([data-theme="light"]) .model-summary-card,
   :global([data-theme="light"]) .history-action-btn {
     background: rgba(0, 0, 0, 0.03);
   }
