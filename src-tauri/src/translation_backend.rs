@@ -7,14 +7,12 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures_util::StreamExt;
-use keyring::Entry;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const TRANSLATION_EVENT: &str = "translation_update";
-const KEYRING_SERVICE: &str = "com.howlingual.keys";
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1453,10 +1451,6 @@ async fn translate_with_provider(
     }
 }
 
-fn keyring_entry(provider: &str) -> Result<Entry, String> {
-    Entry::new(KEYRING_SERVICE, provider).map_err(|e| e.to_string())
-}
-
 fn persisted_api_keys_path(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_config_dir()
@@ -1487,35 +1481,19 @@ fn save_persisted_api_key_store(app: &AppHandle, store: &PersistedApiKeyStore) -
 }
 
 fn load_saved_api_key(app: &AppHandle, provider: &str) -> Option<String> {
-    keyring_entry(provider)
-        .ok()
-        .and_then(|entry| entry.get_password().ok())
-        .or_else(|| {
-            load_persisted_api_key_store(app)
-                .providers
-                .get(provider)
-                .cloned()
-        })
+    load_persisted_api_key_store(app)
+        .providers
+        .get(provider)
+        .cloned()
         .filter(|value| !value.trim().is_empty())
 }
 
 fn set_saved_api_key(app: &AppHandle, provider: &str, value: &str) -> Result<(), String> {
-    match keyring_entry(provider).and_then(|entry| entry.set_password(value).map_err(|e| e.to_string())) {
-        Ok(_) => {
-            let _ = clear_persisted_api_key(app, provider);
-            Ok(())
-        }
-        Err(keyring_error) => {
-            log::warn!(
-                "[api-key] keyring save failed for provider={provider}: {keyring_error}; using file fallback"
-            );
-            let mut store = load_persisted_api_key_store(app);
-            store
-                .providers
-                .insert(provider.to_string(), value.to_string());
-            save_persisted_api_key_store(app, &store)
-        }
-    }
+    let mut store = load_persisted_api_key_store(app);
+    store
+        .providers
+        .insert(provider.to_string(), value.to_string());
+    save_persisted_api_key_store(app, &store)
 }
 
 fn clear_persisted_api_key(app: &AppHandle, provider: &str) -> Result<(), String> {
@@ -1535,29 +1513,7 @@ fn clear_persisted_api_key(app: &AppHandle, provider: &str) -> Result<(), String
 }
 
 fn clear_saved_api_key(app: &AppHandle, provider: &str) -> Result<(), String> {
-    let mut errors = Vec::new();
-
-    match keyring_entry(provider) {
-        Ok(entry) => {
-            if let Err(err) = entry.delete_credential() {
-                let message = err.to_string();
-                if !message.to_lowercase().contains("no entry") {
-                    errors.push(message);
-                }
-            }
-        }
-        Err(err) => errors.push(err),
-    }
-
-    if let Err(err) = clear_persisted_api_key(app, provider) {
-        errors.push(err);
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("; "))
-    }
+    clear_persisted_api_key(app, provider)
 }
 
 fn resolve_api_key(app: &AppHandle, inner: &TranslationBackendInner, provider: &str) -> Option<String> {
