@@ -1,4 +1,8 @@
 use std::collections::HashMap;
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -218,6 +222,11 @@ struct ProviderResponse {
 struct PartialProviderResponse {
     detected_source_language: Option<String>,
     candidates: Vec<TranslationResult>,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct PersistedApiKeyStore {
+    providers: HashMap<String, String>,
 }
 
 #[derive(Clone, Copy)]
@@ -1448,44 +1457,120 @@ fn keyring_entry(provider: &str) -> Result<Entry, String> {
     Entry::new(KEYRING_SERVICE, provider).map_err(|e| e.to_string())
 }
 
-fn load_saved_api_key(provider: &str) -> Option<String> {
+fn persisted_api_keys_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_config_dir()
+        .map(|dir| dir.join("api_keys.json"))
+        .map_err(|e| e.to_string())
+}
+
+fn load_persisted_api_key_store(app: &AppHandle) -> PersistedApiKeyStore {
+    let Some(path) = persisted_api_keys_path(app).ok() else {
+        return PersistedApiKeyStore::default();
+    };
+    let Ok(raw) = fs::read_to_string(path) else {
+        return PersistedApiKeyStore::default();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn save_persisted_api_key_store(app: &AppHandle, store: &PersistedApiKeyStore) -> Result<(), String> {
+    let path = persisted_api_keys_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string(store).map_err(|e| e.to_string())?;
+    fs::write(&path, json).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn load_saved_api_key(app: &AppHandle, provider: &str) -> Option<String> {
     keyring_entry(provider)
         .ok()
         .and_then(|entry| entry.get_password().ok())
+        .or_else(|| {
+            load_persisted_api_key_store(app)
+                .providers
+                .get(provider)
+                .cloned()
+        })
         .filter(|value| !value.trim().is_empty())
 }
 
-fn set_saved_api_key(provider: &str, value: &str) -> Result<(), String> {
-    let entry = keyring_entry(provider)?;
-    entry.set_password(value).map_err(|e| e.to_string())
-}
-
-fn clear_saved_api_key(provider: &str) -> Result<(), String> {
-    let entry = keyring_entry(provider)?;
-    match entry.delete_credential() {
-        Ok(_) => Ok(()),
-        Err(err) => {
-            let message = err.to_string();
-            if message.to_lowercase().contains("no entry") {
-                Ok(())
-            } else {
-                Err(message)
-            }
+fn set_saved_api_key(app: &AppHandle, provider: &str, value: &str) -> Result<(), String> {
+    match keyring_entry(provider).and_then(|entry| entry.set_password(value).map_err(|e| e.to_string())) {
+        Ok(_) => {
+            let _ = clear_persisted_api_key(app, provider);
+            Ok(())
+        }
+        Err(keyring_error) => {
+            log::warn!(
+                "[api-key] keyring save failed for provider={provider}: {keyring_error}; using file fallback"
+            );
+            let mut store = load_persisted_api_key_store(app);
+            store
+                .providers
+                .insert(provider.to_string(), value.to_string());
+            save_persisted_api_key_store(app, &store)
         }
     }
 }
 
-fn resolve_api_key(inner: &TranslationBackendInner, provider: &str) -> Option<String> {
+fn clear_persisted_api_key(app: &AppHandle, provider: &str) -> Result<(), String> {
+    let path = persisted_api_keys_path(app)?;
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut store = load_persisted_api_key_store(app);
+    if store.providers.remove(provider).is_none() {
+        return Ok(());
+    }
+    if store.providers.is_empty() {
+        fs::remove_file(path).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    save_persisted_api_key_store(app, &store)
+}
+
+fn clear_saved_api_key(app: &AppHandle, provider: &str) -> Result<(), String> {
+    let mut errors = Vec::new();
+
+    match keyring_entry(provider) {
+        Ok(entry) => {
+            if let Err(err) = entry.delete_credential() {
+                let message = err.to_string();
+                if !message.to_lowercase().contains("no entry") {
+                    errors.push(message);
+                }
+            }
+        }
+        Err(err) => errors.push(err),
+    }
+
+    if let Err(err) = clear_persisted_api_key(app, provider) {
+        errors.push(err);
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn resolve_api_key(app: &AppHandle, inner: &TranslationBackendInner, provider: &str) -> Option<String> {
     inner
         .session_api_keys
         .get(provider)
         .cloned()
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| load_saved_api_key(provider))
+        .or_else(|| load_saved_api_key(app, provider))
 }
 
-fn api_key_presence(inner: &TranslationBackendInner, provider: &str) -> ApiKeyPresence {
-    let has_saved = load_saved_api_key(provider).is_some();
+fn api_key_presence(app: &AppHandle, inner: &TranslationBackendInner, provider: &str) -> ApiKeyPresence {
+    let has_saved = load_saved_api_key(app, provider).is_some();
     let has_session = inner
         .session_api_keys
         .get(provider)
@@ -1501,13 +1586,13 @@ fn api_key_presence(inner: &TranslationBackendInner, provider: &str) -> ApiKeyPr
     ApiKeyPresence::Unset
 }
 
-fn api_key_statuses(inner: &TranslationBackendInner) -> ApiKeyStatus {
+fn api_key_statuses(app: &AppHandle, inner: &TranslationBackendInner) -> ApiKeyStatus {
     ApiKeyStatus {
-        openai: api_key_presence(inner, "openai"),
-        gemini: api_key_presence(inner, "gemini"),
-        anthropic: api_key_presence(inner, "anthropic"),
-        groq: api_key_presence(inner, "groq"),
-        cerebras: api_key_presence(inner, "cerebras"),
+        openai: api_key_presence(app, inner, "openai"),
+        gemini: api_key_presence(app, inner, "gemini"),
+        anthropic: api_key_presence(app, inner, "anthropic"),
+        groq: api_key_presence(app, inner, "groq"),
+        cerebras: api_key_presence(app, inner, "cerebras"),
     }
 }
 
@@ -1568,6 +1653,7 @@ pub fn request_translation_state(
 
 #[tauri::command]
 pub fn set_api_key(
+    app: AppHandle,
     state: State<'_, TranslationBackendState>,
     payload: ApiKeyPayload,
 ) -> Result<ApiKeyStatus, String> {
@@ -1576,39 +1662,41 @@ pub fn set_api_key(
 
         if value.is_empty() {
             inner.session_api_keys.remove(&payload.provider);
-            let _ = clear_saved_api_key(&payload.provider);
+            let _ = clear_saved_api_key(&app, &payload.provider);
         } else if payload.persist {
             inner
                 .session_api_keys
                 .insert(payload.provider.clone(), value.clone());
-            set_saved_api_key(&payload.provider, &value)?;
+            set_saved_api_key(&app, &payload.provider, &value)?;
         } else {
             inner
                 .session_api_keys
                 .insert(payload.provider.clone(), value);
-            let _ = clear_saved_api_key(&payload.provider);
+            let _ = clear_saved_api_key(&app, &payload.provider);
         }
-        Ok(api_key_statuses(inner))
+        Ok(api_key_statuses(&app, inner))
     })?
 }
 
 #[tauri::command]
 pub fn clear_api_key(
+    app: AppHandle,
     state: State<'_, TranslationBackendState>,
     payload: ProviderPayload,
 ) -> Result<ApiKeyStatus, String> {
     with_backend_state(&state, |inner| {
         inner.session_api_keys.remove(&payload.provider);
-        clear_saved_api_key(&payload.provider)?;
-        Ok(api_key_statuses(inner))
+        clear_saved_api_key(&app, &payload.provider)?;
+        Ok(api_key_statuses(&app, inner))
     })?
 }
 
 #[tauri::command]
 pub fn get_api_key_status(
+    app: AppHandle,
     state: State<'_, TranslationBackendState>,
 ) -> Result<ApiKeyStatus, String> {
-    with_backend_state(&state, |inner| api_key_statuses(inner))
+    with_backend_state(&state, |inner| api_key_statuses(&app, inner))
 }
 
 #[tauri::command]
@@ -1680,7 +1768,7 @@ pub fn start_translation(
                         .as_ref()
                         .map(|value| value.trim().to_string())
                         .filter(|value| !value.is_empty())
-                        .or_else(|| resolve_api_key(&inner, payload.provider.as_str())),
+                        .or_else(|| resolve_api_key(&app_handle, &inner, payload.provider.as_str())),
                 ),
                 Err(_) => {
                     log::error!("[translation] state lock failed");
