@@ -6,30 +6,32 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { listen } from "@tauri-apps/api/event";
+  import { listen, emit } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import {
     enable as enableAutostart,
     disable as disableAutostart,
     isEnabled as isAutostartEnabled,
   } from "@tauri-apps/plugin-autostart";
-  import { type AiModel } from "$lib/ai_service";
   import {
+    translateTextStream,
+    type AiModel,
+    type AiResponse,
+    type UsageMetadata,
+  } from "$lib/ai_service";
+  import {
+    AI_MODELS,
     DEFAULT_MODELS_BY_PROVIDER,
-    type AiModelEntry,
     type AiProvider,
     getDefaultModelForProvider,
     getModelEntry,
-    getModelsForProvider,
     getProviderForModel,
     isAiProvider,
   } from "$lib/ai_models";
-  import { getExecutionPlan } from "$lib/translation_policy";
   import CaptureOverlay from "$lib/components/CaptureOverlay.svelte";
   import {
     t,
     getLanguageName,
-    getLanguageLocale,
     getStyleName,
     getTargetLanguageName,
     type AppLanguage,
@@ -51,43 +53,12 @@
   let selectedModel = $state<AiModel>(
     DEFAULT_MODELS_BY_PROVIDER.openai as AiModel,
   );
-  const EMPTY_API_KEYS = {
+  let apiKeys = $state({
     gemini: "",
     openai: "",
     anthropic: "",
     groq: "",
     cerebras: "",
-  };
-  type ApiKeyStore = typeof EMPTY_API_KEYS;
-  const API_KEY_PROVIDERS: AiProvider[] = [
-    "openai",
-    "gemini",
-    "anthropic",
-    "groq",
-    "cerebras",
-  ];
-  type ApiKeyPresence = "unset" | "session" | "stored";
-  type TranslationPhase =
-    | "idle"
-    | "submitting"
-    | "waiting_model"
-    | "streaming"
-    | "stopped"
-    | "error";
-  let apiKeys = $state<ApiKeyStore>({ ...EMPTY_API_KEYS });
-  let apiKeyStatus = $state<Record<AiProvider, ApiKeyPresence>>({
-    openai: "unset",
-    gemini: "unset",
-    anthropic: "unset",
-    groq: "unset",
-    cerebras: "unset",
-  });
-  let apiKeyDirty = $state<Record<AiProvider, boolean>>({
-    openai: false,
-    gemini: false,
-    anthropic: false,
-    groq: false,
-    cerebras: false,
   });
   let rememberApiKeys = $state(true);
   let defaultTargetLang = $state("日本語");
@@ -116,10 +87,6 @@
   let startMinimized = $state(false);
   let ocrEngine = $state<"paddle" | "windows">("paddle");
   let clipboardOpsEnabled = $state(false);
-  let translationPhase = $state<TranslationPhase>("idle");
-  let latestTranslationRunId = 0;
-  let latestTranslationUpdatedAt = 0;
-  let apiKeySyncTimer: ReturnType<typeof setTimeout> | null = null;
 
   let historyAnimating = $state(false);
   let historyAnimTimer: ReturnType<typeof setTimeout> | null = null;
@@ -244,368 +211,6 @@
     return "英語";
   }
 
-  function normalizeApiKeyStatus(raw: any): Record<AiProvider, ApiKeyPresence> {
-    const normalizePresence = (value: unknown): ApiKeyPresence => {
-      if (value === "stored" || value === "session" || value === "unset") {
-        return value;
-      }
-      return value ? "stored" : "unset";
-    };
-
-    return {
-      openai: normalizePresence(raw?.openai),
-      gemini: normalizePresence(raw?.gemini),
-      anthropic: normalizePresence(raw?.anthropic),
-      groq: normalizePresence(raw?.groq),
-      cerebras: normalizePresence(raw?.cerebras),
-    };
-  }
-
-  async function refreshApiKeyStatus() {
-    try {
-      const status = await invoke<any>("get_api_key_status");
-      const normalized = normalizeApiKeyStatus(status);
-      apiKeyStatus = normalized;
-      return normalized;
-    } catch (error) {
-      console.warn("Failed to fetch API key status", error);
-      return apiKeyStatus;
-    }
-  }
-
-  async function syncApiKeysToBackend() {
-    const dirtyProviders = API_KEY_PROVIDERS.filter((provider) => apiKeyDirty[provider]);
-    if (!dirtyProviders.length) return true;
-
-    let hadFailure = false;
-    const nextDirty = { ...apiKeyDirty };
-
-    for (const provider of dirtyProviders) {
-      try {
-        const value = apiKeys[provider].trim();
-        const status = value
-          ? await invoke<any>("set_api_key", {
-              payload: { provider, value, persist: rememberApiKeys },
-            })
-          : await invoke<any>("clear_api_key", {
-              payload: { provider },
-            });
-        apiKeyStatus = normalizeApiKeyStatus(status);
-        nextDirty[provider] = false;
-      } catch (error) {
-        console.warn(`Failed to sync ${provider} API key`, error);
-        hadFailure = true;
-        nextDirty[provider] = true;
-        await refreshApiKeyStatus();
-      }
-    }
-
-    apiKeyDirty = nextDirty;
-    return !hadFailure;
-  }
-
-  function scheduleApiKeySync() {
-    if (apiKeySyncTimer) {
-      clearTimeout(apiKeySyncTimer);
-    }
-    apiKeySyncTimer = setTimeout(() => {
-      apiKeySyncTimer = null;
-      void syncApiKeysToBackend();
-    }, 180);
-  }
-
-  async function flushPendingApiKeySync() {
-    if (apiKeySyncTimer) {
-      clearTimeout(apiKeySyncTimer);
-      apiKeySyncTimer = null;
-    }
-    if (!API_KEY_PROVIDERS.some((provider) => apiKeyDirty[provider])) {
-      return true;
-    }
-    return syncApiKeysToBackend();
-  }
-
-  function markApiKeyDirty(provider: AiProvider) {
-    apiKeyDirty = { ...apiKeyDirty, [provider]: true };
-    scheduleApiKeySync();
-  }
-
-  function toggleRememberApiKeys() {
-    rememberApiKeys = !rememberApiKeys;
-    apiKeyDirty = {
-      openai: true,
-      gemini: true,
-      anthropic: true,
-      groq: true,
-      cerebras: true,
-    };
-    scheduleApiKeySync();
-  }
-
-  function normalizeTranslationPhase(value: unknown): TranslationPhase {
-    if (
-      value === "idle" ||
-      value === "submitting" ||
-      value === "waiting_model" ||
-      value === "streaming" ||
-      value === "stopped" ||
-      value === "error"
-    ) {
-      return value;
-    }
-    return "idle";
-  }
-
-  function getApiKeyPresenceLabel(presence: ApiKeyPresence) {
-    if (presence === "stored") return t(appLanguage, "apiKeyStored");
-    if (presence === "session") return t(appLanguage, "apiKeySession");
-    return t(appLanguage, "apiKeyUnset");
-  }
-
-  function getDisplayedApiKeyPresence(provider: AiProvider): ApiKeyPresence {
-    if (apiKeys[provider].trim()) {
-      return "session";
-    }
-    return apiKeyStatus[provider];
-  }
-
-  function getTranslationPhaseLabel() {
-    if (translationPhase === "submitting") {
-      return t(appLanguage, "translationSending");
-    }
-    if (translationPhase === "waiting_model") {
-      return t(appLanguage, "translationWaitingModel");
-    }
-    if (translationPhase === "streaming") {
-      return t(appLanguage, "translationGenerating");
-    }
-    if (translationPhase === "stopped") {
-      return t(appLanguage, "translationStopped");
-    }
-    if (translationPhase === "error") {
-      return t(appLanguage, "denied");
-    }
-    return t(appLanguage, "translating");
-  }
-
-  function getTranslationPhaseHint() {
-    if (
-      currentModelMeta?.reasoning &&
-      (translationPhase === "submitting" || translationPhase === "waiting_model")
-    ) {
-      return t(appLanguage, "modelReasoningSlow");
-    }
-    if (translationExecutionPlan.reason === "model_unsupported") {
-      return t(appLanguage, "streamingFallbackNote");
-    }
-    return "";
-  }
-
-  function getFriendlyErrorMessage(raw: string) {
-    const lower = raw.toLowerCase();
-    if (!raw) return "";
-    if (lower.includes("api key") && lower.includes("not configured")) {
-      return t(appLanguage, "errorApiKeyMissing");
-    }
-    if (
-      lower.includes("insufficient_quota") ||
-      lower.includes("billing") ||
-      lower.includes("quota")
-    ) {
-      return t(appLanguage, "errorQuota");
-    }
-    if (lower.includes("rate limit") || lower.includes("http 429")) {
-      return t(appLanguage, "errorRateLimit");
-    }
-    if (
-      lower.includes("model") &&
-      (lower.includes("not found") ||
-        lower.includes("unsupported") ||
-        lower.includes("unavailable"))
-    ) {
-      return t(appLanguage, "errorModelUnavailable");
-    }
-    return raw;
-  }
-
-  function getErrorAction(raw: string) {
-    const lower = raw.toLowerCase();
-    if (lower.includes("api key") && lower.includes("not configured")) {
-      return {
-        label: t(appLanguage, "errorActionFixKeys"),
-        action: () => {
-          settingsTab = "api";
-          showSettings = true;
-        },
-      };
-    }
-    if (
-      lower.includes("screen recording") ||
-      lower.includes("画面収録") ||
-      lower.includes("accessibility")
-    ) {
-      return {
-        label: t(appLanguage, "errorActionOpenSettings"),
-        action: async () => {
-          if (lower.includes("accessibility")) {
-            await invoke("open_accessibility_settings");
-            return;
-          }
-          await invoke("open_screen_recording_settings");
-        },
-      };
-    }
-    return null;
-  }
-
-  function isRemoteStateNewer(payload: any) {
-    const updatedAt = Number(payload?.updatedAt ?? 0);
-    const runId = Number(payload?.runId ?? 0);
-    return (
-      updatedAt > latestTranslationUpdatedAt ||
-      (updatedAt === latestTranslationUpdatedAt &&
-        runId >= latestTranslationRunId)
-    );
-  }
-
-  function markRemoteState(payload: any) {
-    latestTranslationRunId = Number(payload?.runId ?? latestTranslationRunId);
-    latestTranslationUpdatedAt = Number(
-      payload?.updatedAt ?? latestTranslationUpdatedAt,
-    );
-  }
-
-  function applyTranslationUpdate(payload: any) {
-    if (!payload || !isRemoteStateNewer(payload)) {
-      return;
-    }
-    markRemoteState(payload);
-
-    if (payload.inputQuery !== undefined && payload.inputQuery !== inputQuery) {
-      const hasResults =
-        Array.isArray(payload.translations) &&
-        payload.translations.some((t: any) => t?.text);
-      if (textareaEl && document.activeElement === textareaEl) {
-        if (!payload.isTranslating && !hasResults) {
-          return;
-        }
-      }
-    }
-
-    if (isTranslating && !payload.isTranslating) {
-      if (
-        payload.translations &&
-        payload.translations.length > 0 &&
-        payload.translations.some((t: any) => t.text)
-      ) {
-        const newEntry: HistoryItem = {
-          id: crypto.randomUUID(),
-          timestamp: Date.now(),
-          sourceText: payload.inputQuery ?? inputQuery,
-          sourceLang: payload.detectedLang || payload.sourceLang || sourceLang,
-          targetLang: payload.targetLang || targetLang,
-          isAutoDetect: isAutoDetect,
-          detectedLang: payload.detectedLang || detectedLang || "",
-          translations: payload.translations.map((t: any) => ({
-            text: t.text,
-            reason: t.reason,
-          })),
-          detailedExplanation: payload.detailedExplanation
-            ? $state.snapshot(payload.detailedExplanation)
-            : null,
-          styleLevels: payload.styleLevels
-            ? $state.snapshot(payload.styleLevels)
-            : {},
-          provider: selectedProvider,
-          model: payload.currentModel || selectedModel,
-        };
-        history = [newEntry, ...history].slice(0, 50);
-        localStorage.setItem("howlingual_history", JSON.stringify(history));
-        persistLastResult();
-
-        const usageTokens = Math.max(
-          0,
-          (payload.techMetrics?.inputTokens ?? 0) +
-            (payload.techMetrics?.outputTokens ?? 0),
-        );
-        recordUsage(1, usageTokens);
-      }
-      lastTranslatedText = payload.inputQuery ?? inputQuery;
-    }
-
-    isTranslating = Boolean(payload.isTranslating);
-    translationPhase = normalizeTranslationPhase(
-      payload.phase ?? (payload.isTranslating ? "waiting_model" : "idle"),
-    );
-    if (!payload.isTranslating) {
-      if (!isAutoDetect || inputQuery.trim().length >= 5 || !inputQuery.trim()) {
-        isDetecting = false;
-      }
-    }
-    translations = Array.isArray(payload.translations) ? payload.translations : [];
-
-    if ("detailedExplanation" in payload) {
-      detailedExplanation = payload.detailedExplanation || null;
-      showExplanation = Boolean(payload.detailedExplanation);
-    } else if (payload.isTranslating) {
-      detailedExplanation = null;
-      showExplanation = false;
-    }
-    if ("errorMessage" in payload) {
-      errorMessage = payload.errorMessage || "";
-      if (payload.errorMessage) {
-        translationPhase = "error";
-      }
-    }
-    if (payload.inputQuery !== undefined && payload.inputQuery !== inputQuery) {
-      inputQuery = payload.inputQuery;
-    }
-
-    if (!isAutoDetect || inputQuery.trim().length >= 5) {
-      if (payload.sourceLang) {
-        if (isAutoDetect && payload.sourceLang !== AUTO_DETECT_LABEL) {
-          const incoming = payload.detectedLang || payload.sourceLang;
-          const localDetect = detectLanguageSimple(inputQuery);
-          detectedLang = localDetect === "日本語" ? "日本語" : incoming;
-          isDetecting = false;
-        } else {
-          applySourceLangFromSync(payload.sourceLang, payload.detectedLang);
-        }
-      } else if (payload.detectedLang && isAutoDetect) {
-        const localDetect = detectLanguageSimple(inputQuery);
-        detectedLang =
-          localDetect === "日本語" ? "日本語" : payload.detectedLang;
-        isDetecting = false;
-      }
-    }
-
-    if (payload.targetLang) {
-      targetLang = payload.targetLang;
-    }
-
-    if (payload.styleLevels) {
-      styleLevels = normalizeStyleLevels(
-        { ...styleLevels, ...payload.styleLevels },
-        customStyles,
-      );
-    }
-
-    if (payload.techMetrics) {
-      syncTechMetrics(payload.techMetrics);
-    }
-
-    void tick().then(autoResize);
-  }
-
-  async function requestTranslationState() {
-    try {
-      const payload = await invoke<any>("request_translation_state");
-      applyTranslationUpdate(payload);
-    } catch (error) {
-      console.warn("Failed to request translation state", error);
-    }
-  }
-
   // Custom Styles
   type CustomStyle = {
     id: string;
@@ -687,23 +292,10 @@
     }
   });
 
-  let availableModels = $derived(getModelsForProvider(selectedProvider));
-  let filteredModels = $derived(availableModels);
-  let currentModelMeta = $derived(getModelEntry(selectedModel));
-  let providerOrder = $derived.by(() =>
-    [...API_KEY_PROVIDERS].sort((a, b) => {
-      const aConfigured = apiKeyStatus[a] === "unset" ? 1 : 0;
-      const bConfigured = apiKeyStatus[b] === "unset" ? 1 : 0;
-      if (aConfigured !== bConfigured) return aConfigured - bConfigured;
-      return API_KEY_PROVIDERS.indexOf(a) - API_KEY_PROVIDERS.indexOf(b);
-    }),
-  );
-  let translationExecutionPlan = $derived(
-    getExecutionPlan({
-      provider: selectedProvider,
-      model: selectedModel,
-      streamingDisplay: true,
-    }),
+  let availableModels = $state([...AI_MODELS]);
+
+  let filteredModels = $derived(
+    availableModels.filter((m) => m.provider === selectedProvider),
   );
 
 
@@ -734,6 +326,7 @@
     }
 
     try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
       isCompactMode = getCurrentWindow().label === "compact";
       await tick();
       autoResize();
@@ -750,10 +343,8 @@
   onMount(() => {
     const params = new URLSearchParams(window.location.search);
     const viewParam = params.get("view");
-    let unlistenCompactFocus: (() => void) | null = null;
 
     void detectWindowMode();
-    void refreshApiKeyStatus();
     const saved = localStorage.getItem("howlingual_settings");
     if (saved) {
       try {
@@ -834,6 +425,7 @@
     if (viewParam === "main") {
       (async () => {
         try {
+          const { getCurrentWindow } = await import("@tauri-apps/api/window");
           const window = getCurrentWindow();
           if (!startMinimized) {
             await window.show();
@@ -848,45 +440,157 @@
     }
     // Quick Mode Reset on Focus
     if (viewParam === "compact") {
-      void (async () => {
+      import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
         const win = getCurrentWindow();
-        unlistenCompactFocus = await win.listen("tauri://focus", async () => {
+        win.listen("tauri://focus", async () => {
           // Disabled auto-reset on focus as per user feedback ("annoying")
           // and to prevent race condition with text_captured event which focuses window
+          /*
+          if (!isTranslating && !isWaitingForOCR && !isOpeningMain) {
+            console.log("[QuickMode] Focus detected, resetting state.");
+            inputQuery = "";
+            translations = translations.map((t) => ({
+              ...t,
+              text: "",
+              reason: "",
+            }));
+            await emit("sync_input_command", {
+              text: "",
+              resetTranslations: true,
+            });
+          }
+          */
         });
-      })();
+      });
     }
 
-    if (!rememberApiKeys) {
-      apiKeyDirty = {
-        openai: true,
-        gemini: true,
-        anthropic: true,
-        groq: true,
-        cerebras: true,
-      };
-      scheduleApiKeySync();
-    }
-
-    void refreshApiKeyStatus();
     settingsReady = true;
-
-    return () => {
-      if (unlistenCompactFocus) {
-        unlistenCompactFocus();
-      }
-    };
   });
 
   // Service Integration
   onMount(() => {
     let unlisten: () => void;
     (async () => {
+      // Sync state on load
       console.log("[UI] Requesting Sync State...");
-      await requestTranslationState();
+      await emit("request_sync_state");
 
       unlisten = await listen<any>("translation_update", (event) => {
-        applyTranslationUpdate(event.payload);
+        const p = event.payload;
+
+        // --- ECHO GUARD ---
+        // Ignore updates for old input text to prevent "jumpy" UI when typing fast.
+        // During active detection or translation, the service might echo old states.
+        if (p.inputQuery !== undefined && p.inputQuery !== inputQuery) {
+          // If this window is focused/typing, ignore stale echoes unless real translation is flowing.
+          const hasResults =
+            Array.isArray(p.translations) &&
+            p.translations.some((t: any) => t?.text);
+          if (textareaEl && document.activeElement === textareaEl) {
+            if (!p.isTranslating && !hasResults) {
+              return;
+            }
+          }
+        }
+
+        // Detect completion for History Saving
+        if (isTranslating && !p.isTranslating) {
+          // Translation just finished
+          if (
+            p.translations &&
+            p.translations.length > 0 &&
+            p.translations.some((t: any) => t.text)
+          ) {
+            const newEntry: HistoryItem = {
+              id: crypto.randomUUID(),
+              timestamp: Date.now(),
+              sourceText: p.inputQuery || inputQuery,
+              sourceLang: p.detectedLang || p.sourceLang || sourceLang,
+              targetLang: p.targetLang || targetLang,
+              isAutoDetect: isAutoDetect,
+              detectedLang: p.detectedLang || detectedLang || "",
+              translations: p.translations.map((t: any) => ({
+                text: t.text,
+                reason: t.reason,
+              })),
+              detailedExplanation: p.detailedExplanation
+                ? $state.snapshot(p.detailedExplanation)
+                : null,
+              styleLevels: p.styleLevels ? $state.snapshot(p.styleLevels) : {},
+            };
+            history = [newEntry, ...history].slice(0, 50);
+            localStorage.setItem("howlingual_history", JSON.stringify(history));
+
+            persistLastResult(); // Helper function
+
+            const usageTokens = Math.max(
+              0,
+              (p.techMetrics?.inputTokens ?? 0) +
+                (p.techMetrics?.outputTokens ?? 0),
+            );
+            recordUsage(1, usageTokens);
+          }
+          lastTranslatedText = p.inputQuery || inputQuery;
+        }
+
+        isTranslating = p.isTranslating;
+        if (!p.isTranslating) {
+          // Only stop detecting if we're not in the manual threshold-waiting state
+          if (
+            !isAutoDetect ||
+            inputQuery.trim().length >= 5 ||
+            !inputQuery.trim()
+          ) {
+            isDetecting = false;
+          }
+        }
+        translations = p.translations; // Direct sync
+
+        if ("detailedExplanation" in p) {
+          detailedExplanation = p.detailedExplanation || null;
+          showExplanation = Boolean(p.detailedExplanation);
+        } else if (p.isTranslating) {
+          detailedExplanation = null;
+          showExplanation = false;
+        }
+        if ("errorMessage" in p) {
+          errorMessage = p.errorMessage || "";
+        }
+        if (p.inputQuery && p.inputQuery !== inputQuery) {
+          inputQuery = p.inputQuery;
+        }
+
+        // Sync Language Settings
+        // Only accept updates if we have enough text to trust the backend (or if manual)
+        // This prevents "flash" updates where backend sees 1 char and says "English"
+        if (!isAutoDetect || inputQuery.trim().length >= 5) {
+          if (p.sourceLang) {
+            if (isAutoDetect && p.sourceLang !== AUTO_DETECT_LABEL) {
+              const incoming = p.detectedLang || p.sourceLang;
+              const localDetect = detectLanguageSimple(inputQuery);
+              detectedLang = localDetect === "日本語" ? "日本語" : incoming;
+              isDetecting = false;
+            } else {
+              applySourceLangFromSync(p.sourceLang, p.detectedLang);
+            }
+          } else if (p.detectedLang && isAutoDetect) {
+            const localDetect = detectLanguageSimple(inputQuery);
+            detectedLang = localDetect === "日本語" ? "日本語" : p.detectedLang;
+            isDetecting = false;
+          }
+        }
+
+        if (p.targetLang) {
+          targetLang = p.targetLang;
+        }
+
+        // Sync Metrics
+        if (p.techMetrics) {
+          syncTechMetrics(p.techMetrics);
+        }
+
+        // Auto-resize if needed
+        void tick().then(autoResize);
       });
     })();
 
@@ -1000,6 +704,7 @@
 
       // Ensure window is visible and focused
       try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
         const currentWindow = getCurrentWindow();
         await currentWindow.show();
         await currentWindow.setFocus();
@@ -1095,9 +800,19 @@
   // Auto-save settings when changed
   $effect(() => {
     if (!settingsReady) return;
+    const sanitizedApiKeys = rememberApiKeys
+      ? apiKeys
+      : {
+          gemini: "",
+          openai: "",
+          anthropic: "",
+          groq: "",
+          cerebras: "",
+        };
     const settings = {
       model: selectedModel,
       provider: selectedProvider,
+      apiKeys: sanitizedApiKeys,
       defaultTargetLang: defaultTargetLang,
       theme: theme,
       appLanguage: appLanguage,
@@ -1202,7 +917,7 @@
   }
 
   function ensureModelMatchesProvider() {
-    const valid = getModelsForProvider(selectedProvider).some(
+    const valid = availableModels.some(
       (m) => m.provider === selectedProvider && m.value === selectedModel,
     );
     if (!valid) {
@@ -1242,6 +957,13 @@
 
     if (parsed.rememberApiKeys !== undefined)
       rememberApiKeys = parsed.rememberApiKeys;
+    const shouldApplyKeys =
+      parsed.rememberApiKeys !== undefined
+        ? parsed.rememberApiKeys
+        : rememberApiKeys;
+    if (parsed.apiKeys && shouldApplyKeys) {
+      apiKeys = { ...apiKeys, ...parsed.apiKeys };
+    }
     if (parsed.defaultTargetLang)
       defaultTargetLang = parsed.defaultTargetLang;
     if (parsed.theme) theme = parsed.theme;
@@ -1265,7 +987,9 @@
     document.documentElement.setAttribute("data-theme", theme);
   }
 
-  let styleLevels: Record<string, number> = $state({});
+  let styleLevels: Record<string, number> = $state(
+    untrack(() => normalizeStyleLevels({}, customStyles)),
+  );
   // Prevent initial auto-save from overwriting loaded values
   let styleLevelsReady = $state(false);
   let styleLevelsSaveTimer: number | null = null;
@@ -1332,7 +1056,7 @@
     // 保存されていたモデルを復元
     if (lastSelectedModels[provider]) {
       // 保存されたモデルがまだ利用可能か確認
-      const savedModelExists = getModelsForProvider(provider).some(
+      const savedModelExists = availableModels.some(
         (m) =>
           m.value === lastSelectedModels[provider] && m.provider === provider,
       );
@@ -1413,8 +1137,8 @@
   const settingsTabOrder = [
     "appearance",
     "translation",
-    "api",
     "system",
+    "api",
     "styles",
     "about",
   ];
@@ -1455,24 +1179,6 @@
   }
 
   function getApiKeyPlaceholder(provider: AiProvider) {
-    if (!apiKeys[provider] && apiKeyStatus[provider] !== "unset") {
-      if (apiKeyStatus[provider] === "session") {
-        return appLanguage === "ja"
-          ? "このセッションで使用中"
-          : appLanguage === "zh"
-            ? "当前会话可用"
-            : appLanguage === "ko"
-              ? "현재 세션에서 사용 중"
-              : "Available for this session";
-      }
-      return appLanguage === "ja"
-        ? "安全に保存済み"
-        : appLanguage === "zh"
-          ? "已安全保存"
-          : appLanguage === "ko"
-            ? "안전하게 저장됨"
-            : "Stored securely";
-    }
     switch (provider) {
       case "gemini":
         return "AIza...";
@@ -1501,9 +1207,39 @@
     settingsTab = newTab;
   }
 
+  let focusReturnTarget: HTMLElement | null = null;
+
+  function rememberFocusTarget() {
+    if (document.activeElement instanceof HTMLElement) {
+      focusReturnTarget = document.activeElement;
+    }
+  }
+
+  function restoreFocusTarget() {
+    const target = focusReturnTarget;
+    focusReturnTarget = null;
+    if (!target) return;
+    void tick().then(() => {
+      if (target.isConnected) {
+        target.focus({ preventScroll: true });
+      }
+    });
+  }
+
   function openSettingsModal() {
+    rememberFocusTarget();
     settingsTab = "appearance";
     showSettings = true;
+  }
+
+  function openHistory() {
+    rememberFocusTarget();
+    showHistory = true;
+  }
+
+  function closeHistory() {
+    showHistory = false;
+    restoreFocusTarget();
   }
 
   async function handleWindowKeydown(e: KeyboardEvent) {
@@ -1559,11 +1295,12 @@
         return;
       }
       if (showHistory) {
-        showHistory = false;
+        closeHistory();
         return;
       }
 
       if (isCompactMode) {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
         await getCurrentWindow().hide();
         return;
       }
@@ -1654,17 +1391,19 @@
   }
 
   function openSettings() {
+    rememberFocusTarget();
     showSettings = true;
   }
 
   function openStyles() {
+    rememberFocusTarget();
     settingsTab = "styles";
     showSettings = true;
   }
 
-  async function closeSettings() {
-    await flushPendingApiKeySync();
+  function closeSettings() {
     showSettings = false;
+    restoreFocusTarget();
   }
 
   async function startOCR() {
@@ -1730,6 +1469,7 @@
 
       // Hide the quick window after handover
       try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
         const currentWindow = getCurrentWindow();
         if (currentWindow.label === "compact") {
           await currentWindow.hide();
@@ -1789,7 +1529,7 @@
 
         await tick();
         await autoResize();
-        await requestTranslationState();
+        await emit("request_sync_state");
       } else {
         // Valid JSON but not our state object? Treat as text.
         await applyQuickText(typeof data === "string" ? data : payload);
@@ -1812,7 +1552,6 @@
     detailedExplanation = null;
     showExplanation = false;
     errorMessage = "";
-    translationPhase = "idle";
     autoScrollEnabled = true;
     lastStreamCharCount = 0;
     // Reset tech metrics
@@ -1853,17 +1592,15 @@
   let syncTimer: ReturnType<typeof setTimeout> | null = null;
 
   async function syncSharedState(resetTranslations = false) {
-    await invoke("sync_translation_context", {
-      payload: {
-        inputQuery,
-        sourceLang,
-        detectedLang,
-        isDetecting,
-        targetLang,
-        styleLevels: $state.snapshot(styleLevels),
-        candidateCount: translationCount,
-        resetTranslations,
-      },
+    await emit("sync_input_command", {
+      text: inputQuery,
+      sourceLang,
+      detectedLang,
+      isDetecting,
+      targetLang,
+      styles: $state.snapshot(styleLevels),
+      candidateCount: translationCount,
+      resetTranslations,
     });
   }
 
@@ -2083,8 +1820,7 @@
       if (
         !target.closest(".lang-selector") &&
         !target.closest(".style-dropdown-wrapper") &&
-        !target.closest(".settings-panel") && // Added to close settings on outside click
-        !target.closest(".history-panel") && // Added to close history on outside click
+        !target.closest(".settings-panel") &&
         !target.closest(".compact-style") &&
         !target.closest(".action-menu")
       ) {
@@ -2093,8 +1829,6 @@
         styleOverflowOpen = false;
         compactStylesOpen = false;
         actionMenuOpenId = null;
-        showSettings = false; // Close settings
-        showHistory = false; // Close history
       }
     };
     window.addEventListener("mousedown", handleClickOutside);
@@ -2130,8 +1864,6 @@
         : t(appLanguage, "clipboardOpsDisabled");
       return;
     }
-    const approved = confirm(t(appLanguage, "clipboardOpsConfirmReplace"));
-    if (!approved) return;
     try {
       await invoke("replace_selection", { text });
       replacedId = id;
@@ -2539,8 +2271,6 @@
     sourceText: string;
     sourceLang: string;
     targetLang: string;
-    provider?: AiProvider;
-    model?: string;
     isAutoDetect?: boolean;
     detectedLang?: string;
     translations: { text: string; reason: string }[];
@@ -2694,8 +2424,6 @@
   function loadHistory(item: HistoryItem) {
     inputQuery = item.sourceText;
     lastTranslatedText = item.sourceText;
-    errorMessage = "";
-    translationPhase = "idle";
     // We try to match sourceLang/targetLang to available options if possible,
     // or just set them if they are strings.
     // For now assuming strings are compatible.
@@ -2742,19 +2470,9 @@
       styleLevels = { ...styleLevels, ...item.styleLevels };
     }
 
-    if (item.provider || item.model) {
-      syncProviderAndModel(item.model, item.provider);
-    }
-
     persistLastResult();
 
-    showHistory = false;
-  }
-
-  async function rerunHistory(item: HistoryItem) {
-    loadHistory(item);
-    await tick();
-    await startTranslation();
+    closeHistory();
   }
 
   function clearHistory() {
@@ -2920,6 +2638,318 @@
     };
   });
 
+  type TranslationCandidateState = {
+    id: number;
+    text: string;
+    reason: string;
+  };
+
+  type TranslationServiceState = {
+    inputQuery: string;
+    sourceLang: string;
+    detectedLang: string;
+    targetLang: string;
+    translations: TranslationCandidateState[];
+    detailedExplanation: AiResponse["detailed_explanation"] | null;
+    styleLevels: Record<string, number>;
+    techMetrics: TechMetrics;
+    isTranslating: boolean;
+    errorMessage: string;
+  };
+
+  type TranslationCommandPayload = {
+    text: string;
+    sourceLang: string;
+    targetLang: string;
+    styles: Record<string, number>;
+    styleMeta?: Record<string, { name: string; prompt?: string }>;
+    model: AiModel;
+    provider?: AiProvider | null;
+    explanationLang?: string;
+    apiKeys?: Record<string, string>;
+    initialTokens?: number;
+    candidateCount?: number;
+  };
+
+  const makeEmptyTranslationSlots = (count: number) =>
+    Array.from({ length: Math.max(1, count) }, (_, index) => ({
+      id: index + 1,
+      text: "",
+      reason: "",
+    }));
+
+  let translationServiceAbortController: AbortController | null = null;
+  let translationServiceState: TranslationServiceState = {
+    inputQuery: "",
+    sourceLang: AUTO_DETECT_LABEL,
+    detectedLang: "",
+    targetLang: "日本語",
+    translations: [],
+    detailedExplanation: null,
+    styleLevels: {},
+    techMetrics: { ...EMPTY_TECH_METRICS },
+    isTranslating: false,
+    errorMessage: "",
+  };
+
+  function getTranslationServiceMetrics(params: {
+    startedAt: number;
+    firstTokenAt: number;
+    model: string;
+    text: string;
+    translations: TranslationCandidateState[];
+    initialTokens?: number;
+    usage?: UsageMetadata;
+    isStreaming: boolean;
+  }): TechMetrics {
+    const now = Date.now();
+    const time = Math.max(0, (now - params.startedAt) / 1000);
+    const translatedChars = params.translations.reduce(
+      (sum, item) => sum + item.text.length + item.reason.length,
+      0,
+    );
+    const firstTokenAt =
+      params.firstTokenAt || (translatedChars > 0 || params.usage ? now : 0);
+    const waitTime = firstTokenAt
+      ? Math.max(0, (firstTokenAt - params.startedAt) / 1000)
+      : time;
+    const genTime = firstTokenAt ? Math.max(0, time - waitTime) : 0;
+    const outputTokens =
+      params.usage?.output_tokens ?? Math.max(0, Math.ceil(translatedChars / 4));
+
+    return {
+      time,
+      waitTime,
+      genTime,
+      model: params.model,
+      inputTokens:
+        params.usage?.input_tokens ??
+        params.initialTokens ??
+        Math.max(0, Math.ceil(params.text.length / 1.5)),
+      outputTokens,
+      tokensPerSec: genTime > 0 ? outputTokens / genTime : 0,
+      streamMode: params.isStreaming,
+      isReal: Boolean(params.usage),
+      firstTokenReceived: Boolean(firstTokenAt),
+    };
+  }
+
+  function mergeTranslationPartial(
+    current: TranslationCandidateState[],
+    partial: Partial<AiResponse>,
+    candidateCount: number,
+  ) {
+    const next =
+      current.length > 0
+        ? current.map((item) => ({ ...item }))
+        : makeEmptyTranslationSlots(candidateCount);
+
+    partial.candidates?.forEach((candidate, index) => {
+      next[index] = {
+        id: index + 1,
+        text: candidate.text ?? next[index]?.text ?? "",
+        reason: candidate.reason ?? next[index]?.reason ?? "",
+      };
+    });
+
+    return next;
+  }
+
+  async function emitTranslationServiceUpdate(
+    patch: Partial<TranslationServiceState> = {},
+  ) {
+    translationServiceState = {
+      ...translationServiceState,
+      ...patch,
+    };
+    await emit("translation_update", translationServiceState);
+  }
+
+  async function handleTranslationCommand(payload: TranslationCommandPayload) {
+    translationServiceAbortController?.abort();
+    const abortController = new AbortController();
+    translationServiceAbortController = abortController;
+
+    const candidateCount = payload.candidateCount ?? 3;
+    const startedAt = Date.now();
+    let firstTokenAt = 0;
+    let nextTranslations = makeEmptyTranslationSlots(candidateCount);
+
+    await emitTranslationServiceUpdate({
+      inputQuery: payload.text,
+      sourceLang: payload.sourceLang,
+      detectedLang: "",
+      targetLang: payload.targetLang,
+      translations: nextTranslations,
+      detailedExplanation: null,
+      styleLevels: payload.styles,
+      techMetrics: {
+        ...EMPTY_TECH_METRICS,
+        model: payload.model,
+        inputTokens:
+          payload.initialTokens ?? Math.max(0, Math.ceil(payload.text.length / 1.5)),
+        streamMode: true,
+      },
+      isTranslating: true,
+      errorMessage: "",
+    });
+
+    try {
+      await translateTextStream(
+        payload.text,
+        payload.sourceLang,
+        payload.targetLang,
+        payload.styles,
+        payload.model,
+        (partial, usage) => {
+          if (abortController.signal.aborted) return;
+          nextTranslations = mergeTranslationPartial(
+            nextTranslations,
+            partial,
+            candidateCount,
+          );
+          if (
+            firstTokenAt === 0 &&
+            (nextTranslations.some((item) => item.text || item.reason) || usage)
+          ) {
+            firstTokenAt = Date.now();
+          }
+          void emitTranslationServiceUpdate({
+            detectedLang:
+              partial.detected_source_language ??
+              translationServiceState.detectedLang,
+            sourceLang:
+              partial.detected_source_language ??
+              translationServiceState.sourceLang,
+            translations: nextTranslations,
+            detailedExplanation:
+              partial.detailed_explanation ??
+              translationServiceState.detailedExplanation,
+            techMetrics: getTranslationServiceMetrics({
+              startedAt,
+              firstTokenAt,
+              model: payload.model,
+              text: payload.text,
+              translations: nextTranslations,
+              initialTokens: payload.initialTokens,
+              usage,
+              isStreaming: true,
+            }),
+          });
+        },
+        payload.explanationLang ?? "日本語",
+        payload.styleMeta ?? {},
+        payload.apiKeys ?? {},
+        {
+          provider: payload.provider,
+          signal: abortController.signal,
+        },
+        candidateCount,
+      );
+
+      if (!abortController.signal.aborted) {
+        await emitTranslationServiceUpdate({
+          isTranslating: false,
+          techMetrics: getTranslationServiceMetrics({
+            startedAt,
+            firstTokenAt,
+            model: payload.model,
+            text: payload.text,
+            translations: nextTranslations,
+            initialTokens: payload.initialTokens,
+            isStreaming: true,
+          }),
+        });
+      }
+    } catch (error) {
+      if (abortController.signal.aborted) return;
+      await emitTranslationServiceUpdate({
+        isTranslating: false,
+        errorMessage: getFriendlyServiceError(error),
+        techMetrics: getTranslationServiceMetrics({
+          startedAt,
+          firstTokenAt,
+          model: payload.model,
+          text: payload.text,
+          translations: nextTranslations,
+          initialTokens: payload.initialTokens,
+          isStreaming: true,
+        }),
+      });
+    } finally {
+      if (translationServiceAbortController === abortController) {
+        translationServiceAbortController = null;
+      }
+    }
+  }
+
+  function getFriendlyServiceError(error: unknown) {
+    if (error instanceof Error) return error.message;
+    return String(error);
+  }
+
+  function shouldHandleTranslationServiceEvents() {
+    try {
+      return getCurrentWindow().label === "main";
+    } catch {
+      return true;
+    }
+  }
+
+  onMount(() => {
+    if (!shouldHandleTranslationServiceEvents()) return;
+
+    const unlistenStart = listen<TranslationCommandPayload>(
+      "start_translation_command",
+      (event) => {
+        void handleTranslationCommand(event.payload);
+      },
+    );
+    const unlistenStop = listen("stop_translation_command", () => {
+      translationServiceAbortController?.abort();
+      void emitTranslationServiceUpdate({ isTranslating: false });
+    });
+    const unlistenSync = listen<any>("sync_input_command", (event) => {
+      const payload = event.payload ?? {};
+      const textChanged =
+        payload.text !== undefined &&
+        payload.text !== translationServiceState.inputQuery;
+      const resetTranslations =
+        Boolean(payload.resetTranslations) ||
+        (textChanged && !translationServiceState.isTranslating);
+      void emitTranslationServiceUpdate({
+        inputQuery: payload.text ?? translationServiceState.inputQuery,
+        sourceLang: payload.sourceLang ?? translationServiceState.sourceLang,
+        detectedLang: payload.detectedLang ?? translationServiceState.detectedLang,
+        targetLang: payload.targetLang ?? translationServiceState.targetLang,
+        styleLevels: payload.styles ?? translationServiceState.styleLevels,
+        translations: resetTranslations ? [] : translationServiceState.translations,
+        detailedExplanation: resetTranslations
+          ? null
+          : translationServiceState.detailedExplanation,
+        errorMessage: resetTranslations ? "" : translationServiceState.errorMessage,
+        techMetrics: resetTranslations
+          ? { ...EMPTY_TECH_METRICS }
+          : translationServiceState.techMetrics,
+      });
+    });
+    const unlistenRequest = listen("request_sync_state", () => {
+      void emitTranslationServiceUpdate();
+    });
+
+    return () => {
+      translationServiceAbortController?.abort();
+      void Promise.all([
+        unlistenStart,
+        unlistenStop,
+        unlistenSync,
+        unlistenRequest,
+      ]).then((unlisteners) => {
+        unlisteners.forEach((unlisten) => unlisten());
+      });
+    };
+  });
+
   type DailyUsage = {
     date: string;
     count: number;
@@ -3002,32 +3032,10 @@
     refreshUsageStats();
   }
 
-  function getAppLocale() {
-    return getLanguageLocale(appLanguage);
-  }
-
-  function formatLocalizedNumber(value: number) {
-    return new Intl.NumberFormat(getAppLocale()).format(value);
-  }
-
-  function formatLocalizedDateTime(
-    value: number | string | Date,
-    options: Intl.DateTimeFormatOptions = {
-      dateStyle: "medium",
-      timeStyle: "short",
-    },
-  ) {
-    const date = value instanceof Date ? value : new Date(value);
-    return new Intl.DateTimeFormat(getAppLocale(), options).format(date);
-  }
-
   const shortDate = (dateKey: string) => {
-    const [year, month, day] = dateKey.split("-").map((part) => Number(part));
-    if (!year || !month || !day) return dateKey;
-    return formatLocalizedDateTime(new Date(year, month - 1, day), {
-      month: "numeric",
-      day: "numeric",
-    });
+    const [_, m, d] = dateKey.split("-");
+    if (!m || !d) return dateKey;
+    return `${m}/${d}`;
   };
 
   let weeklyMaxCount = $derived(
@@ -3102,24 +3110,8 @@
   }
   async function startTranslation() {
     if (isTranslating || !inputQuery.trim()) return;
-    await flushPendingApiKeySync();
-    const localApiKey = apiKeys[selectedProvider].trim();
-    if (localApiKey) {
-      apiKeyDirty = { ...apiKeyDirty, [selectedProvider]: true };
-      await syncApiKeysToBackend();
-    } else {
-      const latestStatus = await refreshApiKeyStatus();
-      if (latestStatus[selectedProvider] === "unset") {
-        settingsTab = "api";
-        showSettings = true;
-        errorMessage = t(appLanguage, "errorApiKeyMissing");
-        translationPhase = "error";
-        return;
-      }
-    }
     syncShowTechInfoFromStorage();
     isTranslating = true;
-    translationPhase = "submitting";
     autoScrollEnabled = true; // Enable auto-scroll for new translation
     showExplanation = false; // Hide explanation during translation
     showSourceLangMenu = false; // Close menu if open
@@ -3158,26 +3150,23 @@
       const styleMeta = Object.fromEntries(
         customStyles.map((s) => [s.id, { name: s.name, prompt: s.prompt }]),
       );
-      await invoke("start_translation", {
-        payload: {
-          text: inputQuery,
-          sourceLang,
-          targetLang,
-          styles: $state.snapshot(styleLevels),
-          styleMeta,
-          model: currentModel,
-          provider: selectedProvider,
-          apiKey: localApiKey || null,
-          explanationLang: getLanguageName(appLanguage),
-          initialTokens: Math.ceil(inputQuery.length / 1.5) + 40,
-          candidateCount: translationCount,
-        },
+      await emit("start_translation_command", {
+        text: inputQuery,
+        sourceLang,
+        targetLang,
+        styles: styleLevels,
+        styleMeta,
+        model: currentModel,
+        provider: selectedProvider,
+        explanationLang: getLanguageName(appLanguage),
+        apiKeys: $state.snapshot(apiKeys),
+        initialTokens: Math.ceil(inputQuery.length / 1.5) + 40,
+        candidateCount: translationCount,
       });
     } catch (error) {
       console.error("Translation failed:", error);
       errorMessage = "Translation failed: " + String(error);
       isTranslating = false;
-      translationPhase = "error";
     }
   }
 
@@ -3185,9 +3174,8 @@
 
   async function stopTranslation() {
     isTranslating = false;
-    translationPhase = "stopped";
     try {
-      await invoke("stop_translation");
+      await emit("stop_translation_command");
     } catch (e) {
       console.error("Failed to stop translation:", e);
     }
@@ -3238,7 +3226,6 @@
           src={theme === "light" ? "/icon-light.svg" : "/icon-dark.svg"}
           alt="Howlingual"
           class="app-icon compact-icon"
-          style="width: 28px; height: 28px;"
         />
         <span class="compact-name">Howlingual</span>
       </div>
@@ -3279,10 +3266,11 @@
           onpointerdown={(e) => e.stopPropagation()}
           onmousedown={(e) => e.stopPropagation()}
           onclick={async () => {
+            const { getCurrentWindow } = await import("@tauri-apps/api/window");
             await getCurrentWindow().hide();
           }}
-          aria-label={t(appLanguage, "close")}
-          title={t(appLanguage, "close")}
+          aria-label={t(appLanguage, "closeWindow")}
+          title={t(appLanguage, "closeWindow")}
         >
           <svg
             width="12"
@@ -3306,7 +3294,6 @@
       <div
         class="compact-left-actions"
         class:hidden={isScrolledDown}
-        style="position: absolute; left: 12px; display: flex; gap: 8px; align-items: center;"
       >
         <!-- (Paste/Clear buttons moved inside textarea) -->
 
@@ -3588,9 +3575,7 @@
               class="styles-row compact-styles-row"
               class:fade-out={isTranslating}
             >
-              <div
-                style="flex: 1; display: flex; align-items: center; gap: 6px; overflow: hidden; height: 100%;"
-              >
+              <div class="style-chip-track compact">
                 {#each customStyles.slice(0, 3) as style, i (style.id)}
                   <button
                     class="style-chip"
@@ -3732,7 +3717,7 @@
           <div class="tech-info-display" transition:fade>
             <div class="tech-row">
               <span class="tech-item">
-                <span class="tech-label">{t(appLanguage, "waitLabel")}:</span>
+                <span class="tech-label">Wait:</span>
                 {#if isTranslating && !techMetrics.firstTokenReceived}
                   {techMetrics.time.toFixed(1)}s
                 {:else}
@@ -3742,9 +3727,7 @@
               {#if techMetrics.streamMode}
                 <span class="tech-divider">→</span>
                 <span class="tech-item">
-                  <span class="tech-label"
-                    >{t(appLanguage, "generationLabel")}:</span
-                  >
+                  <span class="tech-label">Gen:</span>
                   {#if isTranslating}
                     {techMetrics.genTime.toFixed(1)}s
                   {:else}
@@ -3754,19 +3737,19 @@
               {/if}
               <span class="tech-divider">=</span>
               <span class="tech-item">
-                <span class="tech-label">{t(appLanguage, "totalLabel")}:</span>
+                <span class="tech-label">Total:</span>
                 {techMetrics.time.toFixed(1)}s
               </span>
             </div>
             <div class="tech-row">
               <span class="tech-item">
-                <span class="tech-label">{t(appLanguage, "usingModel")}:</span>
+                <span class="tech-label">Model:</span>
                 {techMetrics.model}
               </span>
               <span class="tech-divider">|</span>
               <span class="tech-item tech-tokens">
                 <span class="token-row">
-                  <span class="tech-label">{t(appLanguage, "inputLabel")}:</span>
+                  <span class="tech-label">↑</span>
                   {#if isTranslating && !techMetrics.isReal}
                     <span class="loading-dots-inline">...</span>
                   {:else}
@@ -3774,7 +3757,7 @@
                   {/if}
                 </span>
                 <span class="token-row">
-                  <span class="tech-label">{t(appLanguage, "outputLabel")}:</span>
+                  <span class="tech-label">↓</span>
                   {#if isTranslating && !techMetrics.isReal}
                     <span class="loading-dots-inline">...</span>
                   {:else}
@@ -3811,22 +3794,8 @@
                 <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
             </div>
-            <div class="error-copy">
-              <p class="error-message">{getFriendlyErrorMessage(errorMessage)}</p>
-              {#if getErrorAction(errorMessage)}
-                <button
-                  class="error-action-btn"
-                  onclick={() => void getErrorAction(errorMessage)?.action()}
-                >
-                  {getErrorAction(errorMessage)?.label}
-                </button>
-              {/if}
-            </div>
+            <p class="error-message">{errorMessage}</p>
           </div>
-        {/if}
-
-        {#if translationPhase === "stopped" && !errorMessage}
-          <div class="status-display">{t(appLanguage, "translationStopped")}</div>
         {/if}
 
         <!-- Translation Results -->
@@ -4076,7 +4045,7 @@
             </button>
           {/if}
           {#if isCompactMode && isStackExpanded}
-            <div style="display: flex; justify-content: center; margin-top: 8px;">
+            <div class="stack-collapse-row">
               <button
                 class="collapse-btn"
                 onclick={() => (isStackExpanded = false)}
@@ -4125,7 +4094,7 @@
           <!-- Bottom Favorite Button (Small) -->
           {#if translations.some((t) => t.text) && !isTranslating}
             <div
-              style="display: flex; justify-content: center; align-items: center; gap: 6px; margin-top: 16px; padding-bottom: 16px;"
+              class="favorite-action-row"
             >
               <button
                 class="save-favorite-btn"
@@ -4206,7 +4175,7 @@
         class="icon-btn header-btn history-btn"
         class:animating={historyAnimating}
         title={t(appLanguage, "history")}
-        onclick={() => (showHistory = true)}
+        onclick={openHistory}
         onmouseenter={triggerHistoryAnim}
       >
         <svg
@@ -4256,7 +4225,7 @@
           <button
             class="win-btn-inline minimize"
             onclick={() => getCurrentWindow().minimize()}
-            title={t(appLanguage, "minimize")}
+            title={t(appLanguage, "minimizeWindow")}
           >
             <svg
               width="10"
@@ -4273,7 +4242,7 @@
           <button
             class="win-btn-inline maximize"
             onclick={() => getCurrentWindow().toggleMaximize()}
-            title={t(appLanguage, "maximize")}
+            title={t(appLanguage, "maximizeWindow")}
           >
             <svg
               width="8"
@@ -4297,7 +4266,7 @@
           <button
             class="win-btn-inline close"
             onclick={() => hideWindow()}
-            title={t(appLanguage, "close")}
+            title={t(appLanguage, "closeWindow")}
           >
             <svg
               width="8"
@@ -4323,13 +4292,11 @@
     <!-- Language Selector Row - Moved outside of scroll area -->
     <div
       class="header-actions-row"
-      style="position: relative; display: flex; justify-content: center; align-items: center; margin: 10px 0px 0px 0px;"
     >
       <!-- (Clipboard/Clear buttons moved inside textarea) -->
 
       <div
         class="lang-selector-group"
-        style="display: flex; align-items: center; gap: 8px;"
       >
         <div class="lang-selector">
           <button
@@ -4583,9 +4550,7 @@
             bind:this={styleContainerRef}
           >
             <!-- Clipper Container for smooth "infinite" feel -->
-            <div
-              style="flex: 1; display: flex; align-items: center; gap: 8px; overflow: hidden; height: 100%; mask-image: linear-gradient(to right, black 90%, transparent 100%);"
-            >
+            <div class="style-chip-track main">
               {#each visibleStyles as style, i (style.id)}
                 <button
                   class="style-chip"
@@ -4686,7 +4651,6 @@
             class:hidden={isScrolledDown}
             onclick={startOCR}
             title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
-            style="width: 50px; background: var(--bg-card); color: var(--text-color); border: 1px solid var(--border-color); position: relative; overflow: hidden; padding-left: 2px;"
           >
             <svg
               width="24"
@@ -4788,7 +4752,7 @@
         {#if showTechInfo && (isTranslating || techMetrics.time > 0)}
           <div class="tech-info-display" transition:fade>
             <span class="tech-item">
-              <span class="tech-label">{t(appLanguage, "waitLabel")}:</span>
+              <span class="tech-label">Wait:</span>
               {#if isTranslating && !techMetrics.firstTokenReceived}
                 {techMetrics.time.toFixed(1)}s
               {:else}
@@ -4798,7 +4762,7 @@
             {#if techMetrics.streamMode}
               <span class="tech-divider">→</span>
               <span class="tech-item">
-                <span class="tech-label">{t(appLanguage, "generationLabel")}:</span>
+                <span class="tech-label">Gen:</span>
                 {#if isTranslating}
                   {techMetrics.genTime.toFixed(1)}s
                 {:else}
@@ -4808,18 +4772,18 @@
             {/if}
             <span class="tech-divider">=</span>
             <span class="tech-item">
-              <span class="tech-label">{t(appLanguage, "totalLabel")}:</span>
+              <span class="tech-label">Total:</span>
               {techMetrics.time.toFixed(1)}s
             </span>
             <span class="tech-divider">|</span>
             <span class="tech-item">
-              <span class="tech-label">{t(appLanguage, "usingModel")}:</span>
+              <span class="tech-label">Model:</span>
               {techMetrics.model}
             </span>
             <span class="tech-divider">|</span>
             <span class="tech-item tech-tokens">
               <span class="token-row">
-                <span class="tech-label">{t(appLanguage, "inputLabel")}:</span>
+                <span class="tech-label">In:</span>
                 {#if isTranslating && !techMetrics.isReal}
                   <div
                     class="skeleton-line"
@@ -4830,7 +4794,7 @@
                 {/if}
               </span>
               <span class="token-row">
-                <span class="tech-label">{t(appLanguage, "outputLabel")}:</span>
+                <span class="tech-label">Out:</span>
                 {#if isTranslating && !techMetrics.isReal}
                   <div
                     class="skeleton-line"
@@ -4869,22 +4833,8 @@
                 <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
             </div>
-            <div class="error-copy">
-              <p class="error-message">{getFriendlyErrorMessage(errorMessage)}</p>
-              {#if getErrorAction(errorMessage)}
-                <button
-                  class="error-action-btn"
-                  onclick={() => void getErrorAction(errorMessage)?.action()}
-                >
-                  {getErrorAction(errorMessage)?.label}
-                </button>
-              {/if}
-            </div>
+            <p class="error-message">{errorMessage}</p>
           </div>
-        {/if}
-
-        {#if translationPhase === "stopped" && !errorMessage}
-          <div class="status-display">{t(appLanguage, "translationStopped")}</div>
         {/if}
 
         <!-- Translation Results -->
@@ -4993,25 +4943,15 @@
                 class="shortcut-hint"
                 style="margin-bottom: 8px; text-align: center;"
               >
-                {getTranslationPhaseLabel()}
+                {techMetrics.firstTokenReceived
+                  ? "ストリーム受信中..."
+                  : "ストリーム待機中..."}
                 {#if techMetrics.time > 0}
                   <span style="margin-left: 6px;"
                     >({techMetrics.time.toFixed(1)}s)</span
                   >
                 {/if}
               </div>
-              <div class="loading-meta-row">
-                <span class="loading-meta-pill">
-                  {t(appLanguage, "sourceEstimate")}:
-                  {detectedLang || sourceLang}
-                </span>
-                <span class="loading-meta-pill">
-                  {t(appLanguage, "translationCandidates")}: {translationCount}
-                </span>
-              </div>
-              {#if getTranslationPhaseHint()}
-                <div class="loading-phase-note">{getTranslationPhaseHint()}</div>
-              {/if}
               {#each Array.from({ length: translationCount }, (_, i) => i + 1) as idx}
                 <div
                   class="skeleton-card"
@@ -5204,7 +5144,7 @@
           <!-- Bottom Favorite Button (Small) -->
           {#if translations.some((t) => t.text) && !isTranslating}
             <div
-              style="display: flex; justify-content: center; align-items: center; gap: 6px; margin-top: 16px; padding-bottom: 16px;"
+              class="favorite-action-row"
             >
               <button
                 class="save-favorite-btn"
@@ -5267,12 +5207,14 @@
   <div
     class="settings-overlay"
     transition:fade={{ duration: 200 }}
-    onclick={closeSettings}
-    onkeydown={(e) => (e.key === "Enter" || e.key === " ") && closeSettings()}
-    role="button"
-    tabindex="0"
-    aria-label={t(appLanguage, "closeSettings")}
   >
+    <button
+      type="button"
+      class="overlay-dismiss"
+      aria-label={t(appLanguage, "close")}
+      onclick={closeSettings}
+      tabindex="-1"
+    ></button>
     <div
       class="settings-panel glass history-panel"
       class:style-editor-mode={!!editingStyle}
@@ -5399,17 +5341,17 @@
             </button>
             <button
               class="settings-tab vertical"
-              class:active={settingsTab === "api"}
-              onclick={() => changeTab("api")}
-            >
-              {t(appLanguage, "tabAi")}
-            </button>
-            <button
-              class="settings-tab vertical"
               class:active={settingsTab === "system"}
               onclick={() => changeTab("system")}
             >
               {t(appLanguage, "tabSystem")}
+            </button>
+            <button
+              class="settings-tab vertical"
+              class:active={settingsTab === "api"}
+              onclick={() => changeTab("api")}
+            >
+              {t(appLanguage, "tabAi")}
             </button>
             <button
               class="settings-tab vertical"
@@ -5537,36 +5479,18 @@
                     <div class="settings-card-row">
                       <span
                         id="allow-rewrite-label"
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "allowRewriteDescription")}
                       </span>
                       <button
+                        class="toggle-switch"
+                        class:on={allowRewrite}
                         onclick={() => (allowRewrite = !allowRewrite)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {allowRewrite
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 99px; 
-                        position: relative; 
-                        border: none; 
-                        cursor: pointer;
-                        transition: background 0.2s;"
                         aria-labelledby="allow-rewrite-label"
+                        aria-pressed={allowRewrite}
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {allowRewrite ? '23px' : '3px'}; 
-                          transition: left 0.2s;"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                   </div>
@@ -5578,34 +5502,19 @@
                     </div>
                     <div class="settings-card-row">
                       <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "translationCountDesc") ||
                           "1回の翻訳で生成する翻訳案の数"}
                       </span>
-                      <div style="display: flex; gap: 4px;">
+                      <div class="segmented-control" role="group" aria-label={t(appLanguage, "translationCount")}>
                         {#each [1, 2, 3] as count}
                           <button
+                            class="segmented-option"
+                            class:active={translationCount === count}
                             onclick={() =>
                               (translationCount = count as 1 | 2 | 3)}
-                            style="
-                              width: 36px;
-                              height: 28px;
-                              background: {translationCount === count
-                              ? '#3b82f6'
-                              : 'rgba(255,255,255,0.1)'};
-                              border: 1px solid {translationCount === count
-                              ? '#3b82f6'
-                              : 'rgba(255,255,255,0.2)'};
-                              border-radius: 6px;
-                              color: {translationCount === count
-                              ? 'white'
-                              : 'var(--text-muted)'};
-                              font-size: 13px;
-                              font-weight: 500;
-                              cursor: pointer;
-                              transition: all 0.2s;
-                            "
+                            aria-pressed={translationCount === count}
                           >
                             {count}
                           </button>
@@ -5623,37 +5532,19 @@
                     <div class="settings-card-row">
                       <span
                         id="auto-run-label"
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "autoRunQuickDesc") ||
                           "ショートカット呼出時に自動で翻訳を開始します"}
                       </span>
                       <button
+                        class="toggle-switch"
+                        class:on={autoRunQuick}
                         onclick={() => (autoRunQuick = !autoRunQuick)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {autoRunQuick
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 99px; 
-                        position: relative; 
-                        border: none; 
-                        cursor: pointer;
-                        transition: background 0.2s;"
                         aria-labelledby="auto-run-label"
+                        aria-pressed={autoRunQuick}
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {autoRunQuick ? '23px' : '3px'}; 
-                          transition: left 0.2s;"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                   </div>
@@ -5666,38 +5557,19 @@
                     <div class="settings-card-row">
                       <span
                         id="tech-info-label"
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "showTechInfoDesc") ||
                           "翻訳時に処理時間やトークン数を表示します"}
                       </span>
                       <button
+                        class="toggle-switch"
+                        class:on={showTechInfo}
                         onclick={() => (showTechInfo = !showTechInfo)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {showTechInfo
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 99px; 
-                        position: relative; 
-                        border: none; 
-                        cursor: pointer;
-                        transition: background 0.2s;"
                         aria-labelledby="tech-info-label"
+                        aria-pressed={showTechInfo}
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {showTechInfo ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                   </div>
@@ -5709,39 +5581,19 @@
                     </div>
                     <div class="settings-card-row">
                       <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "autoStartDesc") ||
                           "OS 起動時にアプリを自動で起動します"}
                       </span>
                       <button
+                        class="toggle-switch"
+                        class:on={autoStartEnabled}
                         onclick={toggleAutoStart}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {autoStartEnabled
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 20px; 
-                        border: none;
-                        cursor: pointer;
-                        position: relative;
-                        transition: background 0.2s;
-                      "
                         aria-label={t(appLanguage, "autoStart")}
+                        aria-pressed={autoStartEnabled}
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {autoStartEnabled ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                   </div>
@@ -5754,39 +5606,19 @@
                     </div>
                     <div class="settings-card-row">
                       <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "startMinimizedDesc") ||
                           "起動時にメイン画面を非表示で開始します"}
                       </span>
                       <button
+                        class="toggle-switch"
+                        class:on={startMinimized}
                         onclick={() => (startMinimized = !startMinimized)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {startMinimized
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 20px; 
-                        border: none;
-                        cursor: pointer;
-                        position: relative;
-                        transition: background 0.2s;
-                      "
                         aria-label={t(appLanguage, "startMinimized")}
+                        aria-pressed={startMinimized}
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {startMinimized ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                   </div>
@@ -5798,38 +5630,18 @@
                     </div>
                     <div class="settings-card-row">
                       <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "clipboardOpsDesc")}
                       </span>
                       <button
+                        class="toggle-switch"
+                        class:on={clipboardOpsEnabled}
                         onclick={toggleClipboardOps}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {clipboardOpsEnabled
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 20px; 
-                        border: none;
-                        cursor: pointer;
-                        position: relative;
-                        transition: background 0.2s;
-                      "
                         aria-label={t(appLanguage, "clipboardOps")}
+                        aria-pressed={clipboardOpsEnabled}
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {clipboardOpsEnabled ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                     <div class="settings-note">
@@ -5843,24 +5655,18 @@
                       <div class="settings-label">
                         {t(appLanguage, "permissions")}
                       </div>
-                      <div
-                        class="settings-card-row"
-                        style="flex-direction: column; gap: 12px;"
-                      >
+                      <div class="settings-card-row settings-stack">
                         <!-- Screen Recording -->
-                        <div
-                          style="display: flex; justify-content: space-between; align-items: center; width: 100%;"
-                        >
-                          <div style="flex: 1;">
-                            <div style="font-size: 13px; font-weight: 500;">
+                        <div class="permission-row">
+                          <div class="permission-copy">
+                            <div class="permission-name">
                               {t(appLanguage, "screenRecording")}
                             </div>
                             <div
-                              style="font-size: 11px; color: {permissions.screen_recording === null
-                                ? '#a1a1aa'
-                                : permissions.screen_recording
-                                  ? '#10b981'
-                                  : '#ef4444'};"
+                              class="permission-status"
+                              class:pending={permissions.screen_recording === null}
+                              class:granted={permissions.screen_recording === true}
+                              class:denied={permissions.screen_recording === false}
                             >
                               {permissions.screen_recording === null
                                 ? t(appLanguage, "checking")
@@ -5882,7 +5688,6 @@
                                 await invoke("open_screen_recording_settings");
                               }}
                               class="permission-btn"
-                              style="margin-left: 8px;"
                             >
                               {t(appLanguage, "openSystemSettings")}
                             </button>
@@ -5890,19 +5695,16 @@
                         </div>
 
                         <!-- Accessibility -->
-                        <div
-                          style="display: flex; justify-content: space-between; align-items: center; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 12px;"
-                        >
-                          <div style="flex: 1;">
-                            <div style="font-size: 13px; font-weight: 500;">
+                        <div class="permission-row divided">
+                          <div class="permission-copy">
+                            <div class="permission-name">
                               {t(appLanguage, "accessibility")}
                             </div>
                             <div
-                              style="font-size: 11px; color: {permissions.accessibility === null
-                                ? '#a1a1aa'
-                                : permissions.accessibility
-                                  ? '#10b981'
-                                  : '#ef4444'};"
+                              class="permission-status"
+                              class:pending={permissions.accessibility === null}
+                              class:granted={permissions.accessibility === true}
+                              class:denied={permissions.accessibility === false}
                             >
                               {permissions.accessibility === null
                                 ? t(appLanguage, "checking")
@@ -5924,7 +5726,6 @@
                                 await invoke("open_accessibility_settings");
                               }}
                               class="permission-btn"
-                              style="margin-left: 8px;"
                             >
                               {t(appLanguage, "openSystemSettings")}
                             </button>
@@ -5939,52 +5740,35 @@
                       <div class="settings-label">
                         {t(appLanguage, "ocrEngine")}
                       </div>
-                      <div
-                        class="settings-card-row"
-                        style="flex-direction: column; gap: 12px; align-items: flex-start;"
-                      >
-                        <label
-                          style="display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%;"
-                        >
+                      <div class="settings-card-row settings-stack option-stack">
+                        <label class="option-row">
                           <input
                             type="radio"
                             name="ocrEngine"
                             value="paddle"
                             bind:group={ocrEngine}
-                            style="cursor: pointer;"
                           />
-                          <span style="flex: 1;">
-                            <div
-                              style="font-size: 14px; color: var(--text-main); font-weight: 500;"
-                            >
+                          <span class="option-copy">
+                            <div class="option-title">
                               {t(appLanguage, "ocrHighAccuracy")}
                             </div>
-                            <div
-                              style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"
-                            >
+                            <div class="option-description">
                               {t(appLanguage, "ocrHighAccuracyDesc")}
                             </div>
                           </span>
                         </label>
-                        <label
-                          style="display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%;"
-                        >
+                        <label class="option-row">
                           <input
                             type="radio"
                             name="ocrEngine"
                             value="windows"
                             bind:group={ocrEngine}
-                            style="cursor: pointer;"
                           />
-                          <span style="flex: 1;">
-                            <div
-                              style="font-size: 14px; color: var(--text-main); font-weight: 500;"
-                            >
+                          <span class="option-copy">
+                            <div class="option-title">
                               {t(appLanguage, "ocrFast")}
                             </div>
-                            <div
-                              style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"
-                            >
+                            <div class="option-description">
                               {t(appLanguage, "ocrFastDesc")}
                             </div>
                           </span>
@@ -6075,25 +5859,41 @@
 
                   <!-- Provider Switcher -->
                   <div class="provider-switcher">
-                    {#each providerOrder as provider}
-                      <button
-                        class="provider-btn"
-                        class:active={selectedProvider === provider}
-                        class:ready={getDisplayedApiKeyPresence(provider) !== "unset"}
-                        onclick={() => selectProvider(provider)}
-                      >
-                        <span>{provider === "openai"
-                          ? "OpenAI"
-                          : provider === "gemini"
-                            ? "Gemini"
-                            : provider === "anthropic"
-                              ? "Anthropic"
-                              : provider === "groq"
-                                ? "Groq"
-                                : "Cerebras"}</span>
-                        <small>{getApiKeyPresenceLabel(getDisplayedApiKeyPresence(provider))}</small>
-                      </button>
-                    {/each}
+                    <button
+                      class="provider-btn"
+                      class:active={selectedProvider === "openai"}
+                      onclick={() => selectProvider("openai")}
+                    >
+                      OpenAI
+                    </button>
+                    <button
+                      class="provider-btn"
+                      class:active={selectedProvider === "gemini"}
+                      onclick={() => selectProvider("gemini")}
+                    >
+                      Gemini
+                    </button>
+                    <button
+                      class="provider-btn"
+                      class:active={selectedProvider === "anthropic"}
+                      onclick={() => selectProvider("anthropic")}
+                    >
+                      Anthropic
+                    </button>
+                    <button
+                      class="provider-btn"
+                      class:active={selectedProvider === "groq"}
+                      onclick={() => selectProvider("groq")}
+                    >
+                      Groq
+                    </button>
+                    <button
+                      class="provider-btn"
+                      class:active={selectedProvider === "cerebras"}
+                      onclick={() => selectProvider("cerebras")}
+                    >
+                      Cerebras
+                    </button>
                   </div>
 
                   <div class="settings-section">
@@ -6102,38 +5902,19 @@
                     </div>
                     <div class="settings-card-row">
                       <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "rememberApiKeysDesc")}
                       </span>
                       <button
-                        onclick={toggleRememberApiKeys}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {rememberApiKeys
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 20px; 
-                        border: none;
-                        cursor: pointer;
-                        position: relative;
-                        transition: background 0.2s;
-                      "
+                        class="toggle-switch"
+                        class:on={rememberApiKeys}
+                        onclick={() =>
+                          (rememberApiKeys = !rememberApiKeys)}
                         aria-label={t(appLanguage, "rememberApiKeys")}
+                        aria-pressed={rememberApiKeys}
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {rememberApiKeys ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                     <div class="settings-note">
@@ -6143,19 +5924,14 @@
 
                   <!-- API Key for Selected Provider -->
                   <div class="settings-section">
-                    <div
-                      class="settings-label"
-                    >
-                      <label for="api-key-input">
-                        {getApiKeyLabel(selectedProvider)}
-                      </label>
-                    </div>
+                    <label class="settings-label" for="api-key-input">
+                      {getApiKeyLabel(selectedProvider)}
+                    </label>
                     <input
                       id="api-key-input"
                       type="password"
                       class="settings-input"
                       bind:value={apiKeys[selectedProvider]}
-                      oninput={() => markApiKeyDirty(selectedProvider)}
                       placeholder={getApiKeyPlaceholder(selectedProvider)}
                     />
                   </div>
@@ -6178,6 +5954,12 @@
 
                   {#if selectedProviderDoc}
                     <div class="settings-section">
+                      <div class="settings-label">
+                        {t(appLanguage, "apiOverview")}
+                      </div>
+                      <div class="settings-note top">
+                        {t(appLanguage, "apiOverviewDesc")}
+                      </div>
                       <button
                         class="settings-card-row provider-docs-btn"
                         onclick={() => openProviderDocs(selectedProviderDoc.url)}
@@ -6391,7 +6173,7 @@
                               "今日のトークン"}
                           </span>
                           <span class="usage-value">
-                            {formatLocalizedNumber(usageToday.tokens)}
+                            {usageToday.tokens.toLocaleString()}
                           </span>
                         </div>
                       </div>
@@ -6411,7 +6193,7 @@
                               viewBox={`0 0 ${usageChartMetrics.width} ${usageChartConfig.height}`}
                               preserveAspectRatio="xMidYMid meet"
                               role="img"
-                              aria-label={t(appLanguage, "usageWeeklyTrend")}
+                              aria-label={t(appLanguage, "weeklyUsageTrendLabel")}
                               onmouseleave={clearUsageHover}
                             >
                               <line
@@ -6505,9 +6287,7 @@
                                   <span class="legend-dot tokens"></span>
                                   <span>
                                     {t(appLanguage, "usageTokensLabel") ||
-                                      "トークン"}: {formatLocalizedNumber(
-                                      usageHover.day.tokens,
-                                    )}
+                                      "トークン"}: {usageHover.day.tokens.toLocaleString()}
                                   </span>
                                 </div>
                               </div>
@@ -6544,29 +6324,29 @@
   <div
     class="settings-overlay"
     transition:fade={{ duration: 200 }}
-    onclick={() => (showHistory = false)}
-    role="button"
-    tabindex="0"
-    onkeydown={(e) => {
-      if (e.key === "Enter") {
-        showHistory = false;
-      }
-    }}
   >
+    <button
+      type="button"
+      class="overlay-dismiss"
+      aria-label={t(appLanguage, "close")}
+      onclick={closeHistory}
+      tabindex="-1"
+    ></button>
     <div
       class="settings-panel glass"
       transition:fly={{ y: 20, duration: 300 }}
       onclick={(e) => e.stopPropagation()}
       role="dialog"
       aria-modal="true"
+      aria-labelledby="history-title"
       tabindex="-1"
       onkeydown={(e) => e.stopPropagation()}
     >
       <div class="settings-header">
-        <h2>{t(appLanguage, "history")}</h2>
+        <h2 id="history-title">{t(appLanguage, "history")}</h2>
         <button
           class="close-btn"
-          onclick={() => (showHistory = false)}
+          onclick={closeHistory}
           aria-label={t(appLanguage, "close")}
         >
           <svg
@@ -6639,32 +6419,18 @@
                         >
                           <div class="history-meta">
                             <span
-                              >{formatLocalizedDateTime(item.timestamp)}</span
+                              >{new Date(item.timestamp).toLocaleString()}</span
                             >
                             <span
                               >{formatHistoryLanguage(item.sourceLang, item.isAutoDetect)} → {formatHistoryLanguage(item.targetLang)}</span
                             >
                           </div>
-                          {#if item.model}
-                            <div class="history-meta secondary">
-                              <span>{item.model}</span>
-                              {#if item.provider}
-                                <span>{item.provider}</span>
-                              {/if}
-                            </div>
-                          {/if}
                           <div class="history-source">{item.sourceText}</div>
                           <div class="history-preview">
                             {item.translations[0]?.text}
                           </div>
                         </button>
                         <div class="history-item-actions">
-                          <button
-                            class="history-action-btn primary"
-                            onclick={() => void rerunHistory(item)}
-                          >
-                            {t(appLanguage, "historyRetry")}
-                          </button>
                           <button
                             class="star-btn small"
                             class:active={isFavoritedById(item.id)}
@@ -6728,32 +6494,18 @@
                         >
                           <div class="history-meta">
                             <span
-                              >{formatLocalizedDateTime(item.timestamp)}</span
+                              >{new Date(item.timestamp).toLocaleString()}</span
                             >
                             <span
                               >{formatHistoryLanguage(item.sourceLang, item.isAutoDetect)} → {formatHistoryLanguage(item.targetLang)}</span
                             >
                           </div>
-                          {#if item.model}
-                            <div class="history-meta secondary">
-                              <span>{item.model}</span>
-                              {#if item.provider}
-                                <span>{item.provider}</span>
-                              {/if}
-                            </div>
-                          {/if}
                           <div class="history-source">{item.sourceText}</div>
                           <div class="history-preview">
                             {item.translations[0]?.text}
                           </div>
                         </button>
                         <div class="history-item-actions vertical">
-                          <button
-                            class="history-action-btn primary"
-                            onclick={() => void rerunHistory(item)}
-                          >
-                            {t(appLanguage, "historyRetry")}
-                          </button>
                           <div class="move-actions">
                             <button
                               class="icon-btn-small"
@@ -6825,15 +6577,14 @@
   <div
     class="modal-overlay"
     transition:fade={{ duration: 200 }}
-    onclick={() => (showResetConfirmation = false)}
-    role="button"
-    tabindex="0"
-    onkeydown={(e) => {
-      if (e.key === "Enter") {
-        showResetConfirmation = false;
-      }
-    }}
   >
+    <button
+      type="button"
+      class="overlay-dismiss"
+      aria-label={t(appLanguage, "close")}
+      onclick={() => (showResetConfirmation = false)}
+      tabindex="-1"
+    ></button>
     <div
       class="modal-card glass"
       onclick={(e) => e.stopPropagation()}
@@ -6861,15 +6612,14 @@
   <div
     class="modal-overlay"
     transition:fade={{ duration: 200 }}
-    onclick={() => (showDiscardConfirmation = false)}
-    role="button"
-    tabindex="0"
-    onkeydown={(e) => {
-      if (e.key === "Enter") {
-        showDiscardConfirmation = false;
-      }
-    }}
   >
+    <button
+      type="button"
+      class="overlay-dismiss"
+      aria-label={t(appLanguage, "close")}
+      onclick={() => (showDiscardConfirmation = false)}
+      tabindex="-1"
+    ></button>
     <div
       class="modal-card glass"
       onclick={(e) => e.stopPropagation()}
@@ -6914,6 +6664,10 @@
     font-size: 12px;
     line-height: 1.4;
     color: var(--text-muted);
+  }
+  .settings-note.top {
+    margin-top: 0;
+    margin-bottom: 8px;
   }
   .container {
     display: flex;
@@ -7055,6 +6809,11 @@
   }
 
   .compact-left-actions {
+    position: absolute;
+    left: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     transition:
       opacity 0.25s ease,
       transform 0.25s ease;
@@ -7072,6 +6831,13 @@
     gap: 8px;
     max-width: 100%;
     flex-shrink: 1;
+  }
+
+  .lang-selector-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
   }
 
   .compact-shell .lang-btn {
@@ -7147,6 +6913,23 @@
 
   .output-area.compact-output {
     gap: 10px;
+  }
+
+  .stack-collapse-row,
+  .favorite-action-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .stack-collapse-row {
+    margin-top: 8px;
+  }
+
+  .favorite-action-row {
+    gap: 6px;
+    margin-top: 16px;
+    padding-bottom: 16px;
   }
 
   .compact-ocr-btn {
@@ -7687,6 +7470,13 @@
   }
 
   .ocr-main-btn {
+    width: 50px;
+    position: relative;
+    overflow: hidden;
+    padding-left: 2px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-card);
+    color: var(--text-color);
     transition:
       opacity 0.25s ease,
       transform 0.25s var(--easing-bounce),
@@ -7930,6 +7720,23 @@
     mask-image: linear-gradient(to right, black 70%, transparent 100%);
   }
 
+  .style-chip-track {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    height: 100%;
+  }
+
+  .style-chip-track.compact {
+    gap: 6px;
+  }
+
+  .style-chip-track.main {
+    gap: 8px;
+    mask-image: linear-gradient(to right, black 90%, transparent 100%);
+  }
+
   .style-chip {
     position: relative;
     display: flex;
@@ -8136,16 +7943,6 @@
     margin-top: 0;
   }
 
-  @keyframes floatSoft {
-    0%,
-    100% {
-      transform: translateY(0);
-    }
-    50% {
-      transform: translateY(-6px);
-    }
-  }
-
   .empty-state-content {
     display: flex;
     flex-direction: column;
@@ -8157,7 +7954,6 @@
     font-weight: 600;
     color: var(--text-main);
     margin: 0;
-    letter-spacing: -0.02em;
   }
 
   .empty-description {
@@ -8210,27 +8006,6 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-  }
-
-  .loading-meta-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .loading-meta-pill {
-    padding: 6px 10px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    font-size: 11px;
-    color: var(--text-muted);
-  }
-
-  .loading-phase-note {
-    font-size: 12px;
-    color: var(--text-muted);
-    line-height: 1.5;
   }
 
   .skeleton-card {
@@ -8327,40 +8102,6 @@
     border: 1px solid rgba(248, 113, 113, 0.2);
     margin-top: 10px;
     animation: fadeIn 0.3s ease-out;
-  }
-
-  .error-copy {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    align-items: center;
-  }
-
-  .error-action-btn {
-    border: 1px solid rgba(248, 113, 113, 0.3);
-    background: rgba(248, 113, 113, 0.12);
-    color: #fecaca;
-    border-radius: 999px;
-    padding: 8px 14px;
-    font-size: 12px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-
-  .error-action-btn:hover {
-    background: rgba(248, 113, 113, 0.18);
-    transform: translateY(-1px);
-  }
-
-  .status-display {
-    margin-top: 10px;
-    padding: 10px 12px;
-    border-radius: var(--radius-md);
-    background: rgba(96, 165, 250, 0.08);
-    border: 1px solid rgba(96, 165, 250, 0.14);
-    color: #93c5fd;
-    font-size: 13px;
-    text-align: center;
   }
 
   /* ... skipping error-icon-wrapper ... */
@@ -8523,7 +8264,8 @@
     animation: wavePulse 1.2s ease-in-out 0.15s;
   }
 
-  .candidate-card:hover .candidate-actions {
+  .candidate-card:hover .candidate-actions,
+  .candidate-card:focus-within .candidate-actions {
     opacity: 1;
   }
 
@@ -8531,7 +8273,9 @@
     background: transparent;
     border: none;
     cursor: pointer;
-    padding: 3px;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 4px;
     border-radius: 4px;
     color: var(--text-muted);
     transition: all 0.2s;
@@ -8552,10 +8296,15 @@
     background: transparent;
     border: none;
     cursor: pointer;
-    padding: 5px;
+    min-width: 32px;
+    min-height: 32px;
+    padding: 6px;
     border-radius: 4px;
     color: var(--text-muted);
     transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
   .icon-btn:hover {
     background: rgba(255, 255, 255, 0.1);
@@ -8571,12 +8320,6 @@
 
   .replace-btn.replaced {
     color: #34d399;
-  }
-
-  /* コピーボタン: 紙が重なるように上に移動 */
-  .icon-btn.animating .copy-icon,
-  .copy-item.animating .copy-icon {
-    animation: copySlide 0.6s var(--easing);
   }
 
   @keyframes copySlide {
@@ -8615,16 +8358,6 @@
     opacity: 0;
   }
 
-  .icon-btn.animating .wave-2,
-  .speak-item.animating .wave-2 {
-    animation: wavePulse 1.2s ease-in-out;
-  }
-
-  .icon-btn.animating .wave-3,
-  .speak-item.animating .wave-3 {
-    animation: wavePulse 1.2s ease-in-out 0.15s;
-  }
-
   @keyframes wavePulse {
     0% {
       opacity: 0;
@@ -8642,13 +8375,6 @@
       opacity: 0;
       transform: translateX(-2px);
     }
-  }
-
-  /* Copy button feedback */
-  .icon-btn.copied,
-  .copy-item.copied {
-    color: #22c55e;
-    background: rgba(34, 197, 94, 0.15);
   }
 
   .check-icon {
@@ -8730,7 +8456,20 @@
     cursor: default;
   }
 
+  .overlay-dismiss {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: default;
+  }
+
   .settings-panel {
+    position: relative;
+    z-index: 1;
     width: 95%;
     max-width: 800px;
     height: 95%;
@@ -8800,14 +8539,6 @@
     font-size: 11px;
     color: var(--text-muted);
     margin-bottom: 6px;
-  }
-
-  .history-meta.secondary {
-    gap: 8px;
-    justify-content: flex-start;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
   }
 
   .history-source {
@@ -8928,6 +8659,169 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+
+  .settings-row-description {
+    flex: 1;
+    padding-right: 10px;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .toggle-switch {
+    width: 46px;
+    height: 28px;
+    flex: 0 0 auto;
+    position: relative;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    transition:
+      background 0.2s var(--easing),
+      border-color 0.2s var(--easing);
+  }
+
+  .toggle-switch.on {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+  }
+
+  .toggle-switch:focus-visible {
+    box-shadow: var(--focus-ring-strong);
+  }
+
+  .toggle-knob {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.24);
+    transition: transform 0.2s var(--easing);
+  }
+
+  .toggle-switch.on .toggle-knob {
+    transform: translateX(18px);
+  }
+
+  .segmented-control {
+    display: flex;
+    gap: 4px;
+    padding: 3px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.18);
+  }
+
+  .segmented-option {
+    min-width: 36px;
+    min-height: 30px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    transition:
+      background 0.2s var(--easing),
+      color 0.2s var(--easing);
+  }
+
+  .segmented-option:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-main);
+  }
+
+  .segmented-option.active {
+    background: var(--primary-color);
+    color: #fff;
+  }
+
+  .settings-stack {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .permission-row {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .permission-row.divided {
+    border-top: 1px solid var(--border-color);
+    padding-top: 12px;
+  }
+
+  .permission-copy {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .permission-name {
+    color: var(--text-main);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .permission-status {
+    margin-top: 2px;
+    font-size: 11px;
+  }
+
+  .permission-status.pending {
+    color: var(--text-muted);
+  }
+
+  .permission-status.granted {
+    color: var(--success-color);
+  }
+
+  .permission-status.denied {
+    color: var(--error-color);
+  }
+
+  .option-stack {
+    align-items: stretch;
+  }
+
+  .option-row {
+    display: flex;
+    width: 100%;
+    align-items: flex-start;
+    gap: 10px;
+    cursor: pointer;
+  }
+
+  .option-row input {
+    margin-top: 3px;
+    cursor: pointer;
+  }
+
+  .option-copy {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .option-title {
+    color: var(--text-main);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .option-description {
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.45;
   }
 
   .shortcut-row {
@@ -9100,33 +8994,10 @@
     display: flex;
     gap: 4px;
     align-items: center;
-    flex-wrap: wrap;
   }
 
   .history-item-actions.vertical {
     flex-direction: column;
-  }
-
-  .history-action-btn {
-    border: 1px solid var(--border-color);
-    background: rgba(255, 255, 255, 0.04);
-    color: var(--text-muted);
-    border-radius: 999px;
-    padding: 6px 10px;
-    font-size: 11px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-
-  .history-action-btn:hover {
-    color: var(--text-main);
-    background: rgba(255, 255, 255, 0.08);
-  }
-
-  .history-action-btn.primary {
-    color: #bfdbfe;
-    border-color: rgba(96, 165, 250, 0.24);
-    background: rgba(59, 130, 246, 0.12);
   }
 
   .move-actions {
@@ -9353,8 +9224,9 @@
   }
 
   .icon-btn-small {
-    width: 20px;
-    height: 20px;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 4px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -9379,6 +9251,8 @@
   /* Modal */
 
   .modal-card {
+    position: relative;
+    z-index: 1;
     width: 90%;
     max-width: 400px;
     background: var(--bg-secondary);
@@ -9431,8 +9305,6 @@
   /* Provider Switcher */
   .provider-switcher {
     display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
     background: rgba(0, 0, 0, 0.2);
     padding: 4px;
     border-radius: 8px;
@@ -9442,7 +9314,6 @@
 
   .provider-btn {
     flex: 1;
-    min-width: 132px;
     padding: 8px;
     background: transparent;
     border: none;
@@ -9452,24 +9323,11 @@
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    align-items: flex-start;
-  }
-
-  .provider-btn small {
-    font-size: 10px;
-    opacity: 0.85;
   }
 
   .provider-btn:hover {
     color: var(--text-main);
     background: rgba(255, 255, 255, 0.05);
-  }
-
-  .provider-btn.ready:not(.active) {
-    color: var(--text-main);
   }
 
   .provider-btn.active {
@@ -9820,30 +9678,21 @@
   :global([data-theme="light"]) .provider-btn:hover {
     background: rgba(0, 0, 0, 0.05);
   }
-  :global([data-theme="light"]) .provider-btn.ready:not(.active) {
-    color: #1f2937;
-  }
   :global([data-theme="light"]) .provider-docs-btn {
     background: rgba(0, 0, 0, 0.03);
   }
   :global([data-theme="light"]) .provider-docs-btn:hover {
     background: rgba(0, 0, 0, 0.08);
   }
-  :global([data-theme="light"]) .loading-meta-pill,
-  :global([data-theme="light"]) .history-action-btn {
-    background: rgba(0, 0, 0, 0.03);
-  }
-  :global([data-theme="light"]) .status-display {
-    background: rgba(59, 130, 246, 0.08);
-    color: #2563eb;
-  }
-  :global([data-theme="light"]) .error-action-btn {
-    color: #b91c1c;
-  }
 
   /* Theme buttons */
   :global([data-theme="light"]) .theme-btn:hover {
     background: rgba(0, 0, 0, 0.05);
+  }
+
+  /* Toggle switch */
+  :global([data-theme="light"]) .toggle-switch {
+    background: rgba(0, 0, 0, 0.15);
   }
 
   /* Styles list in settings */
@@ -10216,7 +10065,8 @@
   }
 
   /* Prevent logo from being dragged */
-  .about-logo-wrapper img {
+  .about-logo-wrapper img,
+  img[alt*="Logo"] {
     -webkit-user-drag: none;
     user-select: none;
     pointer-events: none;
@@ -10300,6 +10150,13 @@
     opacity: 1;
     color: var(--text-main);
   }
+  /* Custom Window Controls */
+  .app-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
   /* Card Stack UI */
   .stack-indicator {
     width: 100%;

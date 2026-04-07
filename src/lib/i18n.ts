@@ -140,6 +140,10 @@ interface Translations {
 	showMore: string;
 	moreItems: string;
 	showLess: string;
+	minimizeWindow: string;
+	maximizeWindow: string;
+	closeWindow: string;
+	weeklyUsageTrendLabel: string;
 	ocrEngine: string;
 	ocrHighAccuracy: string;
 	ocrHighAccuracyDesc: string;
@@ -333,6 +337,10 @@ const translations: Record<AppLanguage, Translations> = {
 		showMore: "もっと見る",
 		moreItems: "件",
 		showLess: "折りたたむ",
+		minimizeWindow: "最小化",
+		maximizeWindow: "最大化",
+		closeWindow: "閉じる",
+		weeklyUsageTrendLabel: "1週間の使用状況",
 		translationSending: "送信中...",
 		translationWaitingModel: "モデル応答待ち...",
 		translationGenerating: "生成中...",
@@ -508,6 +516,10 @@ const translations: Record<AppLanguage, Translations> = {
 		showMore: "Show more",
 		moreItems: "items",
 		showLess: "Show less",
+		minimizeWindow: "Minimize",
+		maximizeWindow: "Maximize",
+		closeWindow: "Close",
+		weeklyUsageTrendLabel: "Weekly usage trend",
 		translationSending: "Sending...",
 		translationWaitingModel: "Waiting for model...",
 		translationGenerating: "Generating...",
@@ -683,6 +695,10 @@ const translations: Record<AppLanguage, Translations> = {
 		showMore: "更多",
 		moreItems: "项",
 		showLess: "收起",
+		minimizeWindow: "最小化",
+		maximizeWindow: "最大化",
+		closeWindow: "关闭",
+		weeklyUsageTrendLabel: "一周使用趋势",
 		translationSending: "发送中...",
 		translationWaitingModel: "等待模型响应...",
 		translationGenerating: "生成中...",
@@ -858,6 +874,10 @@ const translations: Record<AppLanguage, Translations> = {
 		showMore: "더 보기",
 		moreItems: "개",
 		showLess: "접기",
+		minimizeWindow: "최소화",
+		maximizeWindow: "최대화",
+		closeWindow: "닫기",
+		weeklyUsageTrendLabel: "1주 사용 추이",
 		translationSending: "전송 중...",
 		translationWaitingModel: "모델 응답 대기 중...",
 		translationGenerating: "생성 중...",

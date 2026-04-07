@@ -283,7 +283,7 @@
 		cursor: crosshair;
 		z-index: 2147483647; /* Max z-index */
 		user-select: none;
-		font-family: "Inter", sans-serif;
+		font-family: var(--font-sans, system-ui, -apple-system, sans-serif);
 		background: transparent;
 		backdrop-filter: none !important;
 		-webkit-backdrop-filter: none !important;
