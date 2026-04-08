@@ -1,19 +1,19 @@
-use std::collections::HashMap;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::borrow::Cow;
+use std::collections::HashMap;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::fs;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use std::process::Command;
 
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_log::{Target, TargetKind};
-use serde::Serialize;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use arboard::{Clipboard, ImageData};
@@ -648,7 +648,10 @@ fn trigger_quick_open(app: AppHandle) {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn shortcut_file_path(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_config_dir().ok().map(|dir| dir.join("shortcut.txt"))
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("shortcut.txt"))
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -665,8 +668,8 @@ fn load_persisted_shortcut(app: &AppHandle) -> Option<String> {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn persist_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), String> {
-    let path = shortcut_file_path(app)
-        .ok_or_else(|| "Failed to resolve app config path".to_string())?;
+    let path =
+        shortcut_file_path(app).ok_or_else(|| "Failed to resolve app config path".to_string())?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -968,7 +971,8 @@ fn show_compact_window(
         });
         log::info!(
             "[debug] Window size: {}x{}",
-            win_size.width, win_size.height
+            win_size.width,
+            win_size.height
         );
 
         // Get the monitor at cursor position or primary monitor
@@ -982,7 +986,10 @@ fn show_compact_window(
                 let size = m.size();
                 log::info!(
                     "[debug] Monitor: pos=({},{}), size={}x{}",
-                    pos.x, pos.y, size.width, size.height
+                    pos.x,
+                    pos.y,
+                    size.width,
+                    size.height
                 );
                 #[cfg(target_os = "macos")]
                 {
@@ -1014,7 +1021,11 @@ fn show_compact_window(
             let scale = monitor.scale_factor();
             log::info!(
                 "[debug] Selected monitor: pos=({},{}), size={}x{}, scale={}",
-                mon_pos.x, mon_pos.y, mon_size.width, mon_size.height, scale
+                mon_pos.x,
+                mon_pos.y,
+                mon_size.width,
+                mon_size.height,
+                scale
             );
 
             // Calculate position: center window on cursor, but keep within screen bounds
@@ -1242,7 +1253,11 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
             let mon_y = monitor.y().map_err(|e| e.to_string())?;
             log::info!(
                 "[ocr] Capturing monitor {}: {}x{} at ({},{})",
-                index, mon_width, mon_height, mon_x, mon_y
+                index,
+                mon_width,
+                mon_height,
+                mon_x,
+                mon_y
             );
 
             let image = monitor.capture_image().map_err(|e| e.to_string())?;
@@ -1353,7 +1368,11 @@ async fn finish_selection_ocr(
     // Frontend scales CSS pixel coords by devicePixelRatio before sending
     log::info!(
         "[ocr] finish_selection_ocr ({}): {},{} {}x{}",
-        monitor_id, x, y, width, height
+        monitor_id,
+        x,
+        y,
+        width,
+        height
     );
 
     let image = {
@@ -1370,7 +1389,12 @@ async fn finish_selection_ocr(
 
     log::info!(
         "[ocr] Image dimensions: {}x{}, selection: {},{} {}x{}",
-        image_width, image_height, x, y, width, height
+        image_width,
+        image_height,
+        x,
+        y,
+        width,
+        height
     );
 
     if x < 0 || y < 0 {
@@ -1614,15 +1638,14 @@ extern "C" {
 extern "C" {
     static kAXTrustedCheckOptionPrompt: core_foundation::string::CFStringRef;
     fn AXIsProcessTrusted() -> bool;
-    fn AXIsProcessTrustedWithOptions(
-        options: core_foundation::dictionary::CFDictionaryRef,
-    ) -> bool;
+    fn AXIsProcessTrustedWithOptions(options: core_foundation::dictionary::CFDictionaryRef)
+        -> bool;
 }
 
 #[derive(Serialize)]
 struct PermissionStatus {
-  screen_recording: bool,
-  accessibility: bool,
+    screen_recording: bool,
+    accessibility: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -1702,12 +1725,16 @@ fn open_settings_url(_url: &str) -> Result<(), String> {
 
 #[tauri::command]
 fn open_screen_recording_settings() -> Result<(), String> {
-    open_settings_url("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+    open_settings_url(
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+    )
 }
 
 #[tauri::command]
 fn open_accessibility_settings() -> Result<(), String> {
-    open_settings_url("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+    open_settings_url(
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+    )
 }
 
 #[cfg(target_os = "macos")]

@@ -487,7 +487,6 @@ async function callOpenAICompatible(
 	}
 
 	if (isReasoningModelName(modelName)) {
-		// @ts-ignore - reasoning_effort might not be in the current SDK types yet
 		requestParams.reasoning_effort = "low";
 	}
 
@@ -782,7 +781,6 @@ async function streamGemini(
 	for await (const chunk of result.stream) {
 		if (signal?.aborted) return;
 		const chunkText = chunk.text();
-		// console.log("Gemini Stream Chunk:", chunkText);
 		accumulatedText += chunkText;
 
 		const partial = tryParsePartialJson(accumulatedText);
@@ -799,11 +797,13 @@ async function streamGemini(
 		if (signal?.aborted) return;
 		const final = parseJsonFromText<AiResponse>(accumulatedText);
 		const response = await result.response;
-		const usage = response.usageMetadata ? {
-			input_tokens: response.usageMetadata.promptTokenCount,
-			output_tokens: response.usageMetadata.candidatesTokenCount
-		} : undefined;
-		if (usage) console.log("[Gemini] Token Usage:", usage);
+		const usage = response.usageMetadata
+			? {
+					input_tokens: response.usageMetadata.promptTokenCount,
+					output_tokens: response.usageMetadata.candidatesTokenCount,
+				}
+			: undefined;
+		if (usage) console.debug("[Gemini] Token Usage:", usage);
 
 		onUpdate(final, usage);
 	} catch (e) {
@@ -852,13 +852,12 @@ async function streamOpenAICompatible(
 			const partialForUsage = tryParsePartialJson(accumulatedText) || {};
 			onUpdate(partialForUsage, {
 				input_tokens: chunk.usage.prompt_tokens,
-				output_tokens: chunk.usage.completion_tokens
+				output_tokens: chunk.usage.completion_tokens,
 			});
-			console.log("[OpenAI] Token Usage:", chunk.usage);
+			console.debug("[OpenAI] Token Usage:", chunk.usage);
 		}
 
 		if (content) {
-			// console.log("OpenAI Stream Chunk:", content);
 			accumulatedText += content;
 			const partial = tryParsePartialJson(accumulatedText);
 			if (partial) {
@@ -875,7 +874,7 @@ async function streamOpenAICompatible(
 	try {
 		if (accumulatedText.trim()) {
 			const final = parseJsonFromText<AiResponse>(accumulatedText);
-			console.log("[OpenAI] Final Full JSON parsed successfully.");
+			console.debug("[OpenAI] Final full JSON parsed successfully.");
 			// Usage is already handled via chunk.usage in the loop (final chunk usually has it)
 			onUpdate(final);
 		}
@@ -993,7 +992,7 @@ async function streamCerebras(
 	systemPrompt: string,
 	apiKey?: string,
 	signal?: AbortSignal,
-	_jsonMode = true
+	jsonMode = true
 ) {
 	const resolvedKey = resolveCerebrasApiKey(apiKey);
 	await streamProviderChatCompletion({
@@ -1004,7 +1003,7 @@ async function streamCerebras(
 		onUpdate,
 		systemPrompt,
 		signal,
-		jsonMode: false,
+		jsonMode,
 	});
 }
 
@@ -1042,15 +1041,13 @@ async function streamAnthropic(
 			onUpdate({}, currentUsage);
 		} else if (chunk.type === 'message_delta') {
 			// Anthropic provides cumulative usage in delta
-			// Anthropic provides cumulative usage in delta
 			if (chunk.usage) {
 				currentUsage.output_tokens = chunk.usage.output_tokens;
 				onUpdate({}, currentUsage);
-				console.log("[Anthropic] Updated Usage:", currentUsage);
+				console.debug("[Anthropic] Updated usage:", currentUsage);
 			}
 		} else if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
 			accumulatedText += chunk.delta.text;
-			// console.log("Anthropic Stream Chunk:", chunk.delta.text);
 
 			const jsonStart = accumulatedText.indexOf('{');
 			if (jsonStart !== -1) {

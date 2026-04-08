@@ -13,7 +13,12 @@
     disable as disableAutostart,
     isEnabled as isAutostartEnabled,
   } from "@tauri-apps/plugin-autostart";
-  import { type AiModel } from "$lib/ai_service";
+  import {
+    translateTextStream,
+    type AiModel,
+    type AiResponse,
+    type UsageMetadata,
+  } from "$lib/ai_service";
   import {
     AI_MODELS,
     DEFAULT_MODELS_BY_PROVIDER,
@@ -983,7 +988,7 @@
   }
 
   let styleLevels: Record<string, number> = $state(
-    normalizeStyleLevels({}, customStyles),
+    untrack(() => normalizeStyleLevels({}, customStyles)),
   );
   // Prevent initial auto-save from overwriting loaded values
   let styleLevelsReady = $state(false);
@@ -1202,9 +1207,39 @@
     settingsTab = newTab;
   }
 
+  let focusReturnTarget: HTMLElement | null = null;
+
+  function rememberFocusTarget() {
+    if (document.activeElement instanceof HTMLElement) {
+      focusReturnTarget = document.activeElement;
+    }
+  }
+
+  function restoreFocusTarget() {
+    const target = focusReturnTarget;
+    focusReturnTarget = null;
+    if (!target) return;
+    void tick().then(() => {
+      if (target.isConnected) {
+        target.focus({ preventScroll: true });
+      }
+    });
+  }
+
   function openSettingsModal() {
+    rememberFocusTarget();
     settingsTab = "appearance";
     showSettings = true;
+  }
+
+  function openHistory() {
+    rememberFocusTarget();
+    showHistory = true;
+  }
+
+  function closeHistory() {
+    showHistory = false;
+    restoreFocusTarget();
   }
 
   async function handleWindowKeydown(e: KeyboardEvent) {
@@ -1256,11 +1291,11 @@
         return;
       }
       if (showSettings) {
-        showSettings = false;
+        closeSettings();
         return;
       }
       if (showHistory) {
-        showHistory = false;
+        closeHistory();
         return;
       }
 
@@ -1356,16 +1391,19 @@
   }
 
   function openSettings() {
+    rememberFocusTarget();
     showSettings = true;
   }
 
   function openStyles() {
+    rememberFocusTarget();
     settingsTab = "styles";
     showSettings = true;
   }
 
   function closeSettings() {
     showSettings = false;
+    restoreFocusTarget();
   }
 
   async function startOCR() {
@@ -1782,8 +1820,7 @@
       if (
         !target.closest(".lang-selector") &&
         !target.closest(".style-dropdown-wrapper") &&
-        !target.closest(".settings-panel") && // Added to close settings on outside click
-        !target.closest(".history-panel") && // Added to close history on outside click
+        !target.closest(".settings-panel") &&
         !target.closest(".compact-style") &&
         !target.closest(".action-menu")
       ) {
@@ -1792,8 +1829,6 @@
         styleOverflowOpen = false;
         compactStylesOpen = false;
         actionMenuOpenId = null;
-        showSettings = false; // Close settings
-        showHistory = false; // Close history
       }
     };
     window.addEventListener("mousedown", handleClickOutside);
@@ -2437,7 +2472,7 @@
 
     persistLastResult();
 
-    showHistory = false;
+    closeHistory();
   }
 
   function clearHistory() {
@@ -2600,6 +2635,318 @@
 
     return () => {
       clearInterval(interval);
+    };
+  });
+
+  type TranslationCandidateState = {
+    id: number;
+    text: string;
+    reason: string;
+  };
+
+  type TranslationServiceState = {
+    inputQuery: string;
+    sourceLang: string;
+    detectedLang: string;
+    targetLang: string;
+    translations: TranslationCandidateState[];
+    detailedExplanation: AiResponse["detailed_explanation"] | null;
+    styleLevels: Record<string, number>;
+    techMetrics: TechMetrics;
+    isTranslating: boolean;
+    errorMessage: string;
+  };
+
+  type TranslationCommandPayload = {
+    text: string;
+    sourceLang: string;
+    targetLang: string;
+    styles: Record<string, number>;
+    styleMeta?: Record<string, { name: string; prompt?: string }>;
+    model: AiModel;
+    provider?: AiProvider | null;
+    explanationLang?: string;
+    apiKeys?: Record<string, string>;
+    initialTokens?: number;
+    candidateCount?: number;
+  };
+
+  const makeEmptyTranslationSlots = (count: number) =>
+    Array.from({ length: Math.max(1, count) }, (_, index) => ({
+      id: index + 1,
+      text: "",
+      reason: "",
+    }));
+
+  let translationServiceAbortController: AbortController | null = null;
+  let translationServiceState: TranslationServiceState = {
+    inputQuery: "",
+    sourceLang: AUTO_DETECT_LABEL,
+    detectedLang: "",
+    targetLang: "日本語",
+    translations: [],
+    detailedExplanation: null,
+    styleLevels: {},
+    techMetrics: { ...EMPTY_TECH_METRICS },
+    isTranslating: false,
+    errorMessage: "",
+  };
+
+  function getTranslationServiceMetrics(params: {
+    startedAt: number;
+    firstTokenAt: number;
+    model: string;
+    text: string;
+    translations: TranslationCandidateState[];
+    initialTokens?: number;
+    usage?: UsageMetadata;
+    isStreaming: boolean;
+  }): TechMetrics {
+    const now = Date.now();
+    const time = Math.max(0, (now - params.startedAt) / 1000);
+    const translatedChars = params.translations.reduce(
+      (sum, item) => sum + item.text.length + item.reason.length,
+      0,
+    );
+    const firstTokenAt =
+      params.firstTokenAt || (translatedChars > 0 || params.usage ? now : 0);
+    const waitTime = firstTokenAt
+      ? Math.max(0, (firstTokenAt - params.startedAt) / 1000)
+      : time;
+    const genTime = firstTokenAt ? Math.max(0, time - waitTime) : 0;
+    const outputTokens =
+      params.usage?.output_tokens ?? Math.max(0, Math.ceil(translatedChars / 4));
+
+    return {
+      time,
+      waitTime,
+      genTime,
+      model: params.model,
+      inputTokens:
+        params.usage?.input_tokens ??
+        params.initialTokens ??
+        Math.max(0, Math.ceil(params.text.length / 1.5)),
+      outputTokens,
+      tokensPerSec: genTime > 0 ? outputTokens / genTime : 0,
+      streamMode: params.isStreaming,
+      isReal: Boolean(params.usage),
+      firstTokenReceived: Boolean(firstTokenAt),
+    };
+  }
+
+  function mergeTranslationPartial(
+    current: TranslationCandidateState[],
+    partial: Partial<AiResponse>,
+    candidateCount: number,
+  ) {
+    const next =
+      current.length > 0
+        ? current.map((item) => ({ ...item }))
+        : makeEmptyTranslationSlots(candidateCount);
+
+    partial.candidates?.forEach((candidate, index) => {
+      next[index] = {
+        id: index + 1,
+        text: candidate.text ?? next[index]?.text ?? "",
+        reason: candidate.reason ?? next[index]?.reason ?? "",
+      };
+    });
+
+    return next;
+  }
+
+  async function emitTranslationServiceUpdate(
+    patch: Partial<TranslationServiceState> = {},
+  ) {
+    translationServiceState = {
+      ...translationServiceState,
+      ...patch,
+    };
+    await emit("translation_update", translationServiceState);
+  }
+
+  async function handleTranslationCommand(payload: TranslationCommandPayload) {
+    translationServiceAbortController?.abort();
+    const abortController = new AbortController();
+    translationServiceAbortController = abortController;
+
+    const candidateCount = payload.candidateCount ?? 3;
+    const startedAt = Date.now();
+    let firstTokenAt = 0;
+    let nextTranslations = makeEmptyTranslationSlots(candidateCount);
+
+    await emitTranslationServiceUpdate({
+      inputQuery: payload.text,
+      sourceLang: payload.sourceLang,
+      detectedLang: "",
+      targetLang: payload.targetLang,
+      translations: nextTranslations,
+      detailedExplanation: null,
+      styleLevels: payload.styles,
+      techMetrics: {
+        ...EMPTY_TECH_METRICS,
+        model: payload.model,
+        inputTokens:
+          payload.initialTokens ?? Math.max(0, Math.ceil(payload.text.length / 1.5)),
+        streamMode: true,
+      },
+      isTranslating: true,
+      errorMessage: "",
+    });
+
+    try {
+      await translateTextStream(
+        payload.text,
+        payload.sourceLang,
+        payload.targetLang,
+        payload.styles,
+        payload.model,
+        (partial, usage) => {
+          if (abortController.signal.aborted) return;
+          nextTranslations = mergeTranslationPartial(
+            nextTranslations,
+            partial,
+            candidateCount,
+          );
+          if (
+            firstTokenAt === 0 &&
+            (nextTranslations.some((item) => item.text || item.reason) || usage)
+          ) {
+            firstTokenAt = Date.now();
+          }
+          void emitTranslationServiceUpdate({
+            detectedLang:
+              partial.detected_source_language ??
+              translationServiceState.detectedLang,
+            sourceLang:
+              partial.detected_source_language ??
+              translationServiceState.sourceLang,
+            translations: nextTranslations,
+            detailedExplanation:
+              partial.detailed_explanation ??
+              translationServiceState.detailedExplanation,
+            techMetrics: getTranslationServiceMetrics({
+              startedAt,
+              firstTokenAt,
+              model: payload.model,
+              text: payload.text,
+              translations: nextTranslations,
+              initialTokens: payload.initialTokens,
+              usage,
+              isStreaming: true,
+            }),
+          });
+        },
+        payload.explanationLang ?? "日本語",
+        payload.styleMeta ?? {},
+        payload.apiKeys ?? {},
+        {
+          provider: payload.provider,
+          signal: abortController.signal,
+        },
+        candidateCount,
+      );
+
+      if (!abortController.signal.aborted) {
+        await emitTranslationServiceUpdate({
+          isTranslating: false,
+          techMetrics: getTranslationServiceMetrics({
+            startedAt,
+            firstTokenAt,
+            model: payload.model,
+            text: payload.text,
+            translations: nextTranslations,
+            initialTokens: payload.initialTokens,
+            isStreaming: true,
+          }),
+        });
+      }
+    } catch (error) {
+      if (abortController.signal.aborted) return;
+      await emitTranslationServiceUpdate({
+        isTranslating: false,
+        errorMessage: getFriendlyServiceError(error),
+        techMetrics: getTranslationServiceMetrics({
+          startedAt,
+          firstTokenAt,
+          model: payload.model,
+          text: payload.text,
+          translations: nextTranslations,
+          initialTokens: payload.initialTokens,
+          isStreaming: true,
+        }),
+      });
+    } finally {
+      if (translationServiceAbortController === abortController) {
+        translationServiceAbortController = null;
+      }
+    }
+  }
+
+  function getFriendlyServiceError(error: unknown) {
+    if (error instanceof Error) return error.message;
+    return String(error);
+  }
+
+  function shouldHandleTranslationServiceEvents() {
+    try {
+      return getCurrentWindow().label === "main";
+    } catch {
+      return true;
+    }
+  }
+
+  onMount(() => {
+    if (!shouldHandleTranslationServiceEvents()) return;
+
+    const unlistenStart = listen<TranslationCommandPayload>(
+      "start_translation_command",
+      (event) => {
+        void handleTranslationCommand(event.payload);
+      },
+    );
+    const unlistenStop = listen("stop_translation_command", () => {
+      translationServiceAbortController?.abort();
+      void emitTranslationServiceUpdate({ isTranslating: false });
+    });
+    const unlistenSync = listen<any>("sync_input_command", (event) => {
+      const payload = event.payload ?? {};
+      const textChanged =
+        payload.text !== undefined &&
+        payload.text !== translationServiceState.inputQuery;
+      const resetTranslations =
+        Boolean(payload.resetTranslations) ||
+        (textChanged && !translationServiceState.isTranslating);
+      void emitTranslationServiceUpdate({
+        inputQuery: payload.text ?? translationServiceState.inputQuery,
+        sourceLang: payload.sourceLang ?? translationServiceState.sourceLang,
+        detectedLang: payload.detectedLang ?? translationServiceState.detectedLang,
+        targetLang: payload.targetLang ?? translationServiceState.targetLang,
+        styleLevels: payload.styles ?? translationServiceState.styleLevels,
+        translations: resetTranslations ? [] : translationServiceState.translations,
+        detailedExplanation: resetTranslations
+          ? null
+          : translationServiceState.detailedExplanation,
+        errorMessage: resetTranslations ? "" : translationServiceState.errorMessage,
+        techMetrics: resetTranslations
+          ? { ...EMPTY_TECH_METRICS }
+          : translationServiceState.techMetrics,
+      });
+    });
+    const unlistenRequest = listen("request_sync_state", () => {
+      void emitTranslationServiceUpdate();
+    });
+
+    return () => {
+      translationServiceAbortController?.abort();
+      void Promise.all([
+        unlistenStart,
+        unlistenStop,
+        unlistenSync,
+        unlistenRequest,
+      ]).then((unlisteners) => {
+        unlisteners.forEach((unlisten) => unlisten());
+      });
     };
   });
 
@@ -2879,7 +3226,6 @@
           src={theme === "light" ? "/icon-light.svg" : "/icon-dark.svg"}
           alt="Howlingual"
           class="app-icon compact-icon"
-          style="width: 28px; height: 28px;"
         />
         <span class="compact-name">Howlingual</span>
       </div>
@@ -2923,8 +3269,8 @@
             const { getCurrentWindow } = await import("@tauri-apps/api/window");
             await getCurrentWindow().hide();
           }}
-          aria-label="Close"
-          title="Close"
+          aria-label={t(appLanguage, "closeWindow")}
+          title={t(appLanguage, "closeWindow")}
         >
           <svg
             width="12"
@@ -2948,7 +3294,6 @@
       <div
         class="compact-left-actions"
         class:hidden={isScrolledDown}
-        style="position: absolute; left: 12px; display: flex; gap: 8px; align-items: center;"
       >
         <!-- (Paste/Clear buttons moved inside textarea) -->
 
@@ -3230,9 +3575,7 @@
               class="styles-row compact-styles-row"
               class:fade-out={isTranslating}
             >
-              <div
-                style="flex: 1; display: flex; align-items: center; gap: 6px; overflow: hidden; height: 100%;"
-              >
+              <div class="style-chip-track compact">
                 {#each customStyles.slice(0, 3) as style, i (style.id)}
                   <button
                     class="style-chip"
@@ -3702,7 +4045,7 @@
             </button>
           {/if}
           {#if isCompactMode && isStackExpanded}
-            <div style="display: flex; justify-content: center; margin-top: 8px;">
+            <div class="stack-collapse-row">
               <button
                 class="collapse-btn"
                 onclick={() => (isStackExpanded = false)}
@@ -3751,7 +4094,7 @@
           <!-- Bottom Favorite Button (Small) -->
           {#if translations.some((t) => t.text) && !isTranslating}
             <div
-              style="display: flex; justify-content: center; align-items: center; gap: 6px; margin-top: 16px; padding-bottom: 16px;"
+              class="favorite-action-row"
             >
               <button
                 class="save-favorite-btn"
@@ -3778,7 +4121,7 @@
                   toggleFavorite(itemToSave);
                   if (starAnimatingId === "") triggerStarAnim("current");
                 }}
-                aria-label="Favorite current translation"
+                aria-label={t(appLanguage, "favoriteCurrentTranslation")}
               >
                 <svg
                   class="save-star-icon"
@@ -3832,7 +4175,7 @@
         class="icon-btn header-btn history-btn"
         class:animating={historyAnimating}
         title={t(appLanguage, "history")}
-        onclick={() => (showHistory = true)}
+        onclick={openHistory}
         onmouseenter={triggerHistoryAnim}
       >
         <svg
@@ -3882,7 +4225,7 @@
           <button
             class="win-btn-inline minimize"
             onclick={() => getCurrentWindow().minimize()}
-            title="Minimize"
+            title={t(appLanguage, "minimizeWindow")}
           >
             <svg
               width="10"
@@ -3899,7 +4242,7 @@
           <button
             class="win-btn-inline maximize"
             onclick={() => getCurrentWindow().toggleMaximize()}
-            title="Maximize"
+            title={t(appLanguage, "maximizeWindow")}
           >
             <svg
               width="8"
@@ -3923,7 +4266,7 @@
           <button
             class="win-btn-inline close"
             onclick={() => hideWindow()}
-            title="Close"
+            title={t(appLanguage, "closeWindow")}
           >
             <svg
               width="8"
@@ -3949,13 +4292,11 @@
     <!-- Language Selector Row - Moved outside of scroll area -->
     <div
       class="header-actions-row"
-      style="position: relative; display: flex; justify-content: center; align-items: center; margin: 10px 0px 0px 0px;"
     >
       <!-- (Clipboard/Clear buttons moved inside textarea) -->
 
       <div
         class="lang-selector-group"
-        style="display: flex; align-items: center; gap: 8px;"
       >
         <div class="lang-selector">
           <button
@@ -4209,9 +4550,7 @@
             bind:this={styleContainerRef}
           >
             <!-- Clipper Container for smooth "infinite" feel -->
-            <div
-              style="flex: 1; display: flex; align-items: center; gap: 8px; overflow: hidden; height: 100%; mask-image: linear-gradient(to right, black 90%, transparent 100%);"
-            >
+            <div class="style-chip-track main">
               {#each visibleStyles as style, i (style.id)}
                 <button
                   class="style-chip"
@@ -4312,7 +4651,6 @@
             class:hidden={isScrolledDown}
             onclick={startOCR}
             title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
-            style="width: 50px; background: var(--bg-card); color: var(--text-color); border: 1px solid var(--border-color); position: relative; overflow: hidden; padding-left: 2px;"
           >
             <svg
               width="24"
@@ -4806,7 +5144,7 @@
           <!-- Bottom Favorite Button (Small) -->
           {#if translations.some((t) => t.text) && !isTranslating}
             <div
-              style="display: flex; justify-content: center; align-items: center; gap: 6px; margin-top: 16px; padding-bottom: 16px;"
+              class="favorite-action-row"
             >
               <button
                 class="save-favorite-btn"
@@ -4831,7 +5169,7 @@
                   toggleFavorite(itemToSave);
                   if (starAnimatingId === "") triggerStarAnim("current");
                 }}
-                aria-label="Favorite current translation"
+                aria-label={t(appLanguage, "favoriteCurrentTranslation")}
               >
                 <svg
                   class="save-star-icon"
@@ -4869,12 +5207,14 @@
   <div
     class="settings-overlay"
     transition:fade={{ duration: 200 }}
-    onclick={closeSettings}
-    onkeydown={(e) => (e.key === "Enter" || e.key === " ") && closeSettings()}
-    role="button"
-    tabindex="0"
-    aria-label="Close settings"
   >
+    <button
+      type="button"
+      class="overlay-dismiss"
+      aria-label={t(appLanguage, "close")}
+      onclick={closeSettings}
+      tabindex="-1"
+    ></button>
     <div
       class="settings-panel glass history-panel"
       class:style-editor-mode={!!editingStyle}
@@ -5139,36 +5479,18 @@
                     <div class="settings-card-row">
                       <span
                         id="allow-rewrite-label"
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "allowRewriteDescription")}
                       </span>
                       <button
+                        class="toggle-switch"
+                        class:on={allowRewrite}
                         onclick={() => (allowRewrite = !allowRewrite)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {allowRewrite
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 99px; 
-                        position: relative; 
-                        border: none; 
-                        cursor: pointer;
-                        transition: background 0.2s;"
                         aria-labelledby="allow-rewrite-label"
+                        aria-pressed={allowRewrite}
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {allowRewrite ? '23px' : '3px'}; 
-                          transition: left 0.2s;"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                   </div>
@@ -5180,34 +5502,19 @@
                     </div>
                     <div class="settings-card-row">
                       <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "translationCountDesc") ||
                           "1回の翻訳で生成する翻訳案の数"}
                       </span>
-                      <div style="display: flex; gap: 4px;">
+                      <div class="segmented-control" role="group" aria-label={t(appLanguage, "translationCount")}>
                         {#each [1, 2, 3] as count}
                           <button
+                            class="segmented-option"
+                            class:active={translationCount === count}
                             onclick={() =>
                               (translationCount = count as 1 | 2 | 3)}
-                            style="
-                              width: 36px;
-                              height: 28px;
-                              background: {translationCount === count
-                              ? '#3b82f6'
-                              : 'rgba(255,255,255,0.1)'};
-                              border: 1px solid {translationCount === count
-                              ? '#3b82f6'
-                              : 'rgba(255,255,255,0.2)'};
-                              border-radius: 6px;
-                              color: {translationCount === count
-                              ? 'white'
-                              : 'var(--text-muted)'};
-                              font-size: 13px;
-                              font-weight: 500;
-                              cursor: pointer;
-                              transition: all 0.2s;
-                            "
+                            aria-pressed={translationCount === count}
                           >
                             {count}
                           </button>
@@ -5225,37 +5532,19 @@
                     <div class="settings-card-row">
                       <span
                         id="auto-run-label"
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "autoRunQuickDesc") ||
                           "ショートカット呼出時に自動で翻訳を開始します"}
                       </span>
                       <button
+                        class="toggle-switch"
+                        class:on={autoRunQuick}
                         onclick={() => (autoRunQuick = !autoRunQuick)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {autoRunQuick
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 99px; 
-                        position: relative; 
-                        border: none; 
-                        cursor: pointer;
-                        transition: background 0.2s;"
                         aria-labelledby="auto-run-label"
+                        aria-pressed={autoRunQuick}
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {autoRunQuick ? '23px' : '3px'}; 
-                          transition: left 0.2s;"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                   </div>
@@ -5268,38 +5557,19 @@
                     <div class="settings-card-row">
                       <span
                         id="tech-info-label"
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "showTechInfoDesc") ||
                           "翻訳時に処理時間やトークン数を表示します"}
                       </span>
                       <button
+                        class="toggle-switch"
+                        class:on={showTechInfo}
                         onclick={() => (showTechInfo = !showTechInfo)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {showTechInfo
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 99px; 
-                        position: relative; 
-                        border: none; 
-                        cursor: pointer;
-                        transition: background 0.2s;"
                         aria-labelledby="tech-info-label"
+                        aria-pressed={showTechInfo}
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {showTechInfo ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                   </div>
@@ -5311,39 +5581,19 @@
                     </div>
                     <div class="settings-card-row">
                       <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "autoStartDesc") ||
                           "OS 起動時にアプリを自動で起動します"}
                       </span>
                       <button
+                        class="toggle-switch"
+                        class:on={autoStartEnabled}
                         onclick={toggleAutoStart}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {autoStartEnabled
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 20px; 
-                        border: none;
-                        cursor: pointer;
-                        position: relative;
-                        transition: background 0.2s;
-                      "
-                        aria-label="Toggle autostart"
+                        aria-label={t(appLanguage, "autoStart")}
+                        aria-pressed={autoStartEnabled}
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {autoStartEnabled ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                   </div>
@@ -5356,39 +5606,19 @@
                     </div>
                     <div class="settings-card-row">
                       <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "startMinimizedDesc") ||
                           "起動時にメイン画面を非表示で開始します"}
                       </span>
                       <button
+                        class="toggle-switch"
+                        class:on={startMinimized}
                         onclick={() => (startMinimized = !startMinimized)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {startMinimized
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 20px; 
-                        border: none;
-                        cursor: pointer;
-                        position: relative;
-                        transition: background 0.2s;
-                      "
-                        aria-label="Toggle start minimized"
+                        aria-label={t(appLanguage, "startMinimized")}
+                        aria-pressed={startMinimized}
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {startMinimized ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                   </div>
@@ -5400,38 +5630,18 @@
                     </div>
                     <div class="settings-card-row">
                       <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "clipboardOpsDesc")}
                       </span>
                       <button
+                        class="toggle-switch"
+                        class:on={clipboardOpsEnabled}
                         onclick={toggleClipboardOps}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {clipboardOpsEnabled
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 20px; 
-                        border: none;
-                        cursor: pointer;
-                        position: relative;
-                        transition: background 0.2s;
-                      "
-                        aria-label="Toggle clipboard ops"
+                        aria-label={t(appLanguage, "clipboardOps")}
+                        aria-pressed={clipboardOpsEnabled}
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {clipboardOpsEnabled ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                     <div class="settings-note">
@@ -5445,24 +5655,18 @@
                       <div class="settings-label">
                         {t(appLanguage, "permissions")}
                       </div>
-                      <div
-                        class="settings-card-row"
-                        style="flex-direction: column; gap: 12px;"
-                      >
+                      <div class="settings-card-row settings-stack">
                         <!-- Screen Recording -->
-                        <div
-                          style="display: flex; justify-content: space-between; align-items: center; width: 100%;"
-                        >
-                          <div style="flex: 1;">
-                            <div style="font-size: 13px; font-weight: 500;">
+                        <div class="permission-row">
+                          <div class="permission-copy">
+                            <div class="permission-name">
                               {t(appLanguage, "screenRecording")}
                             </div>
                             <div
-                              style="font-size: 11px; color: {permissions.screen_recording === null
-                                ? '#a1a1aa'
-                                : permissions.screen_recording
-                                  ? '#10b981'
-                                  : '#ef4444'};"
+                              class="permission-status"
+                              class:pending={permissions.screen_recording === null}
+                              class:granted={permissions.screen_recording === true}
+                              class:denied={permissions.screen_recording === false}
                             >
                               {permissions.screen_recording === null
                                 ? t(appLanguage, "checking")
@@ -5484,7 +5688,6 @@
                                 await invoke("open_screen_recording_settings");
                               }}
                               class="permission-btn"
-                              style="margin-left: 8px;"
                             >
                               {t(appLanguage, "openSystemSettings")}
                             </button>
@@ -5492,19 +5695,16 @@
                         </div>
 
                         <!-- Accessibility -->
-                        <div
-                          style="display: flex; justify-content: space-between; align-items: center; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 12px;"
-                        >
-                          <div style="flex: 1;">
-                            <div style="font-size: 13px; font-weight: 500;">
+                        <div class="permission-row divided">
+                          <div class="permission-copy">
+                            <div class="permission-name">
                               {t(appLanguage, "accessibility")}
                             </div>
                             <div
-                              style="font-size: 11px; color: {permissions.accessibility === null
-                                ? '#a1a1aa'
-                                : permissions.accessibility
-                                  ? '#10b981'
-                                  : '#ef4444'};"
+                              class="permission-status"
+                              class:pending={permissions.accessibility === null}
+                              class:granted={permissions.accessibility === true}
+                              class:denied={permissions.accessibility === false}
                             >
                               {permissions.accessibility === null
                                 ? t(appLanguage, "checking")
@@ -5526,7 +5726,6 @@
                                 await invoke("open_accessibility_settings");
                               }}
                               class="permission-btn"
-                              style="margin-left: 8px;"
                             >
                               {t(appLanguage, "openSystemSettings")}
                             </button>
@@ -5541,52 +5740,35 @@
                       <div class="settings-label">
                         {t(appLanguage, "ocrEngine")}
                       </div>
-                      <div
-                        class="settings-card-row"
-                        style="flex-direction: column; gap: 12px; align-items: flex-start;"
-                      >
-                        <label
-                          style="display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%;"
-                        >
+                      <div class="settings-card-row settings-stack option-stack">
+                        <label class="option-row">
                           <input
                             type="radio"
                             name="ocrEngine"
                             value="paddle"
                             bind:group={ocrEngine}
-                            style="cursor: pointer;"
                           />
-                          <span style="flex: 1;">
-                            <div
-                              style="font-size: 14px; color: var(--text-main); font-weight: 500;"
-                            >
+                          <span class="option-copy">
+                            <div class="option-title">
                               {t(appLanguage, "ocrHighAccuracy")}
                             </div>
-                            <div
-                              style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"
-                            >
+                            <div class="option-description">
                               {t(appLanguage, "ocrHighAccuracyDesc")}
                             </div>
                           </span>
                         </label>
-                        <label
-                          style="display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%;"
-                        >
+                        <label class="option-row">
                           <input
                             type="radio"
                             name="ocrEngine"
                             value="windows"
                             bind:group={ocrEngine}
-                            style="cursor: pointer;"
                           />
-                          <span style="flex: 1;">
-                            <div
-                              style="font-size: 14px; color: var(--text-main); font-weight: 500;"
-                            >
+                          <span class="option-copy">
+                            <div class="option-title">
                               {t(appLanguage, "ocrFast")}
                             </div>
-                            <div
-                              style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"
-                            >
+                            <div class="option-description">
                               {t(appLanguage, "ocrFastDesc")}
                             </div>
                           </span>
@@ -5720,39 +5902,19 @@
                     </div>
                     <div class="settings-card-row">
                       <span
-                        style="font-size: 13px; color: var(--text-muted); flex: 1; padding-right: 10px;"
+                        class="settings-row-description"
                       >
                         {t(appLanguage, "rememberApiKeysDesc")}
                       </span>
                       <button
+                        class="toggle-switch"
+                        class:on={rememberApiKeys}
                         onclick={() =>
                           (rememberApiKeys = !rememberApiKeys)}
-                        style="
-                        width: 44px; 
-                        height: 24px; 
-                        background: {rememberApiKeys
-                          ? '#3b82f6'
-                          : 'rgba(255,255,255,0.1)'}; 
-                        border-radius: 20px; 
-                        border: none;
-                        cursor: pointer;
-                        position: relative;
-                        transition: background 0.2s;
-                      "
-                        aria-label="Toggle remember api keys"
+                        aria-label={t(appLanguage, "rememberApiKeys")}
+                        aria-pressed={rememberApiKeys}
                       >
-                        <div
-                          style="
-                          width: 18px; 
-                          height: 18px; 
-                          background: white; 
-                          border-radius: 50%; 
-                          position: absolute; 
-                          top: 3px; 
-                          left: {rememberApiKeys ? '23px' : '3px'}; 
-                          transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-                          box-shadow: 0 1px 3px rgba(0,0,0,0.2);"
-                        ></div>
+                        <span class="toggle-knob"></span>
                       </button>
                     </div>
                     <div class="settings-note">
@@ -5884,7 +6046,7 @@
                                 class="icon-btn-small"
                                 onclick={() => moveStyle(i, "up")}
                                 disabled={i === 0}
-                                title="Move Up"
+                                title={t(appLanguage, "moveUp")}
                               >
                                 <svg
                                   width="16"
@@ -5901,7 +6063,7 @@
                                 class="icon-btn-small"
                                 onclick={() => moveStyle(i, "down")}
                                 disabled={i === customStyles.length - 1}
-                                title="Move Down"
+                                title={t(appLanguage, "moveDown")}
                               >
                                 <svg
                                   width="16"
@@ -6031,7 +6193,7 @@
                               viewBox={`0 0 ${usageChartMetrics.width} ${usageChartConfig.height}`}
                               preserveAspectRatio="xMidYMid meet"
                               role="img"
-                              aria-label="Weekly usage trend"
+                              aria-label={t(appLanguage, "weeklyUsageTrendLabel")}
                               onmouseleave={clearUsageHover}
                             >
                               <line
@@ -6162,29 +6324,29 @@
   <div
     class="settings-overlay"
     transition:fade={{ duration: 200 }}
-    onclick={() => (showHistory = false)}
-    role="button"
-    tabindex="0"
-    onkeydown={(e) => {
-      if (e.key === "Enter") {
-        showHistory = false;
-      }
-    }}
   >
+    <button
+      type="button"
+      class="overlay-dismiss"
+      aria-label={t(appLanguage, "close")}
+      onclick={closeHistory}
+      tabindex="-1"
+    ></button>
     <div
       class="settings-panel glass"
       transition:fly={{ y: 20, duration: 300 }}
       onclick={(e) => e.stopPropagation()}
       role="dialog"
       aria-modal="true"
+      aria-labelledby="history-title"
       tabindex="-1"
       onkeydown={(e) => e.stopPropagation()}
     >
       <div class="settings-header">
-        <h2>{t(appLanguage, "history")}</h2>
+        <h2 id="history-title">{t(appLanguage, "history")}</h2>
         <button
           class="close-btn"
-          onclick={() => (showHistory = false)}
+          onclick={closeHistory}
           aria-label={t(appLanguage, "close")}
         >
           <svg
@@ -6274,7 +6436,7 @@
                             class:active={isFavoritedById(item.id)}
                             class:animating={starAnimatingId === item.id}
                             onclick={() => toggleFavorite(item)}
-                            aria-label="Toggle favorite"
+                            aria-label={t(appLanguage, "toggleFavorite")}
                           >
                             <svg
                               width="16"
@@ -6294,7 +6456,7 @@
                           <button
                             class="icon-btn-small delete-btn"
                             onclick={() => deleteHistoryItem(item.id)}
-                            aria-label="Delete"
+                            aria-label={t(appLanguage, "delete")}
                           >
                             <svg
                               width="14"
@@ -6349,7 +6511,7 @@
                               class="icon-btn-small"
                               onclick={() => moveFavorite(i, "up")}
                               disabled={i === 0}
-                              aria-label="Move up"
+                              aria-label={t(appLanguage, "moveUp")}
                             >
                               <svg
                                 width="14"
@@ -6366,7 +6528,7 @@
                               class="icon-btn-small"
                               onclick={() => moveFavorite(i, "down")}
                               disabled={i === favorites.length - 1}
-                              aria-label="Move down"
+                              aria-label={t(appLanguage, "moveDown")}
                             >
                               <svg
                                 width="14"
@@ -6383,7 +6545,7 @@
                           <button
                             class="icon-btn-small delete-btn"
                             onclick={() => deleteFavorite(item.id)}
-                            aria-label="Delete favorite"
+                            aria-label={t(appLanguage, "deleteFavorite")}
                           >
                             <svg
                               width="14"
@@ -6415,15 +6577,14 @@
   <div
     class="modal-overlay"
     transition:fade={{ duration: 200 }}
-    onclick={() => (showResetConfirmation = false)}
-    role="button"
-    tabindex="0"
-    onkeydown={(e) => {
-      if (e.key === "Enter") {
-        showResetConfirmation = false;
-      }
-    }}
   >
+    <button
+      type="button"
+      class="overlay-dismiss"
+      aria-label={t(appLanguage, "close")}
+      onclick={() => (showResetConfirmation = false)}
+      tabindex="-1"
+    ></button>
     <div
       class="modal-card glass"
       onclick={(e) => e.stopPropagation()}
@@ -6451,15 +6612,14 @@
   <div
     class="modal-overlay"
     transition:fade={{ duration: 200 }}
-    onclick={() => (showDiscardConfirmation = false)}
-    role="button"
-    tabindex="0"
-    onkeydown={(e) => {
-      if (e.key === "Enter") {
-        showDiscardConfirmation = false;
-      }
-    }}
   >
+    <button
+      type="button"
+      class="overlay-dismiss"
+      aria-label={t(appLanguage, "close")}
+      onclick={() => (showDiscardConfirmation = false)}
+      tabindex="-1"
+    ></button>
     <div
       class="modal-card glass"
       onclick={(e) => e.stopPropagation()}
@@ -6649,6 +6809,11 @@
   }
 
   .compact-left-actions {
+    position: absolute;
+    left: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     transition:
       opacity 0.25s ease,
       transform 0.25s ease;
@@ -6666,6 +6831,13 @@
     gap: 8px;
     max-width: 100%;
     flex-shrink: 1;
+  }
+
+  .lang-selector-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
   }
 
   .compact-shell .lang-btn {
@@ -6733,139 +6905,33 @@
     overflow-y: auto;
   }
 
-  .compact-style-wrapper {
-    position: relative;
-    display: inline-flex;
-  }
-
-  .compact-style-chip {
-    align-self: flex-start;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    color: var(--text-main);
-    font-size: 12px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .compact-style-chip:hover {
-    background: rgba(255, 255, 255, 0.12);
-  }
-
-  .compact-style-chip.open {
-    background: rgba(59, 130, 246, 0.2);
-    border-color: rgba(59, 130, 246, 0.35);
-    color: #93c5fd;
-  }
-
   .chip-text {
     font-weight: 600;
     font-size: 11px;
     letter-spacing: 0.3px;
   }
 
-  .chip-count {
-    min-width: 16px;
-    height: 16px;
-    border-radius: 999px;
-    padding: 0 4px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(59, 130, 246, 0.3);
-    color: #bfdbfe;
-    font-size: 10px;
-    font-weight: 600;
-  }
-
-  .chip-chevron {
-    transition: transform 0.2s var(--easing);
-  }
-
-  .compact-style-chip.open .chip-chevron {
-    transform: rotate(180deg);
-  }
-
-  .compact-style-dropdown {
-    position: absolute;
-    top: calc(100% + 8px);
-    left: 0;
-    min-width: 280px;
-    max-height: 300px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    overflow-y: auto;
-    padding: 6px;
-    border-radius: 12px;
-    z-index: 1200;
-  }
-
-  .compact-style-dropdown .style-chip {
-    width: 100%;
-    justify-content: flex-start;
-    padding: 8px 12px;
-    font-size: 13px;
-  }
-
-  .style-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 6px 10px;
-    border-radius: 10px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.04);
-    color: var(--text-main);
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .style-row:hover {
-    background: rgba(255, 255, 255, 0.08);
-  }
-
-  .style-name {
-    font-size: 12px;
-    font-weight: 500;
-  }
-
-  .level-meter {
-    width: 64px;
-    height: 6px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.12);
-    overflow: hidden;
-  }
-
-  .level-fill {
-    display: block;
-    height: 100%;
-    border-radius: 999px;
-    background: var(--primary-color);
-    opacity: 0.6;
-    transition: width 0.2s var(--easing);
-  }
-
-  .style-row[data-level="1"] .level-fill {
-    opacity: 0.45;
-  }
-
-  .style-row[data-level="2"] .level-fill {
-    opacity: 0.8;
-  }
-
   .output-area.compact-output {
     gap: 10px;
   }
 
-  .compact-action-btn,
+  .stack-collapse-row,
+  .favorite-action-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .stack-collapse-row {
+    margin-top: 8px;
+  }
+
+  .favorite-action-row {
+    gap: 6px;
+    margin-top: 16px;
+    padding-bottom: 16px;
+  }
+
   .compact-ocr-btn {
     width: 32px;
     height: 32px;
@@ -6880,7 +6946,6 @@
     transition: all 0.2s ease;
   }
 
-  .compact-action-btn:hover,
   .compact-ocr-btn:hover {
     background: rgba(255, 255, 255, 0.2);
   }
@@ -6916,14 +6981,6 @@
     font-size: 26px;
     color: var(--text-main);
     background: none;
-  }
-
-  .header-right {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    justify-content: flex-end;
-    width: fit-content;
   }
 
   .header-drag-spacer {
@@ -7413,6 +7470,13 @@
   }
 
   .ocr-main-btn {
+    width: 50px;
+    position: relative;
+    overflow: hidden;
+    padding-left: 2px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-card);
+    color: var(--text-color);
     transition:
       opacity 0.25s ease,
       transform 0.25s var(--easing-bounce),
@@ -7656,6 +7720,23 @@
     mask-image: linear-gradient(to right, black 70%, transparent 100%);
   }
 
+  .style-chip-track {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    height: 100%;
+  }
+
+  .style-chip-track.compact {
+    gap: 6px;
+  }
+
+  .style-chip-track.main {
+    gap: 8px;
+    mask-image: linear-gradient(to right, black 90%, transparent 100%);
+  }
+
   .style-chip {
     position: relative;
     display: flex;
@@ -7793,10 +7874,6 @@
     transition: opacity 0.4s var(--easing);
   }
 
-  .card-inner-content.content-fade {
-    opacity: 0;
-  }
-
   .candidate-actions.hide {
     display: none;
   }
@@ -7866,54 +7943,6 @@
     margin-top: 0;
   }
 
-  .empty-state-visual {
-    position: relative;
-  }
-
-  .empty-icon-wrapper {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 96px;
-    height: 96px;
-    border-radius: 24px;
-    background: linear-gradient(
-      135deg,
-      rgba(99, 102, 241, 0.1),
-      rgba(34, 211, 238, 0.1)
-    );
-    border: 1px solid var(--border-color);
-  }
-
-  .empty-icon {
-    color: var(--primary-color);
-    opacity: 0.8;
-    animation: floatSoft 4s ease-in-out infinite;
-  }
-
-  .empty-icon-glow {
-    position: absolute;
-    inset: -20px;
-    background: radial-gradient(
-      circle,
-      var(--primary-glow) 0%,
-      transparent 70%
-    );
-    opacity: 0.5;
-    animation: pulse 3s ease-in-out infinite;
-  }
-
-  @keyframes floatSoft {
-    0%,
-    100% {
-      transform: translateY(0);
-    }
-    50% {
-      transform: translateY(-6px);
-    }
-  }
-
   .empty-state-content {
     display: flex;
     flex-direction: column;
@@ -7925,7 +7954,6 @@
     font-weight: 600;
     color: var(--text-main);
     margin: 0;
-    letter-spacing: -0.02em;
   }
 
   .empty-description {
@@ -7963,14 +7991,6 @@
 
   .hint-icon {
     font-size: 16px;
-  }
-
-  :global([data-theme="light"]) .empty-icon-wrapper {
-    background: linear-gradient(
-      135deg,
-      rgba(99, 102, 241, 0.08),
-      rgba(8, 145, 178, 0.08)
-    );
   }
 
   :global([data-theme="light"]) .empty-hint {
@@ -8244,7 +8264,8 @@
     animation: wavePulse 1.2s ease-in-out 0.15s;
   }
 
-  .candidate-card:hover .candidate-actions {
+  .candidate-card:hover .candidate-actions,
+  .candidate-card:focus-within .candidate-actions {
     opacity: 1;
   }
 
@@ -8252,7 +8273,9 @@
     background: transparent;
     border: none;
     cursor: pointer;
-    padding: 3px;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 4px;
     border-radius: 4px;
     color: var(--text-muted);
     transition: all 0.2s;
@@ -8273,10 +8296,15 @@
     background: transparent;
     border: none;
     cursor: pointer;
-    padding: 5px;
+    min-width: 32px;
+    min-height: 32px;
+    padding: 6px;
     border-radius: 4px;
     color: var(--text-muted);
     transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
   .icon-btn:hover {
     background: rgba(255, 255, 255, 0.1);
@@ -8292,11 +8320,6 @@
 
   .replace-btn.replaced {
     color: #34d399;
-  }
-
-  /* コピーボタン: 紙が重なるように上に移動 */
-  .copy-btn.animating .copy-icon {
-    animation: copySlide 0.6s var(--easing);
   }
 
   @keyframes copySlide {
@@ -8335,14 +8358,6 @@
     opacity: 0;
   }
 
-  .speak-btn.animating .wave-2 {
-    animation: wavePulse 1.2s ease-in-out;
-  }
-
-  .speak-btn.animating .wave-3 {
-    animation: wavePulse 1.2s ease-in-out 0.15s;
-  }
-
   @keyframes wavePulse {
     0% {
       opacity: 0;
@@ -8360,12 +8375,6 @@
       opacity: 0;
       transform: translateX(-2px);
     }
-  }
-
-  /* Copy button feedback */
-  .copy-btn.copied {
-    color: #22c55e;
-    background: rgba(34, 197, 94, 0.15);
   }
 
   .check-icon {
@@ -8447,7 +8456,20 @@
     cursor: default;
   }
 
+  .overlay-dismiss {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: default;
+  }
+
   .settings-panel {
+    position: relative;
+    z-index: 1;
     width: 95%;
     max-width: 800px;
     height: 95%;
@@ -8637,6 +8659,169 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+
+  .settings-row-description {
+    flex: 1;
+    padding-right: 10px;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .toggle-switch {
+    width: 46px;
+    height: 28px;
+    flex: 0 0 auto;
+    position: relative;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    transition:
+      background 0.2s var(--easing),
+      border-color 0.2s var(--easing);
+  }
+
+  .toggle-switch.on {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+  }
+
+  .toggle-switch:focus-visible {
+    box-shadow: var(--focus-ring-strong);
+  }
+
+  .toggle-knob {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.24);
+    transition: transform 0.2s var(--easing);
+  }
+
+  .toggle-switch.on .toggle-knob {
+    transform: translateX(18px);
+  }
+
+  .segmented-control {
+    display: flex;
+    gap: 4px;
+    padding: 3px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.18);
+  }
+
+  .segmented-option {
+    min-width: 36px;
+    min-height: 30px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    transition:
+      background 0.2s var(--easing),
+      color 0.2s var(--easing);
+  }
+
+  .segmented-option:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-main);
+  }
+
+  .segmented-option.active {
+    background: var(--primary-color);
+    color: #fff;
+  }
+
+  .settings-stack {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .permission-row {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .permission-row.divided {
+    border-top: 1px solid var(--border-color);
+    padding-top: 12px;
+  }
+
+  .permission-copy {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .permission-name {
+    color: var(--text-main);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .permission-status {
+    margin-top: 2px;
+    font-size: 11px;
+  }
+
+  .permission-status.pending {
+    color: var(--text-muted);
+  }
+
+  .permission-status.granted {
+    color: var(--success-color);
+  }
+
+  .permission-status.denied {
+    color: var(--error-color);
+  }
+
+  .option-stack {
+    align-items: stretch;
+  }
+
+  .option-row {
+    display: flex;
+    width: 100%;
+    align-items: flex-start;
+    gap: 10px;
+    cursor: pointer;
+  }
+
+  .option-row input {
+    margin-top: 3px;
+    cursor: pointer;
+  }
+
+  .option-copy {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .option-title {
+    color: var(--text-main);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .option-description {
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.45;
   }
 
   .shortcut-row {
@@ -9039,8 +9224,9 @@
   }
 
   .icon-btn-small {
-    width: 20px;
-    height: 20px;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 4px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -9065,6 +9251,8 @@
   /* Modal */
 
   .modal-card {
+    position: relative;
+    z-index: 1;
     width: 90%;
     max-width: 400px;
     background: var(--bg-secondary);
@@ -9516,11 +9704,6 @@
     background: rgba(0, 0, 0, 0.05);
   }
 
-  /* Confirmation dialog */
-  :global([data-theme="light"]) .confirm-dialog {
-    background: rgba(255, 255, 255, 0.98);
-  }
-
   /* Rich buttons */
   :global([data-theme="light"]) .rich-btn.secondary {
     background: rgba(0, 0, 0, 0.05);
@@ -9538,16 +9721,6 @@
   /* Close button */
   :global([data-theme="light"]) .close-btn:hover {
     background: rgba(0, 0, 0, 0.08);
-  }
-
-  /* Settings row borders */
-  :global([data-theme="light"]) .settings-row {
-    border-color: rgba(0, 0, 0, 0.08);
-  }
-
-  /* Section titles */
-  :global([data-theme="light"]) .settings-section h3 {
-    color: #333;
   }
 
   /* Description text */
@@ -9591,22 +9764,6 @@
     color: #f59e0b;
   }
 
-  /* Style editor */
-  :global([data-theme="light"]) .style-editor-panel {
-    background: rgba(0, 0, 0, 0.02);
-    border-color: rgba(0, 0, 0, 0.08);
-  }
-
-  /* API Key indicator */
-  :global([data-theme="light"]) .api-indicator.set {
-    background: rgba(34, 197, 94, 0.1);
-    color: #16a34a;
-  }
-  :global([data-theme="light"]) .api-indicator.not-set {
-    background: rgba(239, 68, 68, 0.1);
-    color: #dc2626;
-  }
-
   /* Tab content */
   :global([data-theme="light"]) .tab-content-wrapper {
     color: #1a1a1a;
@@ -9648,32 +9805,6 @@
     background: rgba(59, 130, 246, 0.12);
     border-color: rgba(59, 130, 246, 0.2);
     color: #2563eb;
-  }
-
-  :global([data-theme="light"]) .compact-style-chip {
-    background: rgba(0, 0, 0, 0.05);
-    border-color: rgba(0, 0, 0, 0.12);
-    color: #1a1a1a;
-  }
-
-  :global([data-theme="light"]) .compact-style-chip.open {
-    background: rgba(59, 130, 246, 0.12);
-    border-color: rgba(59, 130, 246, 0.2);
-    color: #2563eb;
-  }
-
-  :global([data-theme="light"]) .chip-count {
-    background: rgba(59, 130, 246, 0.2);
-    color: #1d4ed8;
-  }
-
-  :global([data-theme="light"]) .style-row {
-    background: rgba(0, 0, 0, 0.03);
-    border-color: rgba(0, 0, 0, 0.1);
-  }
-
-  :global([data-theme="light"]) .level-meter {
-    background: rgba(0, 0, 0, 0.08);
   }
 
   /* Fixed width for language buttons to prevent jitter */
@@ -9772,12 +9903,6 @@
     font-size: 26px;
     font-weight: 700;
     color: var(--text-main);
-  }
-
-  .usage-sub {
-    font-size: 11px;
-    color: var(--text-muted);
-    opacity: 0.8;
   }
 
   .usage-chart-card {
@@ -9941,8 +10066,7 @@
 
   /* Prevent logo from being dragged */
   .about-logo-wrapper img,
-  img[alt*="Logo"],
-  img[alt*="logo"] {
+  img[alt*="Logo"] {
     -webkit-user-drag: none;
     user-select: none;
     pointer-events: none;
@@ -10031,55 +10155,6 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-  }
-
-  .header-right {
-    display: flex;
-    align-items: center;
-    padding-right: 16px;
-    height: 100%;
-  }
-
-  .window-controls {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-
-  .win-btn {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: transform 0.1s;
-    overflow: hidden;
-  }
-
-  .win-btn:hover svg {
-    opacity: 1 !important;
-  }
-
-  .win-btn.close {
-    background: #ff5f56;
-    border: 1px solid #e0443e;
-  }
-  .win-btn.minimize {
-    background: #ffbd2e;
-    border: 1px solid #dea123;
-  }
-  .win-btn.maximize {
-    background: #27c93f;
-    border: 1px solid #1aab29;
-  }
-
-  .win-btn:active {
-    filter: brightness(0.9);
   }
 
   /* Card Stack UI */
@@ -10175,13 +10250,11 @@
     color: #dc2626;
   }
 
-  :global([data-theme="light"]) .compact-action-btn,
   :global([data-theme="light"]) .compact-ocr-btn {
     background: rgba(0, 0, 0, 0.05);
     color: rgba(0, 0, 0, 0.7);
   }
 
-  :global([data-theme="light"]) .compact-action-btn:hover,
   :global([data-theme="light"]) .compact-ocr-btn:hover {
     background: rgba(0, 0, 0, 0.1);
     color: rgba(0, 0, 0, 0.9);

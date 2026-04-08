@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { invoke } from "@tauri-apps/api/core";
-	import { emit } from "@tauri-apps/api/event";
 	import { getCurrentWindow } from "@tauri-apps/api/window";
 	import { fade } from "svelte/transition";
 	import { t, type AppLanguage } from "$lib/i18n";
@@ -226,9 +225,9 @@
 <div
 	role="application"
 	class="overlay"
-	on:mousedown={handleMouseDown}
-	on:mousemove={handleMouseMove}
-	on:mouseup={handleMouseUp}
+	onmousedown={handleMouseDown}
+	onmousemove={handleMouseMove}
+	onmouseup={handleMouseUp}
 	transition:fade={{ duration: 150 }}
 >
 	{#if (!isSelecting || selection.w < 2 || selection.h < 2) && !isProcessing}
@@ -248,7 +247,7 @@
 			{#if isProcessing}
 				<div class="loading-indicator">
 					<div class="spinner"></div>
-					<span>Reading text...</span>
+					<span>{t(appLanguage, "ocrReading")}</span>
 				</div>
 			{:else if selection.w > 20 && selection.h > 20}
 				<div class="size-label">
@@ -284,7 +283,7 @@
 		cursor: crosshair;
 		z-index: 2147483647; /* Max z-index */
 		user-select: none;
-		font-family: "Inter", sans-serif;
+		font-family: var(--font-sans, system-ui, -apple-system, sans-serif);
 		background: transparent;
 		backdrop-filter: none !important;
 		-webkit-backdrop-filter: none !important;

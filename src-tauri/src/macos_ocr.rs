@@ -60,10 +60,9 @@ pub fn perform_ocr(img: DynamicImage) -> Result<String, String> {
         request.setRecognitionLanguages(&languages);
     }
 
-    // Upcast to VNRequest for the array
-    // VNRecognizeTextRequest -> VNImageBasedRequest -> VNRequest
-    // Using unsafe transmute to treat Retained<VNRecognizeTextRequest> as Retained<VNRequest>
-    let request_ptr: Retained<VNRequest> = unsafe { std::mem::transmute(request.clone()) };
+    // Upcast to VNRequest using the typed superclass conversions provided by objc2.
+    let request_ptr: Retained<VNRequest> =
+        Retained::into_super(Retained::into_super(request.clone()));
 
     // 4. Perform Request
     let requests = NSArray::from_vec(vec![request_ptr]);

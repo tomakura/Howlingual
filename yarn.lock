@@ -5,9 +5,9 @@ __metadata:
   version: 8
   cacheKey: 10c0
 
-"@anthropic-ai/sdk@npm:^0.71.2":
-  version: 0.71.2
-  resolution: "@anthropic-ai/sdk@npm:0.71.2"
+"@anthropic-ai/sdk@npm:^0.82.0":
+  version: 0.82.0
+  resolution: "@anthropic-ai/sdk@npm:0.82.0"
   dependencies:
     json-schema-to-ts: "npm:^3.1.1"
   peerDependencies:
@@ -17,14 +17,14 @@ __metadata:
       optional: true
   bin:
     anthropic-ai-sdk: bin/cli
-  checksum: 10c0/6561264d2d516b0a2a2f48bba739497b76ec1ef85a5b78deca7900701513ca7cb5317dc4ee8147fc3f734709d364e29e2aaf79b39afe8284b0bf0c0c172f8223
+  checksum: 10c0/2d6b1ed34335b736a5bb794853469a76bcd223a56bbc6695b81c9ffa2b906b4a0dff44a1ab1ce5aa5795ee49ac88489eae7cb6383923256cbfff3103ebdd0737
   languageName: node
   linkType: hard
 
 "@babel/runtime@npm:^7.18.3":
-  version: 7.28.4
-  resolution: "@babel/runtime@npm:7.28.4"
-  checksum: 10c0/792ce7af9750fb9b93879cc9d1db175701c4689da890e6ced242ea0207c9da411ccf16dc04e689cc01158b28d7898c40d75598f4559109f761c12ce01e959bf7
+  version: 7.29.2
+  resolution: "@babel/runtime@npm:7.29.2"
+  checksum: 10c0/30b80a0140d16467792e1bbeb06f655b0dab70407da38dfac7fedae9c859f9ae9d846ef14ad77bd3814c064295fe9b1bc551f1541ea14646ae9f22b71a8bc17a
   languageName: node
   linkType: hard
 
@@ -1583,9 +1583,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"openai@npm:^6.15.0":
-  version: 6.15.0
-  resolution: "openai@npm:6.15.0"
+"openai@npm:^6.33.0":
+  version: 6.33.0
+  resolution: "openai@npm:6.33.0"
   peerDependencies:
     ws: ^8.18.0
     zod: ^3.25 || ^4.0
@@ -1596,7 +1596,7 @@ __metadata:
       optional: true
   bin:
     openai: bin/cli
-  checksum: 10c0/08400449dac9be2629f051045fb46b0384a1e9ba9738b72c23853a443857e3a81f237c2d306fbd287689b9c15c18790203893fc31611976617a6be474489df8e
+  checksum: 10c0/158b6466469d269e944ea64453e32f116193523f0fbe93e73193ebfd84e1be40d5bc2d6dbfada327d8b7c70ede4c6530c5e023e1dfb62a11b8706c46c6dc1889
   languageName: node
   linkType: hard
 
@@ -1992,7 +1992,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "tauri-apphowlingual@workspace:."
   dependencies:
-    "@anthropic-ai/sdk": "npm:^0.71.2"
+    "@anthropic-ai/sdk": "npm:^0.82.0"
     "@google/generative-ai": "npm:^0.24.1"
     "@sveltejs/adapter-static": "npm:^3.0.6"
     "@sveltejs/kit": "npm:^2.9.0"
@@ -2004,7 +2004,7 @@ __metadata:
     "@tauri-apps/plugin-opener": "npm:^2"
     "@types/node": "npm:^25.2.1"
     esbuild: "npm:0.27.2"
-    openai: "npm:^6.15.0"
+    openai: "npm:^6.33.0"
     sharp: "npm:^0.34.5"
     svelte: "npm:^5.0.0"
     svelte-check: "npm:^4.0.0"

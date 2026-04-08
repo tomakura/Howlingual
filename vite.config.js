@@ -48,9 +48,7 @@ export default defineConfig(async () => ({
         yarnBerryCache,
         path.resolve(projectRoot, ".yarn", "__virtual"),
       ],
-      // during local development allow serving files outside the allow list
-      // (prevents blocked requests for Yarn PnP virtual paths)
-      strict: false,
+      strict: true,
     },
   },
 }));
