@@ -4455,7 +4455,7 @@
               {#if inputQuery.trim()}
                 <button
                   class="textarea-action-btn"
-                  onclick={() => (inputQuery = "")}
+                  onclick={clearInput}
                   title={t(appLanguage, "clearText") || "テキストをクリア"}
                 >
                   <svg
