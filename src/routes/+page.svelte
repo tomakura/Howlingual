@@ -5623,7 +5623,7 @@
                     </div>
                   </div>
 
-                  <!-- Clipboard Ops -->
+                  <!-- Replace Selection -->
                   <div class="settings-section">
                     <div class="settings-label">
                       {t(appLanguage, "clipboardOps")}

@@ -89,7 +89,7 @@ impl Default for LastCursorPos {
     }
 }
 
-// Clipboard ops enabled flag (selection capture / replace)
+// Clipboard ops enabled flag for replacing the current selection.
 struct ClipboardOpsEnabled(Mutex<bool>);
 
 impl Default for ClipboardOpsEnabled {
@@ -573,10 +573,84 @@ fn send_paste_shortcut() {
     log::info!("[paste] Linux keyboard simulation not yet implemented");
 }
 
-// Windows: UI Automation implementation
+#[cfg(target_os = "macos")]
+type AXUIElementRef = *const std::ffi::c_void;
+#[cfg(target_os = "macos")]
+type AXError = i32;
+#[cfg(target_os = "macos")]
+const AX_ERROR_SUCCESS: AXError = 0;
+
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXUIElementCreateSystemWide() -> AXUIElementRef;
+    fn AXUIElementCopyAttributeValue(
+        element: AXUIElementRef,
+        attribute: core_foundation::string::CFStringRef,
+        value: *mut core_foundation::base::CFTypeRef,
+    ) -> AXError;
+}
+
+#[cfg(target_os = "macos")]
+fn ax_copy_attribute(
+    element: AXUIElementRef,
+    attribute: core_foundation::string::CFStringRef,
+) -> Option<core_foundation::base::CFType> {
+    use core_foundation::base::{CFType, CFTypeRef, TCFType};
+
+    let mut value: CFTypeRef = std::ptr::null();
+    let error = unsafe { AXUIElementCopyAttributeValue(element, attribute, &mut value) };
+    if error != AX_ERROR_SUCCESS || value.is_null() {
+        return None;
+    }
+
+    Some(unsafe { CFType::wrap_under_create_rule(value) })
+}
+
+#[cfg(target_os = "macos")]
+fn capture_selected_text_native() -> Option<String> {
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::string::CFString;
+
+    if !unsafe { AXIsProcessTrusted() } {
+        log::info!("[capture] macOS Accessibility is not trusted");
+        return None;
+    }
+
+    let system_wide = unsafe { AXUIElementCreateSystemWide() };
+    if system_wide.is_null() {
+        log::info!("[capture] Failed to create macOS system-wide AX element");
+        return None;
+    }
+    let _system_wide_guard =
+        unsafe { CFType::wrap_under_create_rule(system_wide as core_foundation::base::CFTypeRef) };
+
+    let focused_attr = CFString::from_static_string("AXFocusedUIElement");
+    let selected_text_attr = CFString::from_static_string("AXSelectedText");
+    let focused =
+        ax_copy_attribute(system_wide, focused_attr.as_concrete_TypeRef())?;
+    let selected = ax_copy_attribute(
+        focused.as_CFTypeRef() as AXUIElementRef,
+        selected_text_attr.as_concrete_TypeRef(),
+    )?;
+
+    let text = selected.downcast::<CFString>()?.to_string();
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    log::info!("[capture] Captured {} chars via macOS Accessibility", text.len());
+    Some(text)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn capture_selected_text_native() -> Option<String> {
+    None
+}
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn capture_selected_text() -> Option<String> {
+fn capture_selected_text_via_clipboard() -> Option<String> {
     log::info!("[capture] Starting text capture via Clipboard Hack...");
 
     let mut clipboard = Clipboard::new().ok()?;
@@ -620,24 +694,34 @@ fn capture_selected_text() -> Option<String> {
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn capture_selected_text(allow_clipboard_fallback: bool) -> Option<String> {
+    if let Some(text) = capture_selected_text_native() {
+        return Some(text);
+    }
+
+    if !allow_clipboard_fallback {
+        log::info!("[capture] Clipboard fallback is disabled");
+        return None;
+    }
+
+    capture_selected_text_via_clipboard()
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn trigger_quick_open(app: AppHandle) {
     log::info!("[shortcut] Trigger quick open called!");
     let cursor_pos = get_cursor_position();
-
-    // Capture text BEFORE spawning thread to avoid potential threading issues
-    let clipboard_enabled = app
+    let allow_clipboard_fallback = app
         .state::<ClipboardOpsEnabled>()
         .0
         .lock()
         .map(|g| *g)
-        .unwrap_or(true);
-    let selection = if clipboard_enabled {
-        capture_selected_text()
-    } else {
-        None
-    };
+        .unwrap_or(false);
+
+    // Capture text BEFORE spawning thread to avoid potential threading issues.
+    let selection = capture_selected_text(allow_clipboard_fallback);
     log::info!(
-        "[shortcut] Selection captured with UIA attempt: {:?}",
+        "[shortcut] Selection captured: {:?}",
         selection.as_ref().map(|s| s.len())
     );
 
