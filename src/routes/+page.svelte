@@ -476,8 +476,33 @@
     settingsReady = true;
   });
 
+  let pendingTranslationHistoryRun = false;
+  let ownedTranslationRunId: number | null = null;
+  const completedHistoryRunIds = new Set<number>();
+
+  function claimTranslationRun(p: any) {
+    if (
+      pendingTranslationHistoryRun &&
+      p.isTranslating &&
+      typeof p.runId === "number"
+    ) {
+      ownedTranslationRunId = p.runId;
+      pendingTranslationHistoryRun = false;
+    }
+  }
+
+  function shouldRecordCompletedTranslation(p: any) {
+    if (typeof p.runId !== "number") return false;
+    if (ownedTranslationRunId !== p.runId) return false;
+    if (completedHistoryRunIds.has(p.runId)) return false;
+    completedHistoryRunIds.add(p.runId);
+    ownedTranslationRunId = null;
+    return true;
+  }
+
   function applyTranslationUpdate(p: any) {
     if (!p || typeof p !== "object") return;
+    claimTranslationRun(p);
     const shouldRevealStreamUpdate = isTranslating || p.isTranslating;
     let streamContentChanged = false;
 
@@ -495,6 +520,7 @@
 
     if (isTranslating && !p.isTranslating) {
       if (
+        shouldRecordCompletedTranslation(p) &&
         p.translations &&
         p.translations.length > 0 &&
         p.translations.some((t: any) => t.text)
@@ -529,6 +555,10 @@
         recordUsage(1, usageTokens);
       }
       lastTranslatedText = p.inputQuery || inputQuery;
+      if (ownedTranslationRunId === p.runId) {
+        ownedTranslationRunId = null;
+      }
+      pendingTranslationHistoryRun = false;
     }
 
     isTranslating = Boolean(p.isTranslating);
@@ -3121,6 +3151,8 @@
       const styleMeta = Object.fromEntries(
         customStyles.map((s) => [s.id, { name: s.name, prompt: s.prompt }]),
       );
+      pendingTranslationHistoryRun = true;
+      ownedTranslationRunId = null;
       await invoke("start_translation", {
         payload: {
           text: inputQuery,
@@ -3139,6 +3171,8 @@
       console.error("Translation failed:", error);
       errorMessage = "Translation failed: " + String(error);
       isTranslating = false;
+      pendingTranslationHistoryRun = false;
+      ownedTranslationRunId = null;
     }
   }
 
@@ -3146,6 +3180,8 @@
 
   async function stopTranslation() {
     isTranslating = false;
+    pendingTranslationHistoryRun = false;
+    ownedTranslationRunId = null;
     try {
       await invoke("stop_translation", { runId: null });
     } catch (e) {
