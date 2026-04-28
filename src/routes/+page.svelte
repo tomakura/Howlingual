@@ -3310,6 +3310,7 @@
         <button
           class="icon-btn compact-ocr-btn"
           onclick={startOCR}
+          aria-label={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
           title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
         >
           <svg
@@ -3508,6 +3509,7 @@
                 <button
                   class="textarea-action-btn"
                   onclick={clearInput}
+                  aria-label={t(appLanguage, "clearText") || "テキストをクリア"}
                   title={t(appLanguage, "clearText") || "テキストをクリア"}
                 >
                   <svg
@@ -3535,6 +3537,8 @@
                       console.error("Failed to read clipboard:", e);
                     }
                   }}
+                  aria-label={t(appLanguage, "pasteFromClipboard") ||
+                    "クリップボードから貼り付け"}
                   title={t(appLanguage, "pasteFromClipboard") ||
                     "クリップボードから貼り付け"}
                 >
@@ -3856,6 +3860,7 @@
                       <button
                         class="icon-btn replace-btn"
                         class:replaced={replacedId === item.id}
+                        aria-label={t(appLanguage, "replaceSelection")}
                         title={t(appLanguage, "replaceSelection")}
                         disabled={!canReplaceSelection}
                         onclick={() => handleReplace(item.id, item.text)}
@@ -3893,6 +3898,7 @@
                       <div class="action-menu">
                         <button
                           class="icon-btn action-menu-trigger"
+                          aria-label={t(appLanguage, "moreActions")}
                           title={t(appLanguage, "moreActions")}
                           aria-expanded={actionMenuOpenId === item.id}
                           onclick={() => toggleActionMenu(item.id)}
@@ -4042,6 +4048,7 @@
             <button
               class="stack-indicator"
               onclick={() => (isStackExpanded = true)}
+              aria-label={t(appLanguage, "showMore") || "もっと見る"}
               title={t(appLanguage, "showMore") || "もっと見る"}
             >
               <div class="stack-layer layer-1"></div>
@@ -4191,6 +4198,7 @@
       <button
         class="icon-btn header-btn history-btn"
         class:animating={historyAnimating}
+        aria-label={t(appLanguage, "history")}
         title={t(appLanguage, "history")}
         onclick={openHistory}
         onmouseenter={triggerHistoryAnim}
@@ -4213,6 +4221,7 @@
       <button
         class="icon-btn header-btn settings-btn"
         class:animating={settingsAnimating}
+        aria-label={t(appLanguage, "settings")}
         title={t(appLanguage, "settings")}
         onclick={openSettings}
         onmouseenter={triggerSettingsAnim}
@@ -4242,6 +4251,7 @@
           <button
             class="win-btn-inline minimize"
             onclick={() => getCurrentWindow().minimize()}
+            aria-label={t(appLanguage, "minimizeWindow")}
             title={t(appLanguage, "minimizeWindow")}
           >
             <svg
@@ -4259,6 +4269,7 @@
           <button
             class="win-btn-inline maximize"
             onclick={() => getCurrentWindow().toggleMaximize()}
+            aria-label={t(appLanguage, "maximizeWindow")}
             title={t(appLanguage, "maximizeWindow")}
           >
             <svg
@@ -4283,6 +4294,7 @@
           <button
             class="win-btn-inline close"
             onclick={() => hideWindow()}
+            aria-label={t(appLanguage, "closeWindow")}
             title={t(appLanguage, "closeWindow")}
           >
             <svg
@@ -4492,6 +4504,7 @@
                 <button
                   class="textarea-action-btn"
                   onclick={clearInput}
+                  aria-label={t(appLanguage, "clearText") || "テキストをクリア"}
                   title={t(appLanguage, "clearText") || "テキストをクリア"}
                 >
                   <svg
@@ -4519,6 +4532,8 @@
                       console.error("Failed to read clipboard:", e);
                     }
                   }}
+                  aria-label={t(appLanguage, "pasteFromClipboard") ||
+                    "クリップボードから貼り付け"}
                   title={t(appLanguage, "pasteFromClipboard") ||
                     "クリップボードから貼り付け"}
                 >
@@ -4667,6 +4682,7 @@
             class="action-btn ocr-main-btn ocr-btn-animated"
             class:hidden={isScrolledDown}
             onclick={startOCR}
+            aria-label={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
             title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
           >
             <svg
@@ -5018,6 +5034,9 @@
                         class="icon-btn"
                         class:active={isSpeakingId === item.id}
                         class:animating={speakAnimating[item.id]}
+                        aria-label={isSpeakingId === item.id
+                          ? t(appLanguage, "stop")
+                          : t(appLanguage, "speak")}
                         title={isSpeakingId === item.id
                           ? t(appLanguage, "stop")
                           : t(appLanguage, "speak")}
@@ -5069,6 +5088,7 @@
                         class="icon-btn"
                         class:animating={copyAnimating[item.id]}
                         class:copied={copiedId === item.id}
+                        aria-label={t(appLanguage, "copy")}
                         title={t(appLanguage, "copy")}
                         onclick={() => handleCopy(item.id, item.text)}
                         onmouseenter={() => triggerCopyAnim(item.id)}
@@ -6080,6 +6100,7 @@
                                 class="icon-btn-small"
                                 onclick={() => moveStyle(i, "up")}
                                 disabled={i === 0}
+                                aria-label={t(appLanguage, "moveUp")}
                                 title={t(appLanguage, "moveUp")}
                               >
                                 <svg
@@ -6097,6 +6118,7 @@
                                 class="icon-btn-small"
                                 onclick={() => moveStyle(i, "down")}
                                 disabled={i === customStyles.length - 1}
+                                aria-label={t(appLanguage, "moveDown")}
                                 title={t(appLanguage, "moveDown")}
                               >
                                 <svg
@@ -6116,6 +6138,7 @@
                             >
                               <button
                                 class="icon-btn-small"
+                                aria-label={t(appLanguage, "editStyle")}
                                 title={t(appLanguage, "editStyle")}
                                 onclick={() => openStyleEditor(style)}
                               >
@@ -6137,6 +6160,7 @@
                               </button>
                               <button
                                 class="icon-btn-small danger"
+                                aria-label={t(appLanguage, "delete")}
                                 title={t(appLanguage, "delete")}
                                 onclick={() => deleteStyle(style.id)}
                               >
