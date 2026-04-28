@@ -1489,11 +1489,7 @@
       isOpeningMain = true; // Flag to prevent compact window from clearing text
 
       // Build handover payload with full translation state
-      console.log(
-        "[handover] Current translations:",
-        translations.length,
-        translations,
-      );
+      console.log("[handover] Current translations:", translations.length);
       const handoverPayload = JSON.stringify({
         sourceText: inputQuery,
         translations: translations.map((t) => ({
@@ -2006,9 +2002,10 @@
       if (isSpeakingId === id) isSpeakingId = null;
     };
 
-    console.log(
-      `[UI] TTS triggered for: "${text.substring(0, 20)}..." (Lang: ${langCode})`,
-    );
+    console.log("[UI] TTS triggered:", {
+      length: text.length,
+      lang: langCode,
+    });
     window.speechSynthesis.speak(utterance);
   }
 
