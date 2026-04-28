@@ -265,6 +265,7 @@ function extractPartialFromJsonLike(raw: string): Partial<AiResponse> | null {
 
 function isReasoningModelName(modelName: string): boolean {
 	return (
+		modelName.includes("gpt-5.5") ||
 		modelName.includes("gpt-oss") ||
 		modelName.includes("o1") ||
 		modelName.includes("o3") ||
@@ -272,6 +273,10 @@ function isReasoningModelName(modelName: string): boolean {
 		modelName.includes("deepseek-r1") ||
 		modelName.includes("k2-instruct")
 	);
+}
+
+function shouldUseOpenAIResponses(modelName: string): boolean {
+	return modelName.startsWith("gpt-5.5");
 }
 
 function getErrorStatus(err: unknown): number | undefined {
@@ -461,10 +466,78 @@ async function callOpenAI(
 	jsonMode = true,
 ): Promise<AiResponse> {
 	const client = getOpenAIClient(apiKey);
+	if (shouldUseOpenAIResponses(modelName)) {
+		return callOpenAIResponses(client, modelName, prompt, systemPrompt, {
+			signal,
+			jsonMode,
+		});
+	}
 	return callOpenAICompatible(client, modelName, prompt, systemPrompt, {
 		signal,
 		jsonMode,
 	});
+}
+
+function responseOutputText(response: any): string {
+	if (typeof response?.output_text === "string") return response.output_text;
+	const chunks: string[] = [];
+	for (const item of response?.output ?? []) {
+		for (const content of item?.content ?? []) {
+			if (content?.type === "output_text" && typeof content.text === "string") {
+				chunks.push(content.text);
+			}
+		}
+	}
+	return chunks.join("");
+}
+
+function buildOpenAIResponsesBody(
+	modelName: string,
+	prompt: string,
+	systemPrompt: string,
+	options: { jsonMode?: boolean; stream?: boolean } = {},
+) {
+	const body: any = {
+		model: modelName,
+		instructions: systemPrompt,
+		input: prompt,
+		store: false,
+	};
+	if (options.jsonMode !== false) {
+		body.text = { format: { type: "json_object" }, verbosity: "low" };
+	} else {
+		body.text = { verbosity: "low" };
+	}
+	if (isReasoningModelName(modelName)) {
+		body.reasoning = { effort: "low" };
+	}
+	if (options.stream) {
+		body.stream = true;
+	}
+	return body;
+}
+
+async function callOpenAIResponses(
+	openai: OpenAI,
+	modelName: string,
+	prompt: string,
+	systemPrompt: string,
+	options: { signal?: AbortSignal; jsonMode?: boolean } = {},
+): Promise<AiResponse> {
+	const response = await openai.responses.create(
+		buildOpenAIResponsesBody(modelName, prompt, systemPrompt, {
+			jsonMode: options.jsonMode,
+		}),
+		{ signal: options.signal },
+	);
+
+	const content = responseOutputText(response);
+	if (!content) throw new Error("No content from OpenAI Responses");
+
+	const parsed = parseJsonFromText<AiResponse>(content);
+	const usage = mapUsageToMetadata((response as any).usage);
+	if (usage) parsed.usage = usage;
+	return parsed;
 }
 
 async function callOpenAICompatible(
@@ -883,6 +956,64 @@ async function streamOpenAICompatible(
 	}
 }
 
+async function streamOpenAIResponses(
+	openai: OpenAI,
+	modelName: string,
+	prompt: string,
+	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void,
+	systemPrompt: string,
+	signal?: AbortSignal,
+	jsonMode = true
+) {
+	const stream = await openai.responses.create(
+		buildOpenAIResponsesBody(modelName, prompt, systemPrompt, {
+			jsonMode,
+			stream: true,
+		}),
+		{ signal },
+	);
+
+	let accumulatedText = "";
+	let lastPartialKey = "";
+	let finalUsage: UsageMetadata | undefined;
+
+	for await (const event of stream as any) {
+		if (signal?.aborted) return;
+		if (event.type === "response.output_text.delta" && event.delta) {
+			accumulatedText += event.delta;
+			const partial = tryParsePartialJson(accumulatedText);
+			if (partial) {
+				const key = JSON.stringify(partial);
+				if (key !== lastPartialKey) {
+					lastPartialKey = key;
+					onUpdate(partial);
+				}
+			}
+		} else if (event.type === "response.completed") {
+			finalUsage = mapUsageToMetadata(event.response?.usage);
+		} else if (event.type === "response.failed") {
+			throw new Error(
+				event.response?.error?.message ||
+					event.response?.error?.code ||
+					"OpenAI Responses stream failed",
+			);
+		} else if (event.type === "response.error") {
+			throw new Error(event.message || "OpenAI Responses stream error");
+		}
+	}
+
+	try {
+		if (accumulatedText.trim()) {
+			const final = parseJsonFromText<AiResponse>(accumulatedText);
+			onUpdate(final, finalUsage);
+		} else if (finalUsage) {
+			onUpdate({}, finalUsage);
+		}
+	} catch (e) {
+		console.warn("[OpenAI Responses] Final JSON parse failed:", e);
+	}
+}
+
 async function streamProviderChatCompletion(params: {
 	url: string;
 	apiKey?: string;
@@ -952,6 +1083,18 @@ async function streamOpenAI(
 	jsonMode = true
 ) {
 	const openai = getOpenAIClient(apiKey);
+	if (shouldUseOpenAIResponses(modelName)) {
+		await streamOpenAIResponses(
+			openai,
+			modelName,
+			prompt,
+			onUpdate,
+			systemPrompt,
+			signal,
+			jsonMode,
+		);
+		return;
+	}
 	await streamOpenAICompatible(
 		openai,
 		modelName,
