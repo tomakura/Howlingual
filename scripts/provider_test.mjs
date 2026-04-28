@@ -37,7 +37,7 @@ const prompt = getArgValue(
 );
 const anthropicDisplayName = getArgValue(
 	"--anthropic-display-name",
-	"Claude Sonnet 4.5",
+	"Claude Sonnet 4.6",
 );
 const anthropicModelOverride = getArgValue("--anthropic-model-id", "");
 
@@ -330,7 +330,7 @@ async function main() {
 			run: () =>
 				runGemini({
 					apiKey: env.GEMINI_API_KEY,
-					model: "gemini-3-flash-preview",
+					model: "gemini-3.1-flash-lite-preview",
 					stream: true,
 				}),
 		},

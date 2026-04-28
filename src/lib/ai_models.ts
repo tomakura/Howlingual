@@ -18,7 +18,7 @@ export type AiModelEntry = {
 export const DEFAULT_MODELS_BY_PROVIDER: Record<AiProvider, string> = {
 	openai: "gpt-5.4-mini",
 	gemini: "gemini-2.5-flash",
-	anthropic: "claude-sonnet-4-20250514",
+	anthropic: "claude-sonnet-4-6",
 	groq: "openai/gpt-oss-20b",
 	cerebras: "gpt-oss-120b",
 };
@@ -237,6 +237,19 @@ export const AI_MODELS: AiModelEntry[] = [
 		quality: "good",
 		streamingExperience: "great",
 	}),
+	buildModel("Claude Opus 4.7", "claude-opus-4-7", "anthropic", {
+		speed: "deliberate",
+		quality: "best",
+		streamingExperience: "delayed",
+	}),
+	buildModel("Claude Sonnet 4.6", "claude-sonnet-4-6", "anthropic", {
+		speed: "balanced",
+		quality: "best",
+	}),
+	buildModel("Claude Haiku 4.5", "claude-haiku-4-5-20251001", "anthropic", {
+		speed: "fast",
+		streamingExperience: "great",
+	}),
 	buildModel("Claude Opus 4.1", "claude-opus-4-1-20250805", "anthropic", {
 		speed: "deliberate",
 		quality: "best",
@@ -355,6 +368,9 @@ export const STREAMING_MODELS_BY_PROVIDER: Record<AiProvider, string[]> = {
 		"gemini-2.0-flash-lite",
 	],
 	anthropic: [
+		"claude-opus-4-7",
+		"claude-sonnet-4-6",
+		"claude-haiku-4-5-20251001",
 		"claude-opus-4-1-20250805",
 		"claude-opus-4-20250514",
 		"claude-sonnet-4-20250514",

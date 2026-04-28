@@ -79,6 +79,12 @@ assert.equal(
 	false,
 	"Stopped Gemini 3 Pro Preview should not be visible",
 );
+assert.ok(modelValues.has("claude-opus-4-7"), "Claude Opus 4.7 should be visible");
+assert.ok(modelValues.has("claude-sonnet-4-6"), "Claude Sonnet 4.6 should be visible");
+assert.ok(
+	modelValues.has("claude-haiku-4-5-20251001"),
+	"Claude Haiku 4.5 should be visible",
+);
 
 for (const [provider, streamingModels] of Object.entries(STREAMING_MODELS_BY_PROVIDER)) {
 	for (const model of streamingModels) {
