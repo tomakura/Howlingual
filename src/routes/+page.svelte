@@ -2691,6 +2691,10 @@
     isTranslating: false,
     errorMessage: "",
   };
+  const TRANSLATION_STREAM_UPDATE_INTERVAL_MS = 48;
+  let translationServiceQueuedPatch: Partial<TranslationServiceState> | null =
+    null;
+  let translationServiceEmitTimer: ReturnType<typeof setTimeout> | null = null;
 
   function getTranslationServiceMetrics(params: {
     startedAt: number;
@@ -2757,12 +2761,55 @@
 
   async function emitTranslationServiceUpdate(
     patch: Partial<TranslationServiceState> = {},
+    options: { immediate?: boolean } = {},
   ) {
-    translationServiceState = {
-      ...translationServiceState,
+    if (options.immediate) {
+      if (translationServiceEmitTimer !== null) {
+        clearTimeout(translationServiceEmitTimer);
+        translationServiceEmitTimer = null;
+      }
+      const queuedPatch = translationServiceQueuedPatch;
+      translationServiceQueuedPatch = null;
+      translationServiceState = {
+        ...translationServiceState,
+        ...(queuedPatch ?? {}),
+        ...patch,
+      };
+      await emit("translation_update", translationServiceState);
+      return;
+    }
+
+    translationServiceQueuedPatch = {
+      ...(translationServiceQueuedPatch ?? {}),
       ...patch,
     };
-    await emit("translation_update", translationServiceState);
+    if (translationServiceEmitTimer !== null) return;
+
+    translationServiceEmitTimer = setTimeout(() => {
+      translationServiceEmitTimer = null;
+      const queuedPatch = translationServiceQueuedPatch;
+      translationServiceQueuedPatch = null;
+      if (!queuedPatch) return;
+      translationServiceState = {
+        ...translationServiceState,
+        ...queuedPatch,
+      };
+      void emit("translation_update", translationServiceState);
+    }, TRANSLATION_STREAM_UPDATE_INTERVAL_MS);
+  }
+
+  function clearTranslationServiceUpdateQueue() {
+    if (translationServiceEmitTimer !== null) {
+      clearTimeout(translationServiceEmitTimer);
+      translationServiceEmitTimer = null;
+    }
+    translationServiceQueuedPatch = null;
+  }
+
+  async function emitImmediateTranslationServiceUpdate(
+    patch: Partial<TranslationServiceState> = {},
+  ) {
+    await emitTranslationServiceUpdate(patch, { immediate: true });
   }
 
   async function handleTranslationCommand(payload: TranslationCommandPayload) {
@@ -2775,7 +2822,7 @@
     let firstTokenAt = 0;
     let nextTranslations = makeEmptyTranslationSlots(candidateCount);
 
-    await emitTranslationServiceUpdate({
+    await emitImmediateTranslationServiceUpdate({
       inputQuery: payload.text,
       sourceLang: payload.sourceLang,
       detectedLang: "",
@@ -2848,7 +2895,7 @@
       );
 
       if (!abortController.signal.aborted) {
-        await emitTranslationServiceUpdate({
+        await emitImmediateTranslationServiceUpdate({
           isTranslating: false,
           techMetrics: getTranslationServiceMetrics({
             startedAt,
@@ -2863,7 +2910,7 @@
       }
     } catch (error) {
       if (abortController.signal.aborted) return;
-      await emitTranslationServiceUpdate({
+      await emitImmediateTranslationServiceUpdate({
         isTranslating: false,
         errorMessage: getFriendlyServiceError(error),
         techMetrics: getTranslationServiceMetrics({
@@ -2907,7 +2954,7 @@
     );
     const unlistenStop = listen("stop_translation_command", () => {
       translationServiceAbortController?.abort();
-      void emitTranslationServiceUpdate({ isTranslating: false });
+      void emitImmediateTranslationServiceUpdate({ isTranslating: false });
     });
     const unlistenSync = listen<any>("sync_input_command", (event) => {
       const payload = event.payload ?? {};
@@ -2917,7 +2964,7 @@
       const resetTranslations =
         Boolean(payload.resetTranslations) ||
         (textChanged && !translationServiceState.isTranslating);
-      void emitTranslationServiceUpdate({
+      void emitImmediateTranslationServiceUpdate({
         inputQuery: payload.text ?? translationServiceState.inputQuery,
         sourceLang: payload.sourceLang ?? translationServiceState.sourceLang,
         detectedLang: payload.detectedLang ?? translationServiceState.detectedLang,
@@ -2934,11 +2981,12 @@
       });
     });
     const unlistenRequest = listen("request_sync_state", () => {
-      void emitTranslationServiceUpdate();
+      void emitImmediateTranslationServiceUpdate();
     });
 
     return () => {
       translationServiceAbortController?.abort();
+      clearTranslationServiceUpdateQueue();
       void Promise.all([
         unlistenStart,
         unlistenStop,
