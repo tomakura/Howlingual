@@ -6,19 +6,13 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { listen, emit } from "@tauri-apps/api/event";
+  import { listen } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import {
     enable as enableAutostart,
     disable as disableAutostart,
     isEnabled as isAutostartEnabled,
   } from "@tauri-apps/plugin-autostart";
-  import {
-    translateTextStream,
-    type AiModel,
-    type AiResponse,
-    type UsageMetadata,
-  } from "$lib/ai_service";
   import {
     AI_MODELS,
     DEFAULT_MODELS_BY_PROVIDER,
@@ -38,6 +32,10 @@
   } from "$lib/i18n";
   import { getDefaultStyles } from "$lib/style_defaults";
 
+  type AiModel = string;
+  type ApiKeyPresence = "unset" | "session" | "stored";
+  type ApiKeyStatus = Record<AiProvider, ApiKeyPresence>;
+
   // ====== Animations ======
   const [send, receive] = crossfade({
     duration: 300,
@@ -53,12 +51,19 @@
   let selectedModel = $state<AiModel>(
     DEFAULT_MODELS_BY_PROVIDER.openai as AiModel,
   );
-  let apiKeys = $state({
+  let apiKeyDrafts = $state<Record<AiProvider, string>>({
     gemini: "",
     openai: "",
     anthropic: "",
     groq: "",
     cerebras: "",
+  });
+  let apiKeyStatus = $state<ApiKeyStatus>({
+    gemini: "unset",
+    openai: "unset",
+    anthropic: "unset",
+    groq: "unset",
+    cerebras: "unset",
   });
   let rememberApiKeys = $state(true);
   let defaultTargetLang = $state("日本語");
@@ -189,6 +194,10 @@
       .catch((err) => {
         console.warn("Failed to read app version", err);
       });
+  });
+
+  onMount(() => {
+    void refreshApiKeyStatus();
   });
 
   function detectLanguageSimple(text: string) {
@@ -467,144 +476,140 @@
     settingsReady = true;
   });
 
+  function applyTranslationUpdate(p: any) {
+    if (!p || typeof p !== "object") return;
+    const shouldRevealStreamUpdate = isTranslating || p.isTranslating;
+    let streamContentChanged = false;
+
+    // Ignore stale echoes while the user is actively typing.
+    if (p.inputQuery !== undefined && p.inputQuery !== inputQuery) {
+      const hasResults =
+        Array.isArray(p.translations) &&
+        p.translations.some((t: any) => t?.text);
+      if (textareaEl && document.activeElement === textareaEl) {
+        if (!p.isTranslating && !hasResults) {
+          return;
+        }
+      }
+    }
+
+    if (isTranslating && !p.isTranslating) {
+      if (
+        p.translations &&
+        p.translations.length > 0 &&
+        p.translations.some((t: any) => t.text)
+      ) {
+        const newEntry: HistoryItem = {
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          sourceText: p.inputQuery || inputQuery,
+          sourceLang: p.detectedLang || p.sourceLang || sourceLang,
+          targetLang: p.targetLang || targetLang,
+          isAutoDetect: isAutoDetect,
+          detectedLang: p.detectedLang || detectedLang || "",
+          translations: p.translations.map((t: any) => ({
+            text: t.text,
+            reason: t.reason,
+          })),
+          detailedExplanation: p.detailedExplanation
+            ? $state.snapshot(p.detailedExplanation)
+            : null,
+          styleLevels: p.styleLevels ? $state.snapshot(p.styleLevels) : {},
+        };
+        history = [newEntry, ...history].slice(0, 50);
+        localStorage.setItem("howlingual_history", JSON.stringify(history));
+
+        persistLastResult();
+
+        const usageTokens = Math.max(
+          0,
+          (p.techMetrics?.inputTokens ?? 0) +
+            (p.techMetrics?.outputTokens ?? 0),
+        );
+        recordUsage(1, usageTokens);
+      }
+      lastTranslatedText = p.inputQuery || inputQuery;
+    }
+
+    isTranslating = Boolean(p.isTranslating);
+    if (!p.isTranslating) {
+      if (
+        !isAutoDetect ||
+        inputQuery.trim().length >= 5 ||
+        !inputQuery.trim()
+      ) {
+        isDetecting = false;
+      }
+    }
+    if (Array.isArray(p.translations)) {
+      streamContentChanged = applyIncomingTranslations(
+        p.translations,
+        shouldRevealStreamUpdate,
+      );
+    }
+
+    if ("detailedExplanation" in p) {
+      const nextDetailedExplanation = p.detailedExplanation || null;
+      streamContentChanged =
+        streamContentChanged ||
+        nextDetailedExplanation !== detailedExplanation;
+      detailedExplanation = nextDetailedExplanation;
+      showExplanation = Boolean(p.detailedExplanation);
+    } else if (p.isTranslating) {
+      detailedExplanation = null;
+      showExplanation = false;
+    }
+    if (shouldRevealStreamUpdate && streamContentChanged) {
+      requestStreamAutoScroll();
+    }
+    if ("errorMessage" in p) {
+      errorMessage = p.errorMessage || "";
+    }
+    if (p.inputQuery && p.inputQuery !== inputQuery) {
+      inputQuery = p.inputQuery;
+    }
+
+    if (!isAutoDetect || inputQuery.trim().length >= 5) {
+      if (p.sourceLang) {
+        if (isAutoDetect && p.sourceLang !== AUTO_DETECT_LABEL) {
+          const incoming = p.detectedLang || p.sourceLang;
+          const localDetect = detectLanguageSimple(inputQuery);
+          detectedLang = localDetect === "日本語" ? "日本語" : incoming;
+          isDetecting = false;
+        } else {
+          applySourceLangFromSync(p.sourceLang, p.detectedLang);
+        }
+      } else if (p.detectedLang && isAutoDetect) {
+        const localDetect = detectLanguageSimple(inputQuery);
+        detectedLang = localDetect === "日本語" ? "日本語" : p.detectedLang;
+        isDetecting = false;
+      }
+    }
+
+    if (p.targetLang) {
+      targetLang = p.targetLang;
+    }
+
+    if (p.techMetrics) {
+      syncTechMetrics(p.techMetrics);
+    }
+
+    void tick().then(autoResize);
+  }
+
   // Service Integration
   onMount(() => {
     let unlisten: () => void;
     (async () => {
-      // Sync state on load
-      console.log("[UI] Requesting Sync State...");
-      await emit("request_sync_state");
+      try {
+        const state = await invoke<any>("request_translation_state");
+        applyTranslationUpdate(state);
+      } catch (error) {
+        console.warn("Failed to request translation state", error);
+      }
 
       unlisten = await listen<any>("translation_update", (event) => {
-        const p = event.payload;
-        const shouldRevealStreamUpdate = isTranslating || p.isTranslating;
-        let streamContentChanged = false;
-
-        // --- ECHO GUARD ---
-        // Ignore updates for old input text to prevent "jumpy" UI when typing fast.
-        // During active detection or translation, the service might echo old states.
-        if (p.inputQuery !== undefined && p.inputQuery !== inputQuery) {
-          // If this window is focused/typing, ignore stale echoes unless real translation is flowing.
-          const hasResults =
-            Array.isArray(p.translations) &&
-            p.translations.some((t: any) => t?.text);
-          if (textareaEl && document.activeElement === textareaEl) {
-            if (!p.isTranslating && !hasResults) {
-              return;
-            }
-          }
-        }
-
-        // Detect completion for History Saving
-        if (isTranslating && !p.isTranslating) {
-          // Translation just finished
-          if (
-            p.translations &&
-            p.translations.length > 0 &&
-            p.translations.some((t: any) => t.text)
-          ) {
-            const newEntry: HistoryItem = {
-              id: crypto.randomUUID(),
-              timestamp: Date.now(),
-              sourceText: p.inputQuery || inputQuery,
-              sourceLang: p.detectedLang || p.sourceLang || sourceLang,
-              targetLang: p.targetLang || targetLang,
-              isAutoDetect: isAutoDetect,
-              detectedLang: p.detectedLang || detectedLang || "",
-              translations: p.translations.map((t: any) => ({
-                text: t.text,
-                reason: t.reason,
-              })),
-              detailedExplanation: p.detailedExplanation
-                ? $state.snapshot(p.detailedExplanation)
-                : null,
-              styleLevels: p.styleLevels ? $state.snapshot(p.styleLevels) : {},
-            };
-            history = [newEntry, ...history].slice(0, 50);
-            localStorage.setItem("howlingual_history", JSON.stringify(history));
-
-            persistLastResult(); // Helper function
-
-            const usageTokens = Math.max(
-              0,
-              (p.techMetrics?.inputTokens ?? 0) +
-                (p.techMetrics?.outputTokens ?? 0),
-            );
-            recordUsage(1, usageTokens);
-          }
-          lastTranslatedText = p.inputQuery || inputQuery;
-        }
-
-        isTranslating = p.isTranslating;
-        if (!p.isTranslating) {
-          // Only stop detecting if we're not in the manual threshold-waiting state
-          if (
-            !isAutoDetect ||
-            inputQuery.trim().length >= 5 ||
-            !inputQuery.trim()
-          ) {
-            isDetecting = false;
-          }
-        }
-        if (Array.isArray(p.translations)) {
-          streamContentChanged = applyIncomingTranslations(
-            p.translations,
-            shouldRevealStreamUpdate,
-          );
-        }
-
-        if ("detailedExplanation" in p) {
-          const nextDetailedExplanation = p.detailedExplanation || null;
-          streamContentChanged =
-            streamContentChanged ||
-            nextDetailedExplanation !== detailedExplanation;
-          detailedExplanation = nextDetailedExplanation;
-          showExplanation = Boolean(p.detailedExplanation);
-        } else if (p.isTranslating) {
-          detailedExplanation = null;
-          showExplanation = false;
-        }
-        if (shouldRevealStreamUpdate && streamContentChanged) {
-          requestStreamAutoScroll();
-        }
-        if ("errorMessage" in p) {
-          errorMessage = p.errorMessage || "";
-        }
-        if (p.inputQuery && p.inputQuery !== inputQuery) {
-          inputQuery = p.inputQuery;
-        }
-
-        // Sync Language Settings
-        // Only accept updates if we have enough text to trust the backend (or if manual)
-        // This prevents "flash" updates where backend sees 1 char and says "English"
-        if (!isAutoDetect || inputQuery.trim().length >= 5) {
-          if (p.sourceLang) {
-            if (isAutoDetect && p.sourceLang !== AUTO_DETECT_LABEL) {
-              const incoming = p.detectedLang || p.sourceLang;
-              const localDetect = detectLanguageSimple(inputQuery);
-              detectedLang = localDetect === "日本語" ? "日本語" : incoming;
-              isDetecting = false;
-            } else {
-              applySourceLangFromSync(p.sourceLang, p.detectedLang);
-            }
-          } else if (p.detectedLang && isAutoDetect) {
-            const localDetect = detectLanguageSimple(inputQuery);
-            detectedLang = localDetect === "日本語" ? "日本語" : p.detectedLang;
-            isDetecting = false;
-          }
-        }
-
-        if (p.targetLang) {
-          targetLang = p.targetLang;
-        }
-
-        // Sync Metrics
-        if (p.techMetrics) {
-          syncTechMetrics(p.techMetrics);
-        }
-
-        // Auto-resize if needed
-        void tick().then(autoResize);
+        applyTranslationUpdate(event.payload);
       });
     })();
 
@@ -814,19 +819,9 @@
   // Auto-save settings when changed
   $effect(() => {
     if (!settingsReady) return;
-    const sanitizedApiKeys = rememberApiKeys
-      ? apiKeys
-      : {
-          gemini: "",
-          openai: "",
-          anthropic: "",
-          groq: "",
-          cerebras: "",
-        };
     const settings = {
       model: selectedModel,
       provider: selectedProvider,
-      apiKeys: sanitizedApiKeys,
       defaultTargetLang: defaultTargetLang,
       theme: theme,
       appLanguage: appLanguage,
@@ -971,13 +966,6 @@
 
     if (parsed.rememberApiKeys !== undefined)
       rememberApiKeys = parsed.rememberApiKeys;
-    const shouldApplyKeys =
-      parsed.rememberApiKeys !== undefined
-        ? parsed.rememberApiKeys
-        : rememberApiKeys;
-    if (parsed.apiKeys && shouldApplyKeys) {
-      apiKeys = { ...apiKeys, ...parsed.apiKeys };
-    }
     if (parsed.defaultTargetLang)
       defaultTargetLang = parsed.defaultTargetLang;
     if (parsed.theme) theme = parsed.theme;
@@ -1193,6 +1181,9 @@
   }
 
   function getApiKeyPlaceholder(provider: AiProvider) {
+    const status = apiKeyStatus[provider];
+    if (status === "stored") return t(appLanguage, "apiKeyStored");
+    if (status === "session") return t(appLanguage, "apiKeySession");
     switch (provider) {
       case "gemini":
         return "AIza...";
@@ -1203,6 +1194,54 @@
       case "openai":
       default:
         return "sk-...";
+    }
+  }
+
+  function getApiKeyStatusLabel(provider: AiProvider) {
+    switch (apiKeyStatus[provider]) {
+      case "stored":
+        return t(appLanguage, "apiKeyStored");
+      case "session":
+        return t(appLanguage, "apiKeySession");
+      case "unset":
+      default:
+        return t(appLanguage, "apiKeyUnset");
+    }
+  }
+
+  async function refreshApiKeyStatus() {
+    try {
+      apiKeyStatus = await invoke<ApiKeyStatus>("get_api_key_status");
+    } catch (error) {
+      console.warn("Failed to load API key status", error);
+    }
+  }
+
+  async function saveSelectedApiKey() {
+    const value = apiKeyDrafts[selectedProvider]?.trim() ?? "";
+    if (!value) return;
+    try {
+      apiKeyStatus = await invoke<ApiKeyStatus>("set_api_key", {
+        payload: {
+          provider: selectedProvider,
+          value,
+          persist: rememberApiKeys,
+        },
+      });
+      apiKeyDrafts = { ...apiKeyDrafts, [selectedProvider]: "" };
+    } catch (error) {
+      console.warn("Failed to save API key", error);
+    }
+  }
+
+  async function clearSelectedApiKey() {
+    try {
+      apiKeyStatus = await invoke<ApiKeyStatus>("clear_api_key", {
+        payload: { provider: selectedProvider },
+      });
+      apiKeyDrafts = { ...apiKeyDrafts, [selectedProvider]: "" };
+    } catch (error) {
+      console.warn("Failed to clear API key", error);
     }
   }
 
@@ -1544,7 +1583,7 @@
 
         await tick();
         await autoResize();
-        await emit("request_sync_state");
+        await syncSharedState(false);
       } else {
         // Valid JSON but not our state object? Treat as text.
         await applyQuickText(typeof data === "string" ? data : payload);
@@ -1608,15 +1647,17 @@
   let syncTimer: ReturnType<typeof setTimeout> | null = null;
 
   async function syncSharedState(resetTranslations = false) {
-    await emit("sync_input_command", {
-      text: inputQuery,
-      sourceLang,
-      detectedLang,
-      isDetecting,
-      targetLang,
-      styles: $state.snapshot(styleLevels),
-      candidateCount: translationCount,
-      resetTranslations,
+    await invoke("sync_translation_context", {
+      payload: {
+        inputQuery,
+        sourceLang,
+        detectedLang,
+        isDetecting,
+        targetLang,
+        styleLevels: $state.snapshot(styleLevels),
+        candidateCount: translationCount,
+        resetTranslations,
+      },
     });
   }
 
@@ -2883,366 +2924,6 @@
     };
   });
 
-  type TranslationCandidateState = {
-    id: number;
-    text: string;
-    reason: string;
-  };
-
-  type TranslationServiceState = {
-    inputQuery: string;
-    sourceLang: string;
-    detectedLang: string;
-    targetLang: string;
-    translations: TranslationCandidateState[];
-    detailedExplanation: AiResponse["detailed_explanation"] | null;
-    styleLevels: Record<string, number>;
-    techMetrics: TechMetrics;
-    isTranslating: boolean;
-    errorMessage: string;
-  };
-
-  type TranslationCommandPayload = {
-    text: string;
-    sourceLang: string;
-    targetLang: string;
-    styles: Record<string, number>;
-    styleMeta?: Record<string, { name: string; prompt?: string }>;
-    model: AiModel;
-    provider?: AiProvider | null;
-    explanationLang?: string;
-    apiKeys?: Record<string, string>;
-    initialTokens?: number;
-    candidateCount?: number;
-  };
-
-  const makeEmptyTranslationSlots = (count: number) =>
-    Array.from({ length: Math.max(1, count) }, (_, index) => ({
-      id: index + 1,
-      text: "",
-      reason: "",
-    }));
-
-  let translationServiceAbortController: AbortController | null = null;
-  let translationServiceState: TranslationServiceState = {
-    inputQuery: "",
-    sourceLang: AUTO_DETECT_LABEL,
-    detectedLang: "",
-    targetLang: "日本語",
-    translations: [],
-    detailedExplanation: null,
-    styleLevels: {},
-    techMetrics: { ...EMPTY_TECH_METRICS },
-    isTranslating: false,
-    errorMessage: "",
-  };
-  const TRANSLATION_STREAM_UPDATE_INTERVAL_MS = 48;
-  let translationServiceQueuedPatch: Partial<TranslationServiceState> | null =
-    null;
-  let translationServiceEmitTimer: ReturnType<typeof setTimeout> | null = null;
-
-  function getTranslationServiceMetrics(params: {
-    startedAt: number;
-    firstTokenAt: number;
-    model: string;
-    text: string;
-    translations: TranslationCandidateState[];
-    initialTokens?: number;
-    usage?: UsageMetadata;
-    isStreaming: boolean;
-  }): TechMetrics {
-    const now = Date.now();
-    const time = Math.max(0, (now - params.startedAt) / 1000);
-    const translatedChars = params.translations.reduce(
-      (sum, item) => sum + item.text.length + item.reason.length,
-      0,
-    );
-    const firstTokenAt =
-      params.firstTokenAt || (translatedChars > 0 || params.usage ? now : 0);
-    const waitTime = firstTokenAt
-      ? Math.max(0, (firstTokenAt - params.startedAt) / 1000)
-      : time;
-    const genTime = firstTokenAt ? Math.max(0, time - waitTime) : 0;
-    const outputTokens =
-      params.usage?.output_tokens ?? Math.max(0, Math.ceil(translatedChars / 4));
-
-    return {
-      time,
-      waitTime,
-      genTime,
-      model: params.model,
-      inputTokens:
-        params.usage?.input_tokens ??
-        params.initialTokens ??
-        Math.max(0, Math.ceil(params.text.length / 1.5)),
-      outputTokens,
-      tokensPerSec: genTime > 0 ? outputTokens / genTime : 0,
-      streamMode: params.isStreaming,
-      isReal: Boolean(params.usage),
-      firstTokenReceived: Boolean(firstTokenAt),
-    };
-  }
-
-  function mergeTranslationPartial(
-    current: TranslationCandidateState[],
-    partial: Partial<AiResponse>,
-    candidateCount: number,
-  ) {
-    const next =
-      current.length > 0
-        ? current.map((item) => ({ ...item }))
-        : makeEmptyTranslationSlots(candidateCount);
-
-    partial.candidates?.forEach((candidate, index) => {
-      next[index] = {
-        id: index + 1,
-        text: candidate.text ?? next[index]?.text ?? "",
-        reason: candidate.reason ?? next[index]?.reason ?? "",
-      };
-    });
-
-    return next;
-  }
-
-  async function emitTranslationServiceUpdate(
-    patch: Partial<TranslationServiceState> = {},
-    options: { immediate?: boolean } = {},
-  ) {
-    if (options.immediate) {
-      if (translationServiceEmitTimer !== null) {
-        clearTimeout(translationServiceEmitTimer);
-        translationServiceEmitTimer = null;
-      }
-      const queuedPatch = translationServiceQueuedPatch;
-      translationServiceQueuedPatch = null;
-      translationServiceState = {
-        ...translationServiceState,
-        ...(queuedPatch ?? {}),
-        ...patch,
-      };
-      await emit("translation_update", translationServiceState);
-      return;
-    }
-
-    translationServiceQueuedPatch = {
-      ...(translationServiceQueuedPatch ?? {}),
-      ...patch,
-    };
-    if (translationServiceEmitTimer !== null) return;
-
-    translationServiceEmitTimer = setTimeout(() => {
-      translationServiceEmitTimer = null;
-      const queuedPatch = translationServiceQueuedPatch;
-      translationServiceQueuedPatch = null;
-      if (!queuedPatch) return;
-      translationServiceState = {
-        ...translationServiceState,
-        ...queuedPatch,
-      };
-      void emit("translation_update", translationServiceState);
-    }, TRANSLATION_STREAM_UPDATE_INTERVAL_MS);
-  }
-
-  function clearTranslationServiceUpdateQueue() {
-    if (translationServiceEmitTimer !== null) {
-      clearTimeout(translationServiceEmitTimer);
-      translationServiceEmitTimer = null;
-    }
-    translationServiceQueuedPatch = null;
-  }
-
-  async function emitImmediateTranslationServiceUpdate(
-    patch: Partial<TranslationServiceState> = {},
-  ) {
-    await emitTranslationServiceUpdate(patch, { immediate: true });
-  }
-
-  async function handleTranslationCommand(payload: TranslationCommandPayload) {
-    translationServiceAbortController?.abort();
-    const abortController = new AbortController();
-    translationServiceAbortController = abortController;
-
-    const candidateCount = payload.candidateCount ?? 3;
-    const startedAt = Date.now();
-    let firstTokenAt = 0;
-    let nextTranslations = makeEmptyTranslationSlots(candidateCount);
-
-    await emitImmediateTranslationServiceUpdate({
-      inputQuery: payload.text,
-      sourceLang: payload.sourceLang,
-      detectedLang: "",
-      targetLang: payload.targetLang,
-      translations: nextTranslations,
-      detailedExplanation: null,
-      styleLevels: payload.styles,
-      techMetrics: {
-        ...EMPTY_TECH_METRICS,
-        model: payload.model,
-        inputTokens:
-          payload.initialTokens ?? Math.max(0, Math.ceil(payload.text.length / 1.5)),
-        streamMode: true,
-      },
-      isTranslating: true,
-      errorMessage: "",
-    });
-
-    try {
-      await translateTextStream(
-        payload.text,
-        payload.sourceLang,
-        payload.targetLang,
-        payload.styles,
-        payload.model,
-        (partial, usage) => {
-          if (abortController.signal.aborted) return;
-          nextTranslations = mergeTranslationPartial(
-            nextTranslations,
-            partial,
-            candidateCount,
-          );
-          if (
-            firstTokenAt === 0 &&
-            (nextTranslations.some((item) => item.text || item.reason) || usage)
-          ) {
-            firstTokenAt = Date.now();
-          }
-          void emitTranslationServiceUpdate({
-            detectedLang:
-              partial.detected_source_language ??
-              translationServiceState.detectedLang,
-            sourceLang:
-              partial.detected_source_language ??
-              translationServiceState.sourceLang,
-            translations: nextTranslations,
-            detailedExplanation:
-              partial.detailed_explanation ??
-              translationServiceState.detailedExplanation,
-            techMetrics: getTranslationServiceMetrics({
-              startedAt,
-              firstTokenAt,
-              model: payload.model,
-              text: payload.text,
-              translations: nextTranslations,
-              initialTokens: payload.initialTokens,
-              usage,
-              isStreaming: true,
-            }),
-          });
-        },
-        payload.explanationLang ?? "日本語",
-        payload.styleMeta ?? {},
-        payload.apiKeys ?? {},
-        {
-          provider: payload.provider,
-          signal: abortController.signal,
-        },
-        candidateCount,
-      );
-
-      if (!abortController.signal.aborted) {
-        await emitImmediateTranslationServiceUpdate({
-          isTranslating: false,
-          techMetrics: getTranslationServiceMetrics({
-            startedAt,
-            firstTokenAt,
-            model: payload.model,
-            text: payload.text,
-            translations: nextTranslations,
-            initialTokens: payload.initialTokens,
-            isStreaming: true,
-          }),
-        });
-      }
-    } catch (error) {
-      if (abortController.signal.aborted) return;
-      await emitImmediateTranslationServiceUpdate({
-        isTranslating: false,
-        errorMessage: getFriendlyServiceError(error),
-        techMetrics: getTranslationServiceMetrics({
-          startedAt,
-          firstTokenAt,
-          model: payload.model,
-          text: payload.text,
-          translations: nextTranslations,
-          initialTokens: payload.initialTokens,
-          isStreaming: true,
-        }),
-      });
-    } finally {
-      if (translationServiceAbortController === abortController) {
-        translationServiceAbortController = null;
-      }
-    }
-  }
-
-  function getFriendlyServiceError(error: unknown) {
-    if (error instanceof Error) return error.message;
-    return String(error);
-  }
-
-  function shouldHandleTranslationServiceEvents() {
-    try {
-      return getCurrentWindow().label === "main";
-    } catch {
-      return true;
-    }
-  }
-
-  onMount(() => {
-    if (!shouldHandleTranslationServiceEvents()) return;
-
-    const unlistenStart = listen<TranslationCommandPayload>(
-      "start_translation_command",
-      (event) => {
-        void handleTranslationCommand(event.payload);
-      },
-    );
-    const unlistenStop = listen("stop_translation_command", () => {
-      translationServiceAbortController?.abort();
-      void emitImmediateTranslationServiceUpdate({ isTranslating: false });
-    });
-    const unlistenSync = listen<any>("sync_input_command", (event) => {
-      const payload = event.payload ?? {};
-      const textChanged =
-        payload.text !== undefined &&
-        payload.text !== translationServiceState.inputQuery;
-      const resetTranslations =
-        Boolean(payload.resetTranslations) ||
-        (textChanged && !translationServiceState.isTranslating);
-      void emitImmediateTranslationServiceUpdate({
-        inputQuery: payload.text ?? translationServiceState.inputQuery,
-        sourceLang: payload.sourceLang ?? translationServiceState.sourceLang,
-        detectedLang: payload.detectedLang ?? translationServiceState.detectedLang,
-        targetLang: payload.targetLang ?? translationServiceState.targetLang,
-        styleLevels: payload.styles ?? translationServiceState.styleLevels,
-        translations: resetTranslations ? [] : translationServiceState.translations,
-        detailedExplanation: resetTranslations
-          ? null
-          : translationServiceState.detailedExplanation,
-        errorMessage: resetTranslations ? "" : translationServiceState.errorMessage,
-        techMetrics: resetTranslations
-          ? { ...EMPTY_TECH_METRICS }
-          : translationServiceState.techMetrics,
-      });
-    });
-    const unlistenRequest = listen("request_sync_state", () => {
-      void emitImmediateTranslationServiceUpdate();
-    });
-
-    return () => {
-      translationServiceAbortController?.abort();
-      clearTranslationServiceUpdateQueue();
-      void Promise.all([
-        unlistenStart,
-        unlistenStop,
-        unlistenSync,
-        unlistenRequest,
-      ]).then((unlisteners) => {
-        unlisteners.forEach((unlisten) => unlisten());
-      });
-    };
-  });
-
   type DailyUsage = {
     date: string;
     count: number;
@@ -3440,22 +3121,22 @@
     }
 
     try {
-      // Use service-based translation to keep quick/main in sync
       const styleMeta = Object.fromEntries(
         customStyles.map((s) => [s.id, { name: s.name, prompt: s.prompt }]),
       );
-      await emit("start_translation_command", {
-        text: inputQuery,
-        sourceLang,
-        targetLang,
-        styles: styleLevels,
-        styleMeta,
-        model: currentModel,
-        provider: selectedProvider,
-        explanationLang: getLanguageName(appLanguage),
-        apiKeys: $state.snapshot(apiKeys),
-        initialTokens: Math.ceil(inputQuery.length / 1.5) + 40,
-        candidateCount: translationCount,
+      await invoke("start_translation", {
+        payload: {
+          text: inputQuery,
+          sourceLang,
+          targetLang,
+          styles: $state.snapshot(styleLevels),
+          styleMeta,
+          model: currentModel,
+          provider: selectedProvider,
+          explanationLang: getLanguageName(appLanguage),
+          initialTokens: Math.ceil(inputQuery.length / 1.5) + 40,
+          candidateCount: translationCount,
+        },
       });
     } catch (error) {
       console.error("Translation failed:", error);
@@ -3469,7 +3150,7 @@
   async function stopTranslation() {
     isTranslating = false;
     try {
-      await emit("stop_translation_command");
+      await invoke("stop_translation", { runId: null });
     } catch (e) {
       console.error("Failed to stop translation:", e);
     }
@@ -6229,9 +5910,31 @@
                       id="api-key-input"
                       type="password"
                       class="settings-input"
-                      bind:value={apiKeys[selectedProvider]}
+                      bind:value={apiKeyDrafts[selectedProvider]}
                       placeholder={getApiKeyPlaceholder(selectedProvider)}
                     />
+                    <div class="api-key-row">
+                      <span class="settings-note">
+                        {getApiKeyStatusLabel(selectedProvider)}
+                      </span>
+                      <div class="api-key-actions">
+                        <button
+                          class="rich-btn primary"
+                          type="button"
+                          disabled={!apiKeyDrafts[selectedProvider]?.trim()}
+                          onclick={saveSelectedApiKey}
+                        >
+                          {t(appLanguage, "save")}
+                        </button>
+                        <button
+                          class="rich-btn secondary"
+                          type="button"
+                          onclick={clearSelectedApiKey}
+                        >
+                          {t(appLanguage, "delete")}
+                        </button>
+                      </div>
+                    </div>
                   </div>
 
                   <!-- Model Selection (Filtered) -->
@@ -6966,6 +6669,27 @@
   .settings-note.top {
     margin-top: 0;
     margin-bottom: 8px;
+  }
+  .api-key-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 10px;
+  }
+  .api-key-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .api-key-actions .rich-btn {
+    flex: 0 0 auto;
+    min-width: 72px;
+    padding: 8px 12px;
+  }
+  .rich-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+    transform: none;
   }
   .container {
     display: flex;

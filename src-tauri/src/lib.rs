@@ -31,6 +31,7 @@ use xcap::Monitor;
 mod ocr_engine;
 #[cfg(windows)]
 mod ocr_native;
+mod translation_backend;
 
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -1857,6 +1858,13 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             greet,
+            translation_backend::sync_translation_context,
+            translation_backend::request_translation_state,
+            translation_backend::set_api_key,
+            translation_backend::clear_api_key,
+            translation_backend::get_api_key_status,
+            translation_backend::start_translation,
+            translation_backend::stop_translation,
             update_shortcut,
             open_main_window,
             get_pending_text,
@@ -1901,6 +1909,7 @@ pub fn run() {
             app.manage(ClipboardOpsEnabled::default());
             app.manage(CapturedImages::default());
             app.manage(OcrOriginState::default());
+            app.manage(translation_backend::TranslationBackendState::default());
             #[cfg(windows)]
             {
                 app.manage(PaddleOcrState(Mutex::new(None)));

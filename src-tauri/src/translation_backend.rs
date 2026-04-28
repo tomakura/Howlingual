@@ -1659,8 +1659,9 @@ pub fn get_api_key_status(
 pub fn stop_translation(
     app: AppHandle,
     state: State<'_, TranslationBackendState>,
-    _run_id: Option<u64>,
+    run_id: Option<u64>,
 ) -> Result<(), String> {
+    let _ = run_id;
     let next = with_backend_state(&state, |inner| {
         inner.state.run_id = inner.state.run_id.saturating_add(1);
         inner.state.is_translating = false;
