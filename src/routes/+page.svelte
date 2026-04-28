@@ -544,7 +544,9 @@
             isDetecting = false;
           }
         }
-        translations = p.translations; // Direct sync
+        if (Array.isArray(p.translations)) {
+          applyIncomingTranslations(p.translations);
+        }
 
         if ("detailedExplanation" in p) {
           detailedExplanation = p.detailedExplanation || null;
@@ -1489,6 +1491,7 @@
       const data = JSON.parse(payload);
       if (typeof data === "object" && data !== null && "sourceText" in data) {
         console.log("[Handover] Restoring full state");
+        resetStreamRevealState();
         inputQuery = data.sourceText || "";
         lastTranslatedText = inputQuery;
         // Map translations to ensure reactive updates if needed
@@ -1543,6 +1546,7 @@
   async function applyQuickText(text: string) {
     // Clear ALL previous state when new text arrives
     inputQuery = ""; // Clear first to force reactivity
+    resetStreamRevealState();
     // Pre-populate empty translation slots (so card backgrounds are visible)
     translations = Array.from({ length: translationCount }, (_, i) => ({
       id: i + 1,
@@ -1641,6 +1645,7 @@
       await stopTranslation();
     }
     inputQuery = "";
+    resetStreamRevealState();
     translations = [];
     detailedExplanation = null;
     showExplanation = false;
@@ -2221,6 +2226,11 @@
     { id: 2, text: "", reason: "" },
     { id: 3, text: "", reason: "" },
   ]);
+  const STREAM_REVEAL_MS = 420;
+  let streamRevealStartById = $state<Record<number, number>>({});
+  let previousTranslationTextById: Record<number, string> = {};
+  let streamRevealClearTimers: Record<number, ReturnType<typeof setTimeout>> =
+    {};
   let detailedExplanation: {
     points: { term: string; explanation: string }[];
   } | null = $state(null);
@@ -2229,6 +2239,107 @@
   let isDetecting = $state(false);
 
   let errorMessage = $state("");
+
+  function clearStreamRevealTimer(id: number) {
+    const timer = streamRevealClearTimers[id];
+    if (timer) clearTimeout(timer);
+    delete streamRevealClearTimers[id];
+  }
+
+  function clearStreamRevealStart(id: number) {
+    if (!(id in streamRevealStartById)) return;
+    const next = { ...streamRevealStartById };
+    delete next[id];
+    streamRevealStartById = next;
+  }
+
+  function setStreamRevealStart(id: number, start: number) {
+    streamRevealStartById = {
+      ...streamRevealStartById,
+      [id]: start,
+    };
+    clearStreamRevealTimer(id);
+    streamRevealClearTimers[id] = setTimeout(() => {
+      clearStreamRevealStart(id);
+      delete streamRevealClearTimers[id];
+    }, STREAM_REVEAL_MS);
+  }
+
+  function resetStreamRevealState() {
+    Object.keys(streamRevealClearTimers).forEach((id) => {
+      clearStreamRevealTimer(Number(id));
+    });
+    streamRevealStartById = {};
+    previousTranslationTextById = {};
+  }
+
+  function normalizeIncomingTranslations(items: any[]) {
+    return items.map((item, index) => ({
+      id: Number(item?.id ?? index + 1),
+      text: item?.text ?? "",
+      reason: item?.reason ?? "",
+    }));
+  }
+
+  function areTranslationsEqual(
+    current: { id: number; text: string; reason: string }[],
+    next: { id: number; text: string; reason: string }[],
+  ) {
+    if (current.length !== next.length) return false;
+    return current.every(
+      (item, index) =>
+        item.id === next[index].id &&
+        item.text === next[index].text &&
+        item.reason === next[index].reason,
+    );
+  }
+
+  function trackStreamReveal(
+    nextTranslations: { id: number; text: string; reason: string }[],
+  ) {
+    const activeIds = new Set<number>();
+    for (const item of nextTranslations) {
+      activeIds.add(item.id);
+      const previousText = previousTranslationTextById[item.id] ?? "";
+      const nextText = item.text ?? "";
+      if (nextText !== previousText) {
+        if (nextText && isTranslating) {
+          const revealStart =
+            previousText && nextText.startsWith(previousText)
+              ? previousText.length
+              : 0;
+          setStreamRevealStart(item.id, Math.min(revealStart, nextText.length));
+        } else {
+          clearStreamRevealTimer(item.id);
+          clearStreamRevealStart(item.id);
+        }
+      }
+      previousTranslationTextById[item.id] = nextText;
+    }
+
+    Object.keys(previousTranslationTextById).forEach((id) => {
+      const numericId = Number(id);
+      if (!activeIds.has(numericId)) {
+        delete previousTranslationTextById[numericId];
+        clearStreamRevealTimer(numericId);
+        clearStreamRevealStart(numericId);
+      }
+    });
+  }
+
+  function applyIncomingTranslations(items: any[]) {
+    const nextTranslations = normalizeIncomingTranslations(items);
+    trackStreamReveal(nextTranslations);
+    if (!areTranslationsEqual(translations, nextTranslations)) {
+      translations = nextTranslations;
+    }
+  }
+
+  function getStreamRevealStart(item: { id: number; text: string }) {
+    const start = streamRevealStartById[item.id];
+    if (typeof start !== "number") return item.text.length;
+    return Math.max(0, Math.min(start, item.text.length));
+  }
 
   // ====== Permission State (macOS only) ======
   let permissions = $state({
@@ -2422,6 +2533,7 @@
   });
 
   function loadHistory(item: HistoryItem) {
+    resetStreamRevealState();
     inputQuery = item.sourceText;
     lastTranslatedText = item.sourceText;
     // We try to match sourceLang/targetLang to available options if possible,
@@ -2506,6 +2618,7 @@
   function applyLastResult(snapshot: LastResultSnapshot) {
     if (!snapshot || isTranslating) return;
     if (!Array.isArray(snapshot.translations)) return;
+    resetStreamRevealState();
     inputQuery = snapshot.sourceText || "";
     lastTranslatedText = inputQuery;
     isAutoDetect = snapshot.isAutoDetect;
@@ -3165,6 +3278,7 @@
     showSourceLangMenu = false; // Close menu if open
     showTargetLangMenu = false; // Close menu if open
     // Clear content and set slots based on translationCount setting
+    resetStreamRevealState();
     const slots: { id: number; text: string; reason: string }[] = [];
     for (let i = 1; i <= translationCount; i++) {
       slots.push({ id: i, text: "", reason: "" });
@@ -3256,6 +3370,7 @@
     if (styleLevelsReady) {
       persistStyleLevels();
     }
+    resetStreamRevealState();
     if (handleBeforeUnloadRef) {
       window.removeEventListener("beforeunload", handleBeforeUnloadRef);
     }
@@ -3860,7 +3975,8 @@
                     ></div>
                     <div class="skeleton-line secondary"></div>
                   {:else}
-                    <p class="translated-text">{item.text}</p>
+                    {@const revealStart = getStreamRevealStart(item)}
+                    <p class="translated-text">{item.text.slice(0, revealStart)}{#if revealStart < item.text.length}<span class="stream-reveal">{item.text.slice(revealStart)}</span>{/if}</p>
                   {/if}
                   <div class="card-footer">
                     {#if item.reason}
@@ -4987,19 +5103,6 @@
           {:else if isTranslating && translations.every((t) => !t.text)}
             <!-- Loading State -->
             <div class="loading-state-container" in:fade={{ duration: 200 }}>
-              <div
-                class="shortcut-hint"
-                style="margin-bottom: 8px; text-align: center;"
-              >
-                {techMetrics.firstTokenReceived
-                  ? "ストリーム受信中..."
-                  : "ストリーム待機中..."}
-                {#if techMetrics.time > 0}
-                  <span style="margin-left: 6px;"
-                    >({techMetrics.time.toFixed(1)}s)</span
-                  >
-                {/if}
-              </div>
               {#each Array.from({ length: translationCount }, (_, i) => i + 1) as idx}
                 <div
                   class="skeleton-card"
@@ -5021,7 +5124,8 @@
                     ></div>
                     <div class="skeleton-line secondary"></div>
                   {:else}
-                    <p class="translated-text">{item.text}</p>
+                    {@const revealStart = getStreamRevealStart(item)}
+                    <p class="translated-text">{item.text.slice(0, revealStart)}{#if revealStart < item.text.length}<span class="stream-reveal">{item.text.slice(revealStart)}</span>{/if}</p>
                   {/if}
                   <div class="card-footer">
                     {#if item.reason}
@@ -8133,6 +8237,31 @@
     user-select: text;
     cursor: text;
     white-space: pre-wrap; /* Preserve newlines */
+  }
+
+  .stream-reveal {
+    display: inline;
+    animation: streamReveal 420ms ease-out both;
+    will-change: filter, opacity;
+  }
+
+  @keyframes streamReveal {
+    from {
+      filter: blur(6px);
+      opacity: 0.35;
+    }
+    to {
+      filter: blur(0);
+      opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .stream-reveal {
+      animation: none;
+      filter: none;
+      opacity: 1;
+    }
   }
 
   /* Error Display */
