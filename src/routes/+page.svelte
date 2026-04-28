@@ -31,10 +31,17 @@
     type AppLanguage,
   } from "$lib/i18n";
   import { getDefaultStyles } from "$lib/style_defaults";
+  import {
+    createEmptyApiKeyDrafts,
+    createEmptyApiKeyStatus,
+    getApiKeyLabel,
+    getApiKeyPlaceholder,
+    getApiKeyStatusLabel,
+    type ApiKeyDrafts,
+    type ApiKeyStatus,
+  } from "$lib/api_key_settings";
 
   type AiModel = string;
-  type ApiKeyPresence = "unset" | "session" | "stored";
-  type ApiKeyStatus = Record<AiProvider, ApiKeyPresence>;
 
   // ====== Animations ======
   const [send, receive] = crossfade({
@@ -51,20 +58,8 @@
   let selectedModel = $state<AiModel>(
     DEFAULT_MODELS_BY_PROVIDER.openai as AiModel,
   );
-  let apiKeyDrafts = $state<Record<AiProvider, string>>({
-    gemini: "",
-    openai: "",
-    anthropic: "",
-    groq: "",
-    cerebras: "",
-  });
-  let apiKeyStatus = $state<ApiKeyStatus>({
-    gemini: "unset",
-    openai: "unset",
-    anthropic: "unset",
-    groq: "unset",
-    cerebras: "unset",
-  });
+  let apiKeyDrafts = $state<ApiKeyDrafts>(createEmptyApiKeyDrafts());
+  let apiKeyStatus = $state<ApiKeyStatus>(createEmptyApiKeyStatus());
   let rememberApiKeys = $state(true);
   let defaultTargetLang = $state("日本語");
   let theme = $state<"dark" | "light">("dark");
@@ -1191,50 +1186,6 @@
       "howlingual_custom_styles",
       JSON.stringify(customStyles),
     );
-  }
-
-  function getApiKeyLabel(provider: AiProvider) {
-    switch (provider) {
-      case "openai":
-        return t(appLanguage, "openaiApiKey");
-      case "gemini":
-        return t(appLanguage, "geminiApiKey");
-      case "anthropic":
-        return t(appLanguage, "anthropicApiKey");
-      case "groq":
-        return t(appLanguage, "groqApiKey");
-      case "cerebras":
-        return t(appLanguage, "cerebrasApiKey");
-    }
-  }
-
-  function getApiKeyPlaceholder(provider: AiProvider) {
-    const status = apiKeyStatus[provider];
-    if (status === "stored") return t(appLanguage, "apiKeyStored");
-    if (status === "session") return t(appLanguage, "apiKeySession");
-    switch (provider) {
-      case "gemini":
-        return "AIza...";
-      case "anthropic":
-        return "sk-ant-...";
-      case "groq":
-      case "cerebras":
-      case "openai":
-      default:
-        return "sk-...";
-    }
-  }
-
-  function getApiKeyStatusLabel(provider: AiProvider) {
-    switch (apiKeyStatus[provider]) {
-      case "stored":
-        return t(appLanguage, "apiKeyStored");
-      case "session":
-        return t(appLanguage, "apiKeySession");
-      case "unset":
-      default:
-        return t(appLanguage, "apiKeyUnset");
-    }
   }
 
   async function refreshApiKeyStatus() {
@@ -5942,18 +5893,25 @@
                   <!-- API Key for Selected Provider -->
                   <div class="settings-section">
                     <label class="settings-label" for="api-key-input">
-                      {getApiKeyLabel(selectedProvider)}
+                      {getApiKeyLabel(appLanguage, selectedProvider)}
                     </label>
                     <input
                       id="api-key-input"
                       type="password"
                       class="settings-input"
                       bind:value={apiKeyDrafts[selectedProvider]}
-                      placeholder={getApiKeyPlaceholder(selectedProvider)}
+                      placeholder={getApiKeyPlaceholder(
+                        appLanguage,
+                        selectedProvider,
+                        apiKeyStatus[selectedProvider],
+                      )}
                     />
                     <div class="api-key-row">
                       <span class="settings-note">
-                        {getApiKeyStatusLabel(selectedProvider)}
+                        {getApiKeyStatusLabel(
+                          appLanguage,
+                          apiKeyStatus[selectedProvider],
+                        )}
                       </span>
                       <div class="api-key-actions">
                         <button
