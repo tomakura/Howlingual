@@ -538,6 +538,7 @@
             : null,
           styleLevels: p.styleLevels ? $state.snapshot(p.styleLevels) : {},
         };
+        loadHistoryCollections();
         history = [newEntry, ...history].slice(0, 50);
         localStorage.setItem("howlingual_history", JSON.stringify(history));
 
@@ -835,8 +836,20 @@
     window.addEventListener("storage", handleStorageChange);
   });
 
+  function scheduleIdle(callback: () => void) {
+    const requestIdle =
+      typeof window !== "undefined"
+        ? (window as any).requestIdleCallback
+        : null;
+    if (typeof requestIdle === "function") {
+      requestIdle(callback, { timeout: 1500 });
+      return;
+    }
+    window.setTimeout(callback, 0);
+  }
+
   onMount(() => {
-    refreshUsageStats();
+    scheduleIdle(refreshUsageStats);
   });
 
   // Auto-save settings when changed
@@ -1266,6 +1279,7 @@
 
   function openHistory() {
     rememberFocusTarget();
+    loadHistoryCollections();
     showHistory = true;
   }
 
@@ -2588,6 +2602,7 @@
   }
 
   function toggleFavorite(item: HistoryItem) {
+    loadHistoryCollections();
     const itemKey = buildFavoriteKey(item);
     const existingIdx = favorites.findIndex(
       (f) => f.id === item.id || buildFavoriteKey(f) === itemKey,
@@ -2605,6 +2620,7 @@
   }
 
   function isFavorited(sourceText: string): boolean {
+    loadHistoryCollections();
     const key = buildFavoriteKey({
       sourceText,
       translations: translations.map((t) => ({
@@ -2616,6 +2632,7 @@
   }
 
   function isFavoritedById(id: string): boolean {
+    loadHistoryCollections();
     const item = history.find((h) => h.id === id);
     if (item) {
       const key = buildFavoriteKey(item);
@@ -2625,11 +2642,13 @@
   }
 
   function deleteHistoryItem(id: string) {
+    loadHistoryCollections();
     history = history.filter((h) => h.id !== id);
     localStorage.setItem("howlingual_history", JSON.stringify(history));
   }
 
   function moveFavorite(index: number, direction: "up" | "down") {
+    loadHistoryCollections();
     const newIdx = direction === "up" ? index - 1 : index + 1;
     if (newIdx < 0 || newIdx >= favorites.length) return;
     const newFavs = [...favorites];
@@ -2639,17 +2658,15 @@
   }
 
   function deleteFavorite(id: string) {
+    loadHistoryCollections();
     favorites = favorites.filter((f) => f.id !== id);
     localStorage.setItem("howlingual_favorites", JSON.stringify(favorites));
   }
 
-  onMount(() => {
-    // Scroll handling
-    const container = scrollContainerEl;
-    if (container) {
-      // ... (existing resize observer logic inside onMount if any? No, existing code uses actions)
-    }
-
+  let historyCollectionsLoaded = false;
+  function loadHistoryCollections() {
+    if (historyCollectionsLoaded) return;
+    historyCollectionsLoaded = true;
     const savedHistory = localStorage.getItem("howlingual_history");
     if (savedHistory) {
       try {
@@ -2667,11 +2684,7 @@
         console.error("Failed to load favorites", e);
       }
     }
-
-    /* Duplicate customStyles loading removed - already handled in first onMount */
-
-    /* Last result loading disabled by user request */
-  });
+  }
 
   function loadHistory(item: HistoryItem) {
     resetStreamRevealState();
