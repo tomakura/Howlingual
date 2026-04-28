@@ -2167,7 +2167,7 @@
         if (scrollContainerEl && autoScrollEnabled) {
           scrollContainerEl.scrollTo({
             top: scrollContainerEl.scrollHeight,
-            behavior: "smooth",
+            behavior: isTranslating ? "auto" : "smooth",
           });
         }
       });
@@ -4947,7 +4947,7 @@
             <span class="tech-divider">|</span>
             <span class="tech-item tech-tokens">
               <span class="token-row">
-                <span class="tech-label">In:</span>
+                <span class="tech-label">↑</span>
                 {#if isTranslating && !techMetrics.isReal}
                   <div
                     class="skeleton-line"
@@ -4958,7 +4958,7 @@
                 {/if}
               </span>
               <span class="token-row">
-                <span class="tech-label">Out:</span>
+                <span class="tech-label">↓</span>
                 {#if isTranslating && !techMetrics.isReal}
                   <div
                     class="skeleton-line"
@@ -7065,6 +7065,7 @@
 
   .output-area.compact-output {
     gap: 10px;
+    overflow-anchor: none;
   }
 
   .stack-collapse-row,
@@ -8237,6 +8238,10 @@
     user-select: text;
     cursor: text;
     white-space: pre-wrap; /* Preserve newlines */
+  }
+
+  .compact-shell .translated-text {
+    overflow-wrap: anywhere;
   }
 
   .stream-reveal {
