@@ -1,6 +1,5 @@
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::borrow::Cow;
-use std::collections::HashMap;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::fs;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -96,15 +95,6 @@ struct ClipboardOpsEnabled(Mutex<bool>);
 impl Default for ClipboardOpsEnabled {
     fn default() -> Self {
         Self(Mutex::new(false))
-    }
-}
-
-// Store captured screen images for OCR (one per monitor)
-struct CapturedImages(Mutex<HashMap<String, image::RgbaImage>>);
-
-impl Default for CapturedImages {
-    fn default() -> Self {
-        Self(Mutex::new(HashMap::new()))
     }
 }
 
@@ -1585,11 +1575,6 @@ fn cancel_selection_ocr(app: AppHandle) {
     if let Err(e) = close_capture_windows(&app) {
         log::info!("[ocr] Warning: Failed to close some capture windows: {}", e);
         // Don't clear state if windows might still be active
-    } else {
-        // Only clear the state if all windows were successfully closed
-        if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
-            lock.clear();
-        }
     }
 
     // Restore original window
@@ -1902,7 +1887,6 @@ pub fn run() {
             app.manage(HandoverText::default());
             app.manage(LastCursorPos::default());
             app.manage(ClipboardOpsEnabled::default());
-            app.manage(CapturedImages::default());
             app.manage(OcrOriginState::default());
             app.manage(translation_backend::TranslationBackendState::default());
             #[cfg(windows)]
