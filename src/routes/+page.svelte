@@ -478,6 +478,7 @@
       unlisten = await listen<any>("translation_update", (event) => {
         const p = event.payload;
         const shouldRevealStreamUpdate = isTranslating || p.isTranslating;
+        let streamContentChanged = false;
 
         // --- ECHO GUARD ---
         // Ignore updates for old input text to prevent "jumpy" UI when typing fast.
@@ -546,15 +547,25 @@
           }
         }
         if (Array.isArray(p.translations)) {
-          applyIncomingTranslations(p.translations, shouldRevealStreamUpdate);
+          streamContentChanged = applyIncomingTranslations(
+            p.translations,
+            shouldRevealStreamUpdate,
+          );
         }
 
         if ("detailedExplanation" in p) {
-          detailedExplanation = p.detailedExplanation || null;
+          const nextDetailedExplanation = p.detailedExplanation || null;
+          streamContentChanged =
+            streamContentChanged ||
+            nextDetailedExplanation !== detailedExplanation;
+          detailedExplanation = nextDetailedExplanation;
           showExplanation = Boolean(p.detailedExplanation);
         } else if (p.isTranslating) {
           detailedExplanation = null;
           showExplanation = false;
+        }
+        if (shouldRevealStreamUpdate && streamContentChanged) {
+          requestStreamAutoScroll();
         }
         if ("errorMessage" in p) {
           errorMessage = p.errorMessage || "";
@@ -2099,9 +2110,16 @@
 
   // Auto-scroll during streaming (like modern AI chat apps)
   let autoScrollEnabled = $state(true);
+  let isProgrammaticScroll = false;
   let lastScrollTop = 0;
   let isAtBottom = $state(true);
   let lastStreamCharCount = $state(0);
+  let streamAutoScrollVersion = $state(0);
+  let lastHandledStreamAutoScrollVersion = 0;
+
+  function requestStreamAutoScroll() {
+    streamAutoScrollVersion += 1;
+  }
 
   function onMainScroll() {
     if (!scrollContainerEl || !textareaEl) return;
@@ -2133,7 +2151,9 @@
     isScrolledDown = scrollContainerEl.scrollTop > threshold;
 
     // Auto-scroll logic: detect if user scrolled up
-    if (isTranslating) {
+    if (isProgrammaticScroll) {
+      autoScrollEnabled = true;
+    } else if (isTranslating) {
       // Allow slight tolerance for "bottom"
       const isNearBottom = scrollHeight - scrollTop - clientHeight < 30;
 
@@ -2165,12 +2185,27 @@
       }
       autoScrollRafId = requestAnimationFrame(() => {
         autoScrollRafId = null;
-        if (scrollContainerEl && autoScrollEnabled) {
-          scrollContainerEl.scrollTo({
-            top: scrollContainerEl.scrollHeight,
-            behavior: isTranslating ? "auto" : "smooth",
+        const scrollToEnd = () => {
+          if (!scrollContainerEl || !autoScrollEnabled) return;
+          isProgrammaticScroll = true;
+          if (isTranslating) {
+            scrollContainerEl.scrollTop = scrollContainerEl.scrollHeight;
+          } else {
+            scrollContainerEl.scrollTo({
+              top: scrollContainerEl.scrollHeight,
+              behavior: "smooth",
+            });
+          }
+          checkBottomPosition();
+        };
+        scrollToEnd();
+        requestAnimationFrame(() => {
+          scrollToEnd();
+          requestAnimationFrame(() => {
+            isProgrammaticScroll = false;
+            checkBottomPosition();
           });
-        }
+        });
       });
     }
   }
@@ -2190,11 +2225,24 @@
   $effect(() => {
     if (!scrollContainerEl) return;
     translations;
+    detailedExplanation;
+    const autoScrollVersion = streamAutoScrollVersion;
     const currentCharCount = translations.reduce(
-      (sum, t) => sum + (t.text ? t.text.length : 0),
+      (sum, t) => sum + (t.text?.length ?? 0) + (t.reason?.length ?? 0),
+      0,
+    ) + (detailedExplanation?.points ?? []).reduce(
+      (sum, point) => sum + point.term.length + point.explanation.length,
       0,
     );
-    if (isTranslating && currentCharCount > lastStreamCharCount) {
+    const hasStreamScrollRequest =
+      autoScrollVersion > lastHandledStreamAutoScrollVersion;
+    if (hasStreamScrollRequest) {
+      lastHandledStreamAutoScrollVersion = autoScrollVersion;
+    }
+    if (
+      hasStreamScrollRequest ||
+      (isTranslating && currentCharCount > lastStreamCharCount)
+    ) {
       void tick().then(autoScrollToBottom);
     }
     lastStreamCharCount = currentCharCount;
@@ -2227,10 +2275,23 @@
     { id: 2, text: "", reason: "" },
     { id: 3, text: "", reason: "" },
   ]);
-  const STREAM_REVEAL_MS = 420;
-  let streamRevealStartById = $state<Record<number, number>>({});
+  const STREAM_REVEAL_MS = 560;
+  type StreamRevealSegment = {
+    key: number;
+    start: number;
+    end: number;
+  };
+  type StreamTextPart = {
+    key: string;
+    text: string;
+    reveal: boolean;
+  };
+  let streamRevealSegmentsById = $state<Record<number, StreamRevealSegment[]>>(
+    {},
+  );
+  let streamRevealSegmentKey = 0;
   let previousTranslationTextById: Record<number, string> = {};
-  let streamRevealClearTimers: Record<number, ReturnType<typeof setTimeout>> =
+  let streamRevealClearTimers: Record<string, ReturnType<typeof setTimeout>> =
     {};
   let detailedExplanation: {
     points: { term: string; explanation: string }[];
@@ -2241,36 +2302,65 @@
 
   let errorMessage = $state("");
 
-  function clearStreamRevealTimer(id: number) {
-    const timer = streamRevealClearTimers[id];
+  function getStreamRevealTimerKey(candidateId: number, segmentKey: number) {
+    return `${candidateId}:${segmentKey}`;
+  }
+
+  function clearStreamRevealTimer(timerKey: string) {
+    const timer = streamRevealClearTimers[timerKey];
     if (timer) clearTimeout(timer);
-    delete streamRevealClearTimers[id];
+    delete streamRevealClearTimers[timerKey];
   }
 
-  function clearStreamRevealStart(id: number) {
-    if (!(id in streamRevealStartById)) return;
-    const next = { ...streamRevealStartById };
-    delete next[id];
-    streamRevealStartById = next;
+  function removeStreamRevealSegment(candidateId: number, segmentKey: number) {
+    const current = streamRevealSegmentsById[candidateId];
+    if (!current) return;
+    const nextSegments = current.filter((segment) => segment.key !== segmentKey);
+    const next = { ...streamRevealSegmentsById };
+    if (nextSegments.length > 0) {
+      next[candidateId] = nextSegments;
+    } else {
+      delete next[candidateId];
+    }
+    streamRevealSegmentsById = next;
   }
 
-  function setStreamRevealStart(id: number, start: number) {
-    streamRevealStartById = {
-      ...streamRevealStartById,
-      [id]: start,
+  function clearStreamRevealSegmentsForCandidate(candidateId: number) {
+    for (const segment of streamRevealSegmentsById[candidateId] ?? []) {
+      clearStreamRevealTimer(getStreamRevealTimerKey(candidateId, segment.key));
+    }
+    if (!(candidateId in streamRevealSegmentsById)) return;
+    const next = { ...streamRevealSegmentsById };
+    delete next[candidateId];
+    streamRevealSegmentsById = next;
+  }
+
+  function addStreamRevealSegment(candidateId: number, start: number, end: number) {
+    if (end <= start) return;
+    const segment: StreamRevealSegment = {
+      key: ++streamRevealSegmentKey,
+      start,
+      end,
     };
-    clearStreamRevealTimer(id);
-    streamRevealClearTimers[id] = setTimeout(() => {
-      clearStreamRevealStart(id);
-      delete streamRevealClearTimers[id];
+    streamRevealSegmentsById = {
+      ...streamRevealSegmentsById,
+      [candidateId]: [
+        ...(streamRevealSegmentsById[candidateId] ?? []),
+        segment,
+      ],
+    };
+    const timerKey = getStreamRevealTimerKey(candidateId, segment.key);
+    streamRevealClearTimers[timerKey] = setTimeout(() => {
+      removeStreamRevealSegment(candidateId, segment.key);
+      delete streamRevealClearTimers[timerKey];
     }, STREAM_REVEAL_MS);
   }
 
   function resetStreamRevealState() {
-    Object.keys(streamRevealClearTimers).forEach((id) => {
-      clearStreamRevealTimer(Number(id));
+    Object.keys(streamRevealClearTimers).forEach((timerKey) => {
+      clearStreamRevealTimer(timerKey);
     });
-    streamRevealStartById = {};
+    streamRevealSegmentsById = {};
     previousTranslationTextById = {};
   }
 
@@ -2306,14 +2396,14 @@
       const nextText = item.text ?? "";
       if (nextText !== previousText) {
         if (nextText && shouldReveal) {
-          const revealStart =
-            previousText && nextText.startsWith(previousText)
-              ? previousText.length
-              : 0;
-          setStreamRevealStart(item.id, Math.min(revealStart, nextText.length));
+          if (previousText && nextText.startsWith(previousText)) {
+            addStreamRevealSegment(item.id, previousText.length, nextText.length);
+          } else {
+            clearStreamRevealSegmentsForCandidate(item.id);
+            addStreamRevealSegment(item.id, 0, nextText.length);
+          }
         } else {
-          clearStreamRevealTimer(item.id);
-          clearStreamRevealStart(item.id);
+          clearStreamRevealSegmentsForCandidate(item.id);
         }
       }
       previousTranslationTextById[item.id] = nextText;
@@ -2323,8 +2413,7 @@
       const numericId = Number(id);
       if (!activeIds.has(numericId)) {
         delete previousTranslationTextById[numericId];
-        clearStreamRevealTimer(numericId);
-        clearStreamRevealStart(numericId);
+        clearStreamRevealSegmentsForCandidate(numericId);
       }
     });
   }
@@ -2332,15 +2421,56 @@
   function applyIncomingTranslations(items: any[], shouldReveal = isTranslating) {
     const nextTranslations = normalizeIncomingTranslations(items);
     trackStreamReveal(nextTranslations, shouldReveal);
-    if (!areTranslationsEqual(translations, nextTranslations)) {
+    const changed = !areTranslationsEqual(translations, nextTranslations);
+    if (changed) {
       translations = nextTranslations;
     }
+    return changed;
   }
 
-  function getStreamRevealStart(item: { id: number; text: string }) {
-    const start = streamRevealStartById[item.id];
-    if (typeof start !== "number") return item.text.length;
-    return Math.max(0, Math.min(start, item.text.length));
+  function getStreamTextParts(item: { id: number; text: string }): StreamTextPart[] {
+    const text = item.text ?? "";
+    const segments = (streamRevealSegmentsById[item.id] ?? [])
+      .map((segment) => ({
+        ...segment,
+        start: Math.max(0, Math.min(segment.start, text.length)),
+        end: Math.max(0, Math.min(segment.end, text.length)),
+      }))
+      .filter((segment) => segment.end > segment.start)
+      .sort((a, b) => a.start - b.start);
+
+    if (segments.length === 0) {
+      return text ? [{ key: `plain-${item.id}`, text, reveal: false }] : [];
+    }
+
+    const parts: StreamTextPart[] = [];
+    let cursor = 0;
+    for (const segment of segments) {
+      if (segment.start > cursor) {
+        parts.push({
+          key: `plain-${item.id}-${cursor}-${segment.start}`,
+          text: text.slice(cursor, segment.start),
+          reveal: false,
+        });
+      }
+      if (segment.end > cursor) {
+        const start = Math.max(cursor, segment.start);
+        parts.push({
+          key: `reveal-${item.id}-${segment.key}`,
+          text: text.slice(start, segment.end),
+          reveal: true,
+        });
+        cursor = segment.end;
+      }
+    }
+    if (cursor < text.length) {
+      parts.push({
+        key: `plain-${item.id}-${cursor}-end`,
+        text: text.slice(cursor),
+        reveal: false,
+      });
+    }
+    return parts;
   }
 
   // ====== Permission State (macOS only) ======
@@ -3977,8 +4107,15 @@
                     ></div>
                     <div class="skeleton-line secondary"></div>
                   {:else}
-                    {@const revealStart = getStreamRevealStart(item)}
-                    <p class="translated-text">{item.text.slice(0, revealStart)}{#if revealStart < item.text.length}<span class="stream-reveal">{item.text.slice(revealStart)}</span>{/if}</p>
+                    <p class="translated-text">
+                      {#each getStreamTextParts(item) as part (part.key)}
+                        {#if part.reveal}
+                          <span class="stream-reveal">{part.text}</span>
+                        {:else}
+                          {part.text}
+                        {/if}
+                      {/each}
+                    </p>
                   {/if}
                   <div class="card-footer">
                     {#if item.reason}
@@ -5126,8 +5263,15 @@
                     ></div>
                     <div class="skeleton-line secondary"></div>
                   {:else}
-                    {@const revealStart = getStreamRevealStart(item)}
-                    <p class="translated-text">{item.text.slice(0, revealStart)}{#if revealStart < item.text.length}<span class="stream-reveal">{item.text.slice(revealStart)}</span>{/if}</p>
+                    <p class="translated-text">
+                      {#each getStreamTextParts(item) as part (part.key)}
+                        {#if part.reveal}
+                          <span class="stream-reveal">{part.text}</span>
+                        {:else}
+                          {part.text}
+                        {/if}
+                      {/each}
+                    </p>
                   {/if}
                   <div class="card-footer">
                     {#if item.reason}
@@ -8248,7 +8392,7 @@
 
   .stream-reveal {
     display: inline;
-    animation: streamReveal 420ms ease-out both;
+    animation: streamReveal 560ms cubic-bezier(0.16, 1, 0.3, 1) both;
     will-change: filter, opacity;
   }
 
