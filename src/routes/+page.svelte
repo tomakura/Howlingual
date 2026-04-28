@@ -232,6 +232,7 @@
   let editingStyle = $state<CustomStyle | null>(null);
   let showResetConfirmation = $state(false);
   let showDiscardConfirmation = $state(false);
+  let showClipboardOpsConfirmation = $state(false);
 
   let styleOverflowOpen = $state(false);
 
@@ -1369,6 +1370,10 @@
         showDiscardConfirmation = false;
         return;
       }
+      if (showClipboardOpsConfirmation) {
+        showClipboardOpsConfirmation = false;
+        return;
+      }
       if (editingStyle) {
         showDiscardConfirmation = true;
         return;
@@ -1457,16 +1462,6 @@
       "howlingual_custom_styles",
       JSON.stringify(customStyles),
     );
-  }
-
-  function resetStyles() {
-    if (confirm(t(appLanguage, "confirmReset"))) {
-      customStyles = [...getDefaultStyles(appLanguage)];
-      localStorage.setItem(
-        "howlingual_custom_styles",
-        JSON.stringify(customStyles),
-      );
-    }
   }
 
   async function addStyle() {
@@ -1807,10 +1802,15 @@
 
   function toggleClipboardOps() {
     if (!clipboardOpsEnabled) {
-      const approved = confirm(t(appLanguage, "clipboardOpsConfirmEnable"));
-      if (!approved) return;
+      showClipboardOpsConfirmation = true;
+      return;
     }
-    clipboardOpsEnabled = !clipboardOpsEnabled;
+    clipboardOpsEnabled = false;
+  }
+
+  function confirmEnableClipboardOps() {
+    clipboardOpsEnabled = true;
+    showClipboardOpsConfirmation = false;
   }
 
   function applySourceLangFromSync(lang: string, detected?: string) {
@@ -6666,6 +6666,42 @@
   </div>
 {/if}
 
+{#if showClipboardOpsConfirmation && !isCaptureMode}
+  <div
+    class="modal-overlay"
+    transition:fade={{ duration: 200 }}
+  >
+    <button
+      type="button"
+      class="overlay-dismiss"
+      aria-label={t(appLanguage, "close")}
+      onclick={() => (showClipboardOpsConfirmation = false)}
+      tabindex="-1"
+    ></button>
+    <div
+      class="modal-card glass"
+      onclick={(e) => e.stopPropagation()}
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      onkeydown={(e) => e.stopPropagation()}
+    >
+      <h3>{t(appLanguage, "clipboardOps")}</h3>
+      <p class="modal-message">{t(appLanguage, "clipboardOpsConfirmEnable")}</p>
+      <div class="modal-actions">
+        <button
+          class="rich-btn secondary"
+          onclick={() => (showClipboardOpsConfirmation = false)}
+          >{t(appLanguage, "cancel")}</button
+        >
+        <button class="rich-btn danger" onclick={confirmEnableClipboardOps}
+          >{t(appLanguage, "clipboardOps")}</button
+        >
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#if showDiscardConfirmation && !isCaptureMode}
   <div
     class="modal-overlay"
@@ -9376,6 +9412,14 @@
     margin-bottom: 24px;
     font-size: 18px;
     color: var(--text-main);
+    text-align: center;
+  }
+
+  .modal-message {
+    margin: -8px 0 20px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1.6;
     text-align: center;
   }
 
