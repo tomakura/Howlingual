@@ -477,6 +477,7 @@
 
       unlisten = await listen<any>("translation_update", (event) => {
         const p = event.payload;
+        const shouldRevealStreamUpdate = isTranslating || p.isTranslating;
 
         // --- ECHO GUARD ---
         // Ignore updates for old input text to prevent "jumpy" UI when typing fast.
@@ -545,7 +546,7 @@
           }
         }
         if (Array.isArray(p.translations)) {
-          applyIncomingTranslations(p.translations);
+          applyIncomingTranslations(p.translations, shouldRevealStreamUpdate);
         }
 
         if ("detailedExplanation" in p) {
@@ -2296,6 +2297,7 @@
 
   function trackStreamReveal(
     nextTranslations: { id: number; text: string; reason: string }[],
+    shouldReveal: boolean,
   ) {
     const activeIds = new Set<number>();
     for (const item of nextTranslations) {
@@ -2303,7 +2305,7 @@
       const previousText = previousTranslationTextById[item.id] ?? "";
       const nextText = item.text ?? "";
       if (nextText !== previousText) {
-        if (nextText && isTranslating) {
+        if (nextText && shouldReveal) {
           const revealStart =
             previousText && nextText.startsWith(previousText)
               ? previousText.length
@@ -2327,9 +2329,9 @@
     });
   }
 
-  function applyIncomingTranslations(items: any[]) {
+  function applyIncomingTranslations(items: any[], shouldReveal = isTranslating) {
     const nextTranslations = normalizeIncomingTranslations(items);
-    trackStreamReveal(nextTranslations);
+    trackStreamReveal(nextTranslations, shouldReveal);
     if (!areTranslationsEqual(translations, nextTranslations)) {
       translations = nextTranslations;
     }
