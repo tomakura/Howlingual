@@ -1150,14 +1150,16 @@ fn show_compact_window(
     window.set_focus()?;
     let _ = app.emit("window_shown", "compact");
 
-    // Store text in PendingText state for frontend to retrieve
-    if let Ok(mut pending) = app.state::<PendingText>().0.lock() {
-        *pending = text.clone();
+    // Store and emit text only when a new capture exists.
+    // `None` means "show the window without changing current input".
+    if let Some(payload) = text {
+        if let Ok(mut pending) = app.state::<PendingText>().0.lock() {
+            *pending = Some(payload.clone());
+        }
+        let _ = app.emit("text_captured", payload);
+    } else if let Ok(mut pending) = app.state::<PendingText>().0.lock() {
+        *pending = None;
     }
-
-    // Alwaus emit event! If None, emit empty string to clear/reset UI
-    let payload = text.unwrap_or_default();
-    let _ = app.emit("text_captured", payload);
 
     // Store cursor position for later use (e.g., opening main window)
     if let Ok(mut pos) = app.state::<LastCursorPos>().0.lock() {
