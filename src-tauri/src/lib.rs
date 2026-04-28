@@ -1328,8 +1328,6 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
             );
         }
 
-        let mut capture_map = HashMap::new();
-
         // Get cursor position once to determine which monitor to focus
         let cursor_pos = get_cursor_position();
 
@@ -1347,22 +1345,7 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
                 mon_y
             );
 
-            let image = monitor.capture_image().map_err(|e| e.to_string())?;
-            log::info!(
-                "[ocr] Captured image dimensions for monitor {}: {}x{}",
-                index,
-                image.width(),
-                image.height()
-            );
-
             let monitor_id = index.to_string();
-            // Use PHYSICAL dimensions from the captured image for the window size
-            #[cfg(not(target_os = "macos"))]
-            let img_width = image.width();
-            #[cfg(not(target_os = "macos"))]
-            let img_height = image.height();
-
-            capture_map.insert(monitor_id.clone(), image);
 
             let label = format!("{}{}", CAPTURE_WINDOW_PREFIX, monitor_id);
             let url = format!("/?view=capture&monitor={}", monitor_id);
@@ -1403,8 +1386,8 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
                 }
 
                 if let Err(e) = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                    width: img_width,
-                    height: img_height,
+                    width: mon_width,
+                    height: mon_height,
                 })) {
                     log::info!("[ocr] Failed to set window size: {}", e);
                 }
@@ -1433,10 +1416,6 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
                 let _ = window.set_focus();
             }
         }
-
-        if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
-            *lock = capture_map;
-        }
     }
 
     Ok(())
@@ -1462,12 +1441,26 @@ async fn finish_selection_ocr(
         height
     );
 
-    let image = {
-        let state = app.state::<CapturedImages>();
-        let mut lock = state.0.lock().map_err(|_| "Lock failed")?;
-        lock.remove(&monitor_id)
-            .ok_or_else(|| format!("No captured image found for monitor {}", monitor_id))?
-    };
+    let monitor_index = monitor_id
+        .parse::<usize>()
+        .map_err(|_| format!("Invalid monitor id: {}", monitor_id))?;
+    let selected_window_label = format!("{}{}", CAPTURE_WINDOW_PREFIX, monitor_id);
+    let selected_window = app.get_webview_window(&selected_window_label);
+    if let Some(window) = selected_window.as_ref() {
+        let _ = window.hide();
+    }
+    std::thread::sleep(Duration::from_millis(80));
+
+    let monitor = Monitor::all()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .nth(monitor_index)
+        .ok_or_else(|| format!("No monitor found for id {}", monitor_id))?;
+    let image = monitor.capture_image().map_err(|e| e.to_string())?;
+    if let Some(window) = selected_window.as_ref() {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
 
     // Validate crop bounds before cropping to avoid panics in crop_imm.
     // Image dimensions are in physical pixels (from screen capture)
