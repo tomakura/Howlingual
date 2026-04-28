@@ -219,48 +219,246 @@ async function streamChatCompletion(params: {
 	}
 }
 
-function extractJsonStringValue(raw: string, key: string): string | null {
-	const cleaned = normalizeJsonText(raw);
-	const keyIndex = cleaned.indexOf(`"${key}"`);
-	if (keyIndex === -1) return null;
-	const colonIndex = cleaned.indexOf(":", keyIndex);
-	if (colonIndex === -1) return null;
-	const quoteIndex = cleaned.indexOf("\"", colonIndex + 1);
-	if (quoteIndex === -1) return null;
-	let i = quoteIndex + 1;
+type JsonStringRead = {
+	value: string;
+	end: number;
+	complete: boolean;
+};
+
+function skipJsonWhitespace(raw: string, index: number, until = raw.length) {
+	let i = index;
+	while (i < until && /\s/.test(raw[i])) i += 1;
+	return i;
+}
+
+function readJsonStringValue(raw: string, quoteIndex: number, until = raw.length): JsonStringRead | null {
+	if (raw[quoteIndex] !== "\"") return null;
 	let value = "";
-	while (i < cleaned.length) {
-		const ch = cleaned[i];
+	let i = quoteIndex + 1;
+	while (i < until) {
+		const ch = raw[i];
 		if (ch === "\\") {
-			const next = cleaned[i + 1];
-			if (next) {
-				value += next;
-				i += 2;
+			const next = raw[i + 1];
+			if (!next || i + 1 >= until) {
+				return { value, end: until, complete: false };
+			}
+			if (next === "u") {
+				const hex = raw.slice(i + 2, i + 6);
+				if (hex.length < 4 || !/^[0-9a-fA-F]{4}$/.test(hex)) {
+					return { value, end: until, complete: false };
+				}
+				value += String.fromCharCode(parseInt(hex, 16));
+				i += 6;
 				continue;
 			}
+			const escaped: Record<string, string> = {
+				"\"": "\"",
+				"\\": "\\",
+				"/": "/",
+				b: "\b",
+				f: "\f",
+				n: "\n",
+				r: "\r",
+				t: "\t",
+			};
+			value += escaped[next] ?? next;
+			i += 2;
+			continue;
 		}
-		if (ch === "\"") return value;
+		if (ch === "\"") {
+			return { value, end: i + 1, complete: true };
+		}
 		value += ch;
 		i += 1;
 	}
-	return value || null;
+	return { value, end: until, complete: false };
 }
 
-function extractPartialFromJsonLike(raw: string): Partial<AiResponse> | null {
-	const detected = extractJsonStringValue(raw, "detected_source_language");
-	const text = extractJsonStringValue(raw, "text");
-	const reason = extractJsonStringValue(raw, "reason");
-	const partial: Partial<AiResponse> = {};
-	if (detected) partial.detected_source_language = detected;
-	if (text || reason) {
-		partial.candidates = [
-			{
-				text: text || "",
-				reason: reason || "",
-			},
-		];
+function findJsonPropertyKey(raw: string, key: string, from = 0, until = raw.length) {
+	const pattern = `"${key}"`;
+	let inString = false;
+	let escaped = false;
+	for (let i = from; i < until; i += 1) {
+		const ch = raw[i];
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+			} else if (ch === "\\") {
+				escaped = true;
+			} else if (ch === "\"") {
+				inString = false;
+			}
+			continue;
+		}
+		if (ch !== "\"") continue;
+		if (raw.startsWith(pattern, i)) {
+			const afterKey = skipJsonWhitespace(raw, i + pattern.length, until);
+			if (raw[afterKey] === ":") return i;
+		}
+		inString = true;
 	}
+	return -1;
+}
+
+function readJsonStringProperty(raw: string, key: string, from = 0, until = raw.length): JsonStringRead | null {
+	const keyIndex = findJsonPropertyKey(raw, key, from, until);
+	if (keyIndex === -1) return null;
+	const colonIndex = raw.indexOf(":", keyIndex);
+	if (colonIndex === -1 || colonIndex >= until) return null;
+	const valueIndex = skipJsonWhitespace(raw, colonIndex + 1, until);
+	return readJsonStringValue(raw, valueIndex, until);
+}
+
+function findJsonArrayValueStart(raw: string, key: string, from = 0, until = raw.length) {
+	const keyIndex = findJsonPropertyKey(raw, key, from, until);
+	if (keyIndex === -1) return -1;
+	const colonIndex = raw.indexOf(":", keyIndex);
+	if (colonIndex === -1 || colonIndex >= until) return -1;
+	const valueIndex = skipJsonWhitespace(raw, colonIndex + 1, until);
+	return raw[valueIndex] === "[" ? valueIndex : -1;
+}
+
+function findJsonContainerEnd(raw: string, start: number, open: string, close: string) {
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let i = start; i < raw.length; i += 1) {
+		const ch = raw[i];
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+			} else if (ch === "\\") {
+				escaped = true;
+			} else if (ch === "\"") {
+				inString = false;
+			}
+			continue;
+		}
+		if (ch === "\"") {
+			inString = true;
+		} else if (ch === open) {
+			depth += 1;
+		} else if (ch === close) {
+			depth -= 1;
+			if (depth === 0) return i + 1;
+		}
+	}
+	return raw.length;
+}
+
+function isStructurallyCompleteJson(raw: string) {
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	let started = false;
+	for (let i = 0; i < raw.length; i += 1) {
+		const ch = raw[i];
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+			} else if (ch === "\\") {
+				escaped = true;
+			} else if (ch === "\"") {
+				inString = false;
+			}
+			continue;
+		}
+		if (ch === "\"") {
+			inString = true;
+		} else if (ch === "{" || ch === "[") {
+			depth += 1;
+			started = true;
+		} else if (ch === "}" || ch === "]") {
+			depth -= 1;
+			if (depth < 0) return false;
+		}
+	}
+	return started && depth === 0 && !inString;
+}
+
+function parseCandidateObject(raw: string): TranslationResult | null {
+	const text = readJsonStringProperty(raw, "text");
+	const reason = readJsonStringProperty(raw, "reason");
+	if (!text && !reason) return null;
+	const candidate: Partial<TranslationResult> = {};
+	if (text) candidate.text = text.value;
+	if (reason) candidate.reason = reason.value;
+	return candidate as TranslationResult;
+}
+
+function extractPartialCandidates(raw: string, maxCandidates: number) {
+	const candidatesStart = findJsonArrayValueStart(raw, "candidates");
+	if (candidatesStart === -1) return [];
+	const candidatesEnd = findJsonContainerEnd(raw, candidatesStart, "[", "]");
+	const candidates: TranslationResult[] = [];
+	let objectStart = -1;
+	let objectDepth = 0;
+	let inString = false;
+	let escaped = false;
+
+	for (let i = candidatesStart + 1; i < candidatesEnd && candidates.length < maxCandidates; i += 1) {
+		const ch = raw[i];
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+			} else if (ch === "\\") {
+				escaped = true;
+			} else if (ch === "\"") {
+				inString = false;
+			}
+			continue;
+		}
+		if (ch === "\"") {
+			inString = true;
+		} else if (ch === "{") {
+			if (objectDepth === 0) objectStart = i;
+			objectDepth += 1;
+		} else if (ch === "}" && objectDepth > 0) {
+			objectDepth -= 1;
+			if (objectDepth === 0 && objectStart !== -1) {
+				const candidate = parseCandidateObject(raw.slice(objectStart, i + 1));
+				if (candidate) candidates.push(candidate);
+				objectStart = -1;
+			}
+		}
+	}
+
+	if (objectDepth > 0 && objectStart !== -1 && candidates.length < maxCandidates) {
+		const candidate = parseCandidateObject(raw.slice(objectStart, candidatesEnd));
+		if (candidate) candidates.push(candidate);
+	}
+
+	return candidates;
+}
+
+export function parsePartialAiResponseFromStream(
+	raw: string,
+	candidateCount = 3,
+): Partial<AiResponse> | null {
+	const cleaned = normalizeJsonText(raw);
+	const start = cleaned.indexOf("{");
+	const trimmed = (start >= 0 ? cleaned.slice(start) : cleaned).replace(/,$/, "");
+	if (!trimmed) return null;
+
+	const partial: Partial<AiResponse> = {};
+	const detected = readJsonStringProperty(trimmed, "detected_source_language");
+	if (detected) partial.detected_source_language = detected.value;
+
+	const candidates = extractPartialCandidates(trimmed, candidateCount);
+	if (candidates.length > 0) partial.candidates = candidates;
+
 	return Object.keys(partial).length > 0 ? partial : null;
+}
+
+function getPartialStreamKey(partial: Partial<AiResponse>) {
+	const values: string[] = [partial.detected_source_language ?? ""];
+	for (const candidate of partial.candidates ?? []) {
+		values.push(candidate.text ?? "", candidate.reason ?? "");
+	}
+	for (const point of partial.detailed_explanation?.points ?? []) {
+		values.push(point.term ?? "", point.explanation ?? "");
+	}
+	return values.join("\u001f");
 }
 
 function isReasoningModelName(modelName: string): boolean {
@@ -687,9 +885,8 @@ async function callAnthropic(
 	return parsed;
 }
 
-// Helper to safely parse partial JSON with auto-closing attempts
+// Helper to safely parse partial JSON while avoiding repeated repair parses per token.
 function tryParsePartialJson(jsonStr: string): Partial<AiResponse> | null {
-	// 0. Pre-process: remove code fences and trailing comma
 	const cleaned = normalizeJsonText(jsonStr);
 	const start = cleaned.indexOf("{");
 	const trimmed = (start >= 0 ? cleaned.slice(start) : cleaned).replace(
@@ -697,42 +894,22 @@ function tryParsePartialJson(jsonStr: string): Partial<AiResponse> | null {
 		"",
 	);
 
-	// 1. Try naive parse
-	try {
-		return JSON.parse(trimmed);
-	} catch (e) {
-		// Continue to repair strategies
-	}
-
-	// 2. Try closing open structures
-	// This is a heuristic approach.
-
-	const closingSequences = [
-		// Try closing string and then various nested levels
-		'"}]}}', // Deepest: inside explanation string
-		'"}]}',   // Inside candidate reason/text string
-		'" }',    // General string close
-		'}}',     // Close objects
-		']}',     // Close array and object
-		'}]}',    // Close object in array and object
-		'"}]}}',
-		'"}',
-		'"]}',
-		'"]}}',
-		'"}',
-		']',
-		'}'
-	];
-
-	for (const seq of closingSequences) {
+	if (isStructurallyCompleteJson(trimmed)) {
 		try {
-			return JSON.parse(trimmed + seq);
-		} catch (e) {
-			continue;
+			return JSON.parse(trimmed);
+		} catch {
+			const extracted = extractJsonFromText(trimmed);
+			if (extracted) {
+				try {
+					return JSON.parse(extracted);
+				} catch {
+					// Fall back to scanner below.
+				}
+			}
 		}
 	}
 
-	return extractPartialFromJsonLike(trimmed);
+	return parsePartialAiResponseFromStream(trimmed);
 }
 
 // Stream Translation Router
@@ -858,7 +1035,7 @@ async function streamGemini(
 
 		const partial = tryParsePartialJson(accumulatedText);
 		if (partial) {
-			const key = JSON.stringify(partial);
+			const key = getPartialStreamKey(partial);
 			if (key !== lastPartialKey) {
 				lastPartialKey = key;
 				onUpdate(partial);
@@ -934,7 +1111,7 @@ async function streamOpenAICompatible(
 			accumulatedText += content;
 			const partial = tryParsePartialJson(accumulatedText);
 			if (partial) {
-				const key = JSON.stringify(partial);
+				const key = getPartialStreamKey(partial);
 				if (key !== lastPartialKey) {
 					lastPartialKey = key;
 					onUpdate(partial);
@@ -983,7 +1160,7 @@ async function streamOpenAIResponses(
 			accumulatedText += event.delta;
 			const partial = tryParsePartialJson(accumulatedText);
 			if (partial) {
-				const key = JSON.stringify(partial);
+				const key = getPartialStreamKey(partial);
 				if (key !== lastPartialKey) {
 					lastPartialKey = key;
 					onUpdate(partial);
@@ -1050,7 +1227,7 @@ async function streamProviderChatCompletion(params: {
 			accumulatedText += delta;
 			const partial = tryParsePartialJson(accumulatedText);
 			if (partial) {
-				const key = JSON.stringify(partial);
+				const key = getPartialStreamKey(partial);
 				if (key !== lastPartialKey) {
 					lastPartialKey = key;
 					params.onUpdate(partial);
@@ -1197,7 +1374,7 @@ async function streamAnthropic(
 				const jsonPart = accumulatedText.substring(jsonStart);
 				const partial = tryParsePartialJson(jsonPart);
 				if (partial) {
-					const key = JSON.stringify(partial);
+					const key = getPartialStreamKey(partial);
 					if (key !== lastPartialKey) {
 						lastPartialKey = key;
 						onUpdate(partial, currentUsage);
