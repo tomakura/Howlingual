@@ -585,10 +585,8 @@
         streamContentChanged ||
         nextDetailedExplanation !== detailedExplanation;
       detailedExplanation = nextDetailedExplanation;
-      showExplanation = Boolean(p.detailedExplanation);
     } else if (p.isTranslating) {
       detailedExplanation = null;
-      showExplanation = false;
     }
     if (shouldRevealStreamUpdate && streamContentChanged) {
       requestStreamAutoScroll();
@@ -690,7 +688,6 @@
             // Clear previous results but keep input if user typed something
             translations = [];
             detailedExplanation = null;
-            showExplanation = false;
             isTranslating = false;
             errorMessage = "";
             resetTechMetrics();
@@ -1577,7 +1574,6 @@
           translations = [];
         }
         detailedExplanation = data.detailedExplanation || null;
-        showExplanation = !!detailedExplanation;
 
         if (data.sourceLang) {
           applySourceLangFromSync(data.sourceLang, data.detectedLang);
@@ -1626,7 +1622,6 @@
       reason: "",
     }));
     detailedExplanation = null;
-    showExplanation = false;
     errorMessage = "";
     autoScrollEnabled = true;
     lastStreamCharCount = 0;
@@ -1722,7 +1717,6 @@
     resetStreamRevealState();
     translations = [];
     detailedExplanation = null;
-    showExplanation = false;
     errorMessage = "";
     lastStreamCharCount = 0;
     autoScrollEnabled = true;
@@ -2330,9 +2324,6 @@
       if (detailedExplanation) {
         detailedExplanation = null;
       }
-      if (showExplanation) {
-        showExplanation = false;
-      }
     }
   });
 
@@ -2365,7 +2356,6 @@
     points: { term: string; explanation: string }[];
   } | null = $state(null);
   let isTranslating = $state(false);
-  let showExplanation = $state(true);
   let isDetecting = $state(false);
 
   let errorMessage = $state("");
@@ -2753,10 +2743,8 @@
     // Restore explanation
     if (item.detailedExplanation) {
       detailedExplanation = item.detailedExplanation;
-      showExplanation = true;
     } else {
       detailedExplanation = null;
-      showExplanation = false;
     }
 
     // Restore source/target if they exist in current list
@@ -2832,10 +2820,8 @@
     }));
     if (snapshot.detailedExplanation?.points?.length) {
       detailedExplanation = snapshot.detailedExplanation;
-      showExplanation = true;
     } else {
       detailedExplanation = null;
-      showExplanation = false;
     }
     styleLevels = { ...styleLevels, ...snapshot.styleLevels };
   }
@@ -3114,7 +3100,6 @@
     syncShowTechInfoFromStorage();
     isTranslating = true;
     autoScrollEnabled = true; // Enable auto-scroll for new translation
-    showExplanation = false; // Hide explanation during translation
     showSourceLangMenu = false; // Close menu if open
     showTargetLangMenu = false; // Close menu if open
     // Clear content and set slots based on translationCount setting
