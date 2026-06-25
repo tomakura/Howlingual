@@ -479,9 +479,17 @@
   let pendingTranslationHistoryRun = false;
   let ownedTranslationRunId: number | null = null;
   const completedHistoryRunIds = new Set<number>();
+  const stoppingTranslationRunIds = new Set<number>();
 
   function shouldRecordCompletedTranslation(p: any) {
     if (typeof p.runId !== "number") return false;
+    if (stoppingTranslationRunIds.has(p.runId)) {
+      stoppingTranslationRunIds.delete(p.runId);
+      if (ownedTranslationRunId === p.runId) {
+        ownedTranslationRunId = null;
+      }
+      return false;
+    }
     if (ownedTranslationRunId !== p.runId) return false;
     if (completedHistoryRunIds.has(p.runId)) return false;
     completedHistoryRunIds.add(p.runId);
@@ -566,20 +574,20 @@
         isDetecting = false;
       }
     }
-    if (Array.isArray(p.translations)) {
+    if (!preserveFocusedDraft && Array.isArray(p.translations)) {
       streamContentChanged = applyIncomingTranslations(
         p.translations,
         shouldRevealStreamUpdate,
       );
     }
 
-    if ("detailedExplanation" in p) {
+    if (!preserveFocusedDraft && "detailedExplanation" in p) {
       const nextDetailedExplanation = p.detailedExplanation || null;
       streamContentChanged =
         streamContentChanged ||
         nextDetailedExplanation !== detailedExplanation;
       detailedExplanation = nextDetailedExplanation;
-    } else if (p.isTranslating) {
+    } else if (!preserveFocusedDraft && p.isTranslating) {
       detailedExplanation = null;
     }
     if (shouldRevealStreamUpdate && streamContentChanged) {
@@ -1280,6 +1288,11 @@
     }
   }
 
+  function clearPendingLegacyApiKey(provider: AiProvider) {
+    const { [provider]: _legacy, ...pending } = pendingLegacyApiKeys;
+    pendingLegacyApiKeys = pending;
+  }
+
   async function saveSelectedApiKey() {
     const provider = selectedProvider;
     const value = apiKeyDrafts[provider]?.trim() ?? "";
@@ -1293,6 +1306,7 @@
         },
       });
       apiKeyDrafts = { ...apiKeyDrafts, [provider]: "" };
+      clearPendingLegacyApiKey(provider);
     } catch (error) {
       console.warn("Failed to save API key", error);
     }
@@ -1305,6 +1319,7 @@
         payload: { provider },
       });
       apiKeyDrafts = { ...apiKeyDrafts, [provider]: "" };
+      clearPendingLegacyApiKey(provider);
     } catch (error) {
       console.warn("Failed to clear API key", error);
     }
@@ -1455,6 +1470,10 @@
     if (e.key === "Escape") {
       e.preventDefault();
 
+      if (editingStyle) {
+        rememberConfirmationFocus();
+      }
+
       // Blur active element to prevent focus rings after closing
       if (document.activeElement instanceof HTMLElement) {
         document.activeElement.blur();
@@ -1494,7 +1513,6 @@
         return;
       }
       if (editingStyle) {
-        rememberConfirmationFocus();
         showDiscardConfirmation = true;
         return;
       }
@@ -3432,6 +3450,7 @@
       console.warn("Skip stop_translation before run ownership is known");
       return false;
     }
+    stoppingTranslationRunIds.add(runId);
     try {
       await invoke("stop_translation", { runId });
       isTranslating = false;
@@ -3439,6 +3458,7 @@
       ownedTranslationRunId = null;
       return true;
     } catch (e) {
+      stoppingTranslationRunIds.delete(runId);
       console.error("Failed to stop translation:", e);
       return false;
     }
@@ -6923,6 +6943,7 @@
       onclick={(e) => e.stopPropagation()}
       role="dialog"
       aria-modal="true"
+      aria-labelledby="reset-confirm-title"
       tabindex="-1"
       onkeydown={(e) =>
         handleConfirmationKeydown(
@@ -6931,7 +6952,7 @@
           closeResetConfirmation,
         )}
     >
-      <h3>{t(appLanguage, "confirmReset")}</h3>
+      <h3 id="reset-confirm-title">{t(appLanguage, "confirmReset")}</h3>
       <div class="modal-actions">
         <button
           class="rich-btn secondary"
@@ -7010,6 +7031,7 @@
       onclick={(e) => e.stopPropagation()}
       role="dialog"
       aria-modal="true"
+      aria-labelledby="discard-confirm-title"
       tabindex="-1"
       onkeydown={(e) =>
         handleConfirmationKeydown(
@@ -7018,7 +7040,7 @@
           closeDiscardConfirmation,
         )}
     >
-      <h3>{t(appLanguage, "confirmDiscard")}</h3>
+      <h3 id="discard-confirm-title">{t(appLanguage, "confirmDiscard")}</h3>
       <div class="modal-actions">
         <button
           class="rich-btn secondary"
