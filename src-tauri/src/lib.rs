@@ -1449,7 +1449,7 @@ async fn finish_selection_ocr(
     }
     std::thread::sleep(Duration::from_millis(80));
 
-    let image = {
+    let image_result = (|| -> Result<_, String> {
         let monitors = Monitor::all().map_err(|e| e.to_string())?;
         let monitor = monitors
             .into_iter()
@@ -1460,12 +1460,13 @@ async fn finish_selection_ocr(
                     && monitor.height().ok() == u32::try_from(*monitor_height).ok()
             })
             .ok_or_else(|| format!("No monitor found for id {}", monitor_id))?;
-        monitor.capture_image().map_err(|e| e.to_string())?
-    };
+        monitor.capture_image().map_err(|e| e.to_string())
+    })();
     if let Some(window) = selected_window.as_ref() {
         let _ = window.show();
         let _ = window.set_focus();
     }
+    let image = image_result?;
 
     // Validate crop bounds before cropping to avoid panics in crop_imm.
     // Image dimensions are in physical pixels (from screen capture)

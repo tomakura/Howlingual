@@ -505,6 +505,12 @@
     claimTranslationRun(p);
     const shouldRevealStreamUpdate = isTranslating || p.isTranslating;
     let streamContentChanged = false;
+    const preserveFocusedDraft = Boolean(
+      typeof p.inputQuery === "string" &&
+        p.inputQuery !== inputQuery &&
+        textareaEl &&
+        document.activeElement === textareaEl,
+    );
 
     // Ignore stale echoes while the user is actively typing.
     if (p.inputQuery !== undefined && p.inputQuery !== inputQuery) {
@@ -594,11 +600,18 @@
     if ("errorMessage" in p) {
       errorMessage = p.errorMessage || "";
     }
-    if (p.inputQuery && p.inputQuery !== inputQuery) {
+    if (
+      !preserveFocusedDraft &&
+      typeof p.inputQuery === "string" &&
+      p.inputQuery !== inputQuery
+    ) {
       inputQuery = p.inputQuery;
     }
 
-    if (!isAutoDetect || inputQuery.trim().length >= 5) {
+    if (
+      !preserveFocusedDraft &&
+      (!isAutoDetect || inputQuery.trim().length >= 5)
+    ) {
       if (p.sourceLang) {
         if (isAutoDetect && p.sourceLang !== AUTO_DETECT_LABEL) {
           const incoming = p.detectedLang || p.sourceLang;
@@ -615,7 +628,7 @@
       }
     }
 
-    if (p.targetLang) {
+    if (!preserveFocusedDraft && p.targetLang) {
       targetLang = p.targetLang;
     }
 
@@ -799,7 +812,7 @@
       try {
         const newValue = event.newValue ? JSON.parse(event.newValue) : [];
         history = normalizeStoredHistoryItems(newValue);
-        historyCollectionsLoaded = true;
+        historyLoaded = true;
         console.log("[Sync] History updated from storage event");
       } catch (e) {
         console.warn("Failed to sync history", e);
@@ -827,7 +840,7 @@
         favorites = normalizeStoredHistoryItems(
           event.newValue ? JSON.parse(event.newValue) : [],
         );
-        historyCollectionsLoaded = true;
+        favoritesLoaded = true;
         console.log("[Sync] Favorites updated from storage event");
       } catch (e) {
         console.warn("Failed to sync favorites", e);
@@ -1278,28 +1291,30 @@
   }
 
   async function saveSelectedApiKey() {
-    const value = apiKeyDrafts[selectedProvider]?.trim() ?? "";
+    const provider = selectedProvider;
+    const value = apiKeyDrafts[provider]?.trim() ?? "";
     if (!value) return;
     try {
       apiKeyStatus = await invoke<ApiKeyStatus>("set_api_key", {
         payload: {
-          provider: selectedProvider,
+          provider,
           value,
           persist: rememberApiKeys,
         },
       });
-      apiKeyDrafts = { ...apiKeyDrafts, [selectedProvider]: "" };
+      apiKeyDrafts = { ...apiKeyDrafts, [provider]: "" };
     } catch (error) {
       console.warn("Failed to save API key", error);
     }
   }
 
   async function clearSelectedApiKey() {
+    const provider = selectedProvider;
     try {
       apiKeyStatus = await invoke<ApiKeyStatus>("clear_api_key", {
-        payload: { provider: selectedProvider },
+        payload: { provider },
       });
-      apiKeyDrafts = { ...apiKeyDrafts, [selectedProvider]: "" };
+      apiKeyDrafts = { ...apiKeyDrafts, [provider]: "" };
     } catch (error) {
       console.warn("Failed to clear API key", error);
     }
@@ -1696,15 +1711,18 @@
   let syncTimer: ReturnType<typeof setTimeout> | null = null;
 
   async function syncSharedState(resetTranslations = false) {
+    const canSyncRunDefinition = !isTranslating;
     await invoke("sync_translation_context", {
       payload: {
-        inputQuery: isTranslating ? undefined : inputQuery,
-        sourceLang,
-        detectedLang,
-        isDetecting,
-        targetLang,
-        styleLevels: $state.snapshot(styleLevels),
-        candidateCount: translationCount,
+        inputQuery: canSyncRunDefinition ? inputQuery : undefined,
+        sourceLang: canSyncRunDefinition ? sourceLang : undefined,
+        detectedLang: canSyncRunDefinition ? detectedLang : undefined,
+        isDetecting: canSyncRunDefinition ? isDetecting : undefined,
+        targetLang: canSyncRunDefinition ? targetLang : undefined,
+        styleLevels: canSyncRunDefinition
+          ? $state.snapshot(styleLevels)
+          : undefined,
+        candidateCount: canSyncRunDefinition ? translationCount : undefined,
         resetTranslations,
       },
     });
@@ -2797,25 +2815,30 @@
     localStorage.setItem("howlingual_favorites", JSON.stringify(favorites));
   }
 
-  let historyCollectionsLoaded = false;
+  let historyLoaded = false;
+  let favoritesLoaded = false;
   function loadHistoryCollections() {
-    if (historyCollectionsLoaded) return;
-    historyCollectionsLoaded = true;
-    const savedHistory = localStorage.getItem("howlingual_history");
-    if (savedHistory) {
-      try {
-        history = normalizeStoredHistoryItems(JSON.parse(savedHistory));
-      } catch (e) {
-        console.error("Failed to load history", e);
+    if (!historyLoaded) {
+      historyLoaded = true;
+      const savedHistory = localStorage.getItem("howlingual_history");
+      if (savedHistory) {
+        try {
+          history = normalizeStoredHistoryItems(JSON.parse(savedHistory));
+        } catch (e) {
+          console.error("Failed to load history", e);
+        }
       }
     }
 
-    const savedFavs = localStorage.getItem("howlingual_favorites");
-    if (savedFavs) {
-      try {
-        favorites = normalizeStoredHistoryItems(JSON.parse(savedFavs));
-      } catch (e) {
-        console.error("Failed to load favorites", e);
+    if (!favoritesLoaded) {
+      favoritesLoaded = true;
+      const savedFavs = localStorage.getItem("howlingual_favorites");
+      if (savedFavs) {
+        try {
+          favorites = normalizeStoredHistoryItems(JSON.parse(savedFavs));
+        } catch (e) {
+          console.error("Failed to load favorites", e);
+        }
       }
     }
   }
@@ -3281,7 +3304,7 @@
       );
       pendingTranslationHistoryRun = true;
       ownedTranslationRunId = null;
-      await invoke("start_translation", {
+      const runId = await invoke<number>("start_translation", {
         payload: {
           text: inputQuery,
           sourceLang,
@@ -3295,6 +3318,10 @@
           candidateCount: translationCount,
         },
       });
+      if (pendingTranslationHistoryRun) {
+        ownedTranslationRunId = runId;
+        pendingTranslationHistoryRun = false;
+      }
     } catch (error) {
       console.error("Translation failed:", error);
       errorMessage = "Translation failed: " + String(error);
@@ -3308,11 +3335,15 @@
 
   async function stopTranslation() {
     const runId = ownedTranslationRunId;
-    isTranslating = false;
-    pendingTranslationHistoryRun = false;
-    ownedTranslationRunId = null;
+    if (runId === null) {
+      console.warn("Skip stop_translation before run ownership is known");
+      return;
+    }
     try {
       await invoke("stop_translation", { runId });
+      isTranslating = false;
+      pendingTranslationHistoryRun = false;
+      ownedTranslationRunId = null;
     } catch (e) {
       console.error("Failed to stop translation:", e);
     }
@@ -3795,6 +3826,11 @@
               : isTranslating
                 ? t(appLanguage, "stopTranslation") || "翻訳を停止"
                 : t(appLanguage, "translate")}
+            aria-label={isScrolledDown
+              ? t(appLanguage, "scrollToTop")
+              : isTranslating
+                ? t(appLanguage, "stopTranslation") || "翻訳を停止"
+                : t(appLanguage, "translate")}
             onclick={isScrolledDown
               ? scrollToTop
               : isTranslating
@@ -4258,7 +4294,7 @@
                       id: crypto.randomUUID(),
                       timestamp: Date.now(),
                       sourceText: inputQuery,
-                      sourceLang: detectedLang || sourceLang,
+                      sourceLang,
                       targetLang: targetLang,
                       isAutoDetect: isAutoDetect,
                       detectedLang: detectedLang || "",
@@ -4848,6 +4884,11 @@
               : isTranslating
                 ? t(appLanguage, "stopTranslation") || "翻訳を停止"
                 : t(appLanguage, "translate")}
+            aria-label={isScrolledDown
+              ? t(appLanguage, "scrollToTop")
+              : isTranslating
+                ? t(appLanguage, "stopTranslation") || "翻訳を停止"
+                : t(appLanguage, "translate")}
             onclick={isScrolledDown
               ? scrollToTop
               : isTranslating
@@ -5316,8 +5357,10 @@
                     id: crypto.randomUUID(),
                     timestamp: Date.now(),
                     sourceText: inputQuery,
-                    sourceLang: detectedLang || sourceLang,
+                    sourceLang,
                     targetLang: targetLang,
+                    isAutoDetect,
+                    detectedLang: detectedLang || "",
                     translations: translations.map((t) => ({
                       text: t.text,
                       reason: t.reason,
@@ -6819,11 +6862,15 @@
       onclick={(e) => e.stopPropagation()}
       role="dialog"
       aria-modal="true"
+      aria-labelledby="clipboard-ops-confirm-title"
+      aria-describedby="clipboard-ops-confirm-message"
       tabindex="-1"
       onkeydown={(e) => e.stopPropagation()}
     >
-      <h3>{t(appLanguage, "clipboardOps")}</h3>
-      <p class="modal-message">{t(appLanguage, "clipboardOpsConfirmEnable")}</p>
+      <h3 id="clipboard-ops-confirm-title">{t(appLanguage, "clipboardOps")}</h3>
+      <p id="clipboard-ops-confirm-message" class="modal-message">
+        {t(appLanguage, "clipboardOpsConfirmEnable")}
+      </p>
       <div class="modal-actions">
         <button
           class="rich-btn secondary"

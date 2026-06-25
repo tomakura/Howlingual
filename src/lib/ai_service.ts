@@ -1193,7 +1193,12 @@ async function streamOpenAIResponses(
 					event.response?.error?.code ||
 					"OpenAI Responses stream failed",
 			);
-		} else if (event.type === "response.error") {
+		} else if (event.type === "response.incomplete") {
+			throw new Error(
+				event.response?.incomplete_details?.reason ||
+					"OpenAI Responses stream incomplete",
+			);
+		} else if (event.type === "error") {
 			throw new Error(event.message || "OpenAI Responses stream error");
 		}
 	}
