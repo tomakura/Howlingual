@@ -60,6 +60,7 @@
   );
   let apiKeyDrafts = $state<ApiKeyDrafts>(createEmptyApiKeyDrafts());
   let apiKeyStatus = $state<ApiKeyStatus>(createEmptyApiKeyStatus());
+  let pendingLegacyApiKeys = $state<Record<string, string>>({});
   let rememberApiKeys = $state(true);
   let defaultTargetLang = $state("日本語");
   let theme = $state<"dark" | "light">("dark");
@@ -480,17 +481,6 @@
   let ownedTranslationRunId: number | null = null;
   const completedHistoryRunIds = new Set<number>();
 
-  function claimTranslationRun(p: any) {
-    if (
-      pendingTranslationHistoryRun &&
-      p.isTranslating &&
-      typeof p.runId === "number"
-    ) {
-      ownedTranslationRunId = p.runId;
-      pendingTranslationHistoryRun = false;
-    }
-  }
-
   function shouldRecordCompletedTranslation(p: any) {
     if (typeof p.runId !== "number") return false;
     if (ownedTranslationRunId !== p.runId) return false;
@@ -502,7 +492,6 @@
 
   function applyTranslationUpdate(p: any) {
     if (!p || typeof p !== "object") return;
-    claimTranslationRun(p);
     const shouldRevealStreamUpdate = isTranslating || p.isTranslating;
     let streamContentChanged = false;
     const preserveFocusedDraft = Boolean(
@@ -643,16 +632,16 @@
   onMount(() => {
     let unlisten: () => void;
     (async () => {
+      unlisten = await listen<any>("translation_update", (event) => {
+        applyTranslationUpdate(event.payload);
+      });
+
       try {
         const state = await invoke<any>("request_translation_state");
         applyTranslationUpdate(state);
       } catch (error) {
         console.warn("Failed to request translation state", error);
       }
-
-      unlisten = await listen<any>("translation_update", (event) => {
-        applyTranslationUpdate(event.payload);
-      });
     })();
 
     return () => {
@@ -878,6 +867,9 @@
     const settings = {
       model: selectedModel,
       provider: selectedProvider,
+      ...(Object.keys(pendingLegacyApiKeys).length > 0
+        ? { apiKeys: pendingLegacyApiKeys }
+        : {}),
       defaultTargetLang: defaultTargetLang,
       theme: theme,
       appLanguage: appLanguage,
@@ -1088,10 +1080,18 @@
       "groq",
       "cerebras",
     ];
-
+    const remainingKeys: Record<string, string> = {};
     for (const provider of providers) {
       const value = parsed.apiKeys[provider];
-      if (typeof value !== "string" || !value.trim()) continue;
+      if (typeof value === "string" && value.trim()) {
+        remainingKeys[provider] = value;
+      }
+    }
+    pendingLegacyApiKeys = remainingKeys;
+
+    for (const provider of providers) {
+      const value = remainingKeys[provider];
+      if (!value) continue;
       try {
         apiKeyStatus = await invoke<ApiKeyStatus>("set_api_key", {
           payload: {
@@ -1100,6 +1100,8 @@
             persist,
           },
         });
+        const { [provider]: _migrated, ...pending } = pendingLegacyApiKeys;
+        pendingLegacyApiKeys = pending;
       } catch (error) {
         console.warn(`Failed to migrate ${provider} API key`, error);
       }
@@ -1762,7 +1764,8 @@
 
   async function clearInput() {
     if (isTranslating) {
-      await stopTranslation();
+      const stopped = await stopTranslation();
+      if (!stopped) return;
     }
     inputQuery = "";
     resetStreamRevealState();
@@ -3322,6 +3325,10 @@
         ownedTranslationRunId = runId;
         pendingTranslationHistoryRun = false;
       }
+      const currentState = await invoke<any>("request_translation_state");
+      if (currentState?.runId === runId) {
+        applyTranslationUpdate(currentState);
+      }
     } catch (error) {
       console.error("Translation failed:", error);
       errorMessage = "Translation failed: " + String(error);
@@ -3333,19 +3340,21 @@
 
   let isHoveringTranslate = $state(false);
 
-  async function stopTranslation() {
+  async function stopTranslation(): Promise<boolean> {
     const runId = ownedTranslationRunId;
     if (runId === null) {
       console.warn("Skip stop_translation before run ownership is known");
-      return;
+      return false;
     }
     try {
       await invoke("stop_translation", { runId });
       isTranslating = false;
       pendingTranslationHistoryRun = false;
       ownedTranslationRunId = null;
+      return true;
     } catch (e) {
       console.error("Failed to stop translation:", e);
+      return false;
     }
   }
 
@@ -6828,7 +6837,13 @@
       role="dialog"
       aria-modal="true"
       tabindex="-1"
-      onkeydown={(e) => e.stopPropagation()}
+      onkeydown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Escape") {
+          e.preventDefault();
+          showResetConfirmation = false;
+        }
+      }}
     >
       <h3>{t(appLanguage, "confirmReset")}</h3>
       <div class="modal-actions">
@@ -6865,7 +6880,13 @@
       aria-labelledby="clipboard-ops-confirm-title"
       aria-describedby="clipboard-ops-confirm-message"
       tabindex="-1"
-      onkeydown={(e) => e.stopPropagation()}
+      onkeydown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Escape") {
+          e.preventDefault();
+          showClipboardOpsConfirmation = false;
+        }
+      }}
     >
       <h3 id="clipboard-ops-confirm-title">{t(appLanguage, "clipboardOps")}</h3>
       <p id="clipboard-ops-confirm-message" class="modal-message">
@@ -6903,7 +6924,13 @@
       role="dialog"
       aria-modal="true"
       tabindex="-1"
-      onkeydown={(e) => e.stopPropagation()}
+      onkeydown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Escape") {
+          e.preventDefault();
+          showDiscardConfirmation = false;
+        }
+      }}
     >
       <h3>{t(appLanguage, "confirmDiscard")}</h3>
       <div class="modal-actions">
