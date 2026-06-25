@@ -6,7 +6,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { listen, emit } from "@tauri-apps/api/event";
+  import { listen } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import {
     enable as enableAutostart,
@@ -14,18 +14,11 @@
     isEnabled as isAutostartEnabled,
   } from "@tauri-apps/plugin-autostart";
   import {
-    translateTextStream,
-    type AiModel,
-    type AiResponse,
-    type UsageMetadata,
-  } from "$lib/ai_service";
-  import {
     AI_MODELS,
     DEFAULT_MODELS_BY_PROVIDER,
     type AiProvider,
     getDefaultModelForProvider,
     getModelEntry,
-    getProviderForModel,
     isAiProvider,
   } from "$lib/ai_models";
   import CaptureOverlay from "$lib/components/CaptureOverlay.svelte";
@@ -37,6 +30,17 @@
     type AppLanguage,
   } from "$lib/i18n";
   import { getDefaultStyles } from "$lib/style_defaults";
+  import {
+    createEmptyApiKeyDrafts,
+    createEmptyApiKeyStatus,
+    getApiKeyLabel,
+    getApiKeyPlaceholder,
+    getApiKeyStatusLabel,
+    type ApiKeyDrafts,
+    type ApiKeyStatus,
+  } from "$lib/api_key_settings";
+
+  type AiModel = string;
 
   // ====== Animations ======
   const [send, receive] = crossfade({
@@ -53,13 +57,9 @@
   let selectedModel = $state<AiModel>(
     DEFAULT_MODELS_BY_PROVIDER.openai as AiModel,
   );
-  let apiKeys = $state({
-    gemini: "",
-    openai: "",
-    anthropic: "",
-    groq: "",
-    cerebras: "",
-  });
+  let apiKeyDrafts = $state<ApiKeyDrafts>(createEmptyApiKeyDrafts());
+  let apiKeyStatus = $state<ApiKeyStatus>(createEmptyApiKeyStatus());
+  let pendingLegacyApiKeys = $state<Record<string, string>>({});
   let rememberApiKeys = $state(true);
   let defaultTargetLang = $state("日本語");
   let theme = $state<"dark" | "light">("dark");
@@ -191,6 +191,10 @@
       });
   });
 
+  onMount(() => {
+    void refreshApiKeyStatus();
+  });
+
   function detectLanguageSimple(text: string) {
     // ひらがな・カタカナがあれば確実に日本語
     const hasHiraganaKatakana = /[\u3040-\u30ff]/.test(text);
@@ -223,6 +227,7 @@
   let editingStyle = $state<CustomStyle | null>(null);
   let showResetConfirmation = $state(false);
   let showDiscardConfirmation = $state(false);
+  let showClipboardOpsConfirmation = $state(false);
 
   let styleOverflowOpen = $state(false);
 
@@ -343,6 +348,7 @@
   onMount(() => {
     const params = new URLSearchParams(window.location.search);
     const viewParam = params.get("view");
+    let settingsInitialization = Promise.resolve();
 
     void detectWindowMode();
     const saved = localStorage.getItem("howlingual_settings");
@@ -350,6 +356,7 @@
       try {
         const parsed = JSON.parse(saved);
         applySettingsFromParsed(parsed);
+        settingsInitialization = migrateLegacyApiKeys(parsed);
       } catch (e) {
         console.warn("Failed to parse saved settings", e);
       }
@@ -464,134 +471,188 @@
       });
     }
 
-    settingsReady = true;
+    void settingsInitialization.finally(() => {
+      settingsReady = true;
+    });
   });
+
+  let pendingTranslationHistoryRun = false;
+  let pendingStopRequested = false;
+  let ownedTranslationRunId: number | null = null;
+  const completedHistoryRunIds = new Set<number>();
+  const stoppingTranslationRunIds = new Set<number>();
+
+  function shouldRecordCompletedTranslation(p: any) {
+    if (typeof p.runId !== "number") return false;
+    if (stoppingTranslationRunIds.has(p.runId)) {
+      stoppingTranslationRunIds.delete(p.runId);
+      if (ownedTranslationRunId === p.runId) {
+        ownedTranslationRunId = null;
+      }
+      return false;
+    }
+    if (ownedTranslationRunId !== p.runId) return false;
+    if (completedHistoryRunIds.has(p.runId)) return false;
+    completedHistoryRunIds.add(p.runId);
+    if (completedHistoryRunIds.size > 200) {
+      completedHistoryRunIds.delete(completedHistoryRunIds.values().next().value!);
+    }
+    ownedTranslationRunId = null;
+    return true;
+  }
+
+  function applyTranslationUpdate(p: any) {
+    if (!p || typeof p !== "object") return;
+    const shouldRevealStreamUpdate = isTranslating || p.isTranslating;
+    let streamContentChanged = false;
+    const preserveFocusedDraft = Boolean(
+      typeof p.inputQuery === "string" &&
+        p.inputQuery !== inputQuery &&
+        textareaEl &&
+        document.activeElement === textareaEl,
+    );
+
+    // Ignore stale echoes while the user is actively typing.
+    if (p.inputQuery !== undefined && p.inputQuery !== inputQuery) {
+      const hasResults =
+        Array.isArray(p.translations) &&
+        p.translations.some((t: any) => t?.text);
+      if (textareaEl && document.activeElement === textareaEl) {
+        if (!p.isTranslating && !hasResults) {
+          return;
+        }
+      }
+    }
+
+    if (isTranslating && !p.isTranslating) {
+      if (
+        shouldRecordCompletedTranslation(p) &&
+        p.translations &&
+        p.translations.length > 0 &&
+        p.translations.some((t: any) => t.text)
+      ) {
+        const newEntry: HistoryItem = {
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          sourceText: p.inputQuery || inputQuery,
+          sourceLang: p.sourceLang || sourceLang,
+          targetLang: p.targetLang || targetLang,
+          isAutoDetect: isAutoDetect,
+          detectedLang: p.detectedLang || detectedLang || "",
+          translations: p.translations.map((t: any) => ({
+            text: t.text,
+            reason: t.reason,
+          })),
+          detailedExplanation: p.detailedExplanation
+            ? $state.snapshot(p.detailedExplanation)
+            : null,
+          styleLevels: p.styleLevels ? $state.snapshot(p.styleLevels) : {},
+        };
+        loadHistoryCollections();
+        history = [newEntry, ...history].slice(0, 50);
+        localStorage.setItem("howlingual_history", JSON.stringify(history));
+
+        persistCompletedResult(p);
+
+        const usageTokens = Math.max(
+          0,
+          (p.techMetrics?.inputTokens ?? 0) +
+            (p.techMetrics?.outputTokens ?? 0),
+        );
+        recordUsage(1, usageTokens);
+      }
+      lastTranslatedText = p.inputQuery || inputQuery;
+      if (ownedTranslationRunId === p.runId) {
+        ownedTranslationRunId = null;
+      }
+      pendingTranslationHistoryRun = false;
+    }
+
+    isTranslating = Boolean(p.isTranslating);
+    if (!p.isTranslating) {
+      if (
+        !isAutoDetect ||
+        inputQuery.trim().length >= 5 ||
+        !inputQuery.trim()
+      ) {
+        isDetecting = false;
+      }
+    }
+    if (!preserveFocusedDraft && Array.isArray(p.translations)) {
+      streamContentChanged = applyIncomingTranslations(
+        p.translations,
+        shouldRevealStreamUpdate,
+      );
+    }
+
+    if (!preserveFocusedDraft && "detailedExplanation" in p) {
+      const nextDetailedExplanation = p.detailedExplanation || null;
+      streamContentChanged =
+        streamContentChanged ||
+        nextDetailedExplanation !== detailedExplanation;
+      detailedExplanation = nextDetailedExplanation;
+    } else if (!preserveFocusedDraft && p.isTranslating) {
+      detailedExplanation = null;
+    }
+    if (shouldRevealStreamUpdate && streamContentChanged) {
+      requestStreamAutoScroll();
+    }
+    if ("errorMessage" in p) {
+      errorMessage = p.errorMessage || "";
+    }
+    if (
+      !preserveFocusedDraft &&
+      typeof p.inputQuery === "string" &&
+      p.inputQuery !== inputQuery
+    ) {
+      inputQuery = p.inputQuery;
+    }
+
+    if (
+      !preserveFocusedDraft &&
+      (!isAutoDetect || inputQuery.trim().length >= 5)
+    ) {
+      if (p.sourceLang) {
+        if (isAutoDetect && p.sourceLang !== AUTO_DETECT_LABEL) {
+          const incoming = p.detectedLang || p.sourceLang;
+          const localDetect = detectLanguageSimple(inputQuery);
+          detectedLang = localDetect === "日本語" ? "日本語" : incoming;
+          isDetecting = false;
+        } else {
+          applySourceLangFromSync(p.sourceLang, p.detectedLang);
+        }
+      } else if (p.detectedLang && isAutoDetect) {
+        const localDetect = detectLanguageSimple(inputQuery);
+        detectedLang = localDetect === "日本語" ? "日本語" : p.detectedLang;
+        isDetecting = false;
+      }
+    }
+
+    if (!preserveFocusedDraft && p.targetLang) {
+      targetLang = p.targetLang;
+    }
+
+    if (p.techMetrics) {
+      syncTechMetrics(p.techMetrics);
+    }
+
+    void tick().then(autoResize);
+  }
 
   // Service Integration
   onMount(() => {
     let unlisten: () => void;
     (async () => {
-      // Sync state on load
-      console.log("[UI] Requesting Sync State...");
-      await emit("request_sync_state");
-
       unlisten = await listen<any>("translation_update", (event) => {
-        const p = event.payload;
-
-        // --- ECHO GUARD ---
-        // Ignore updates for old input text to prevent "jumpy" UI when typing fast.
-        // During active detection or translation, the service might echo old states.
-        if (p.inputQuery !== undefined && p.inputQuery !== inputQuery) {
-          // If this window is focused/typing, ignore stale echoes unless real translation is flowing.
-          const hasResults =
-            Array.isArray(p.translations) &&
-            p.translations.some((t: any) => t?.text);
-          if (textareaEl && document.activeElement === textareaEl) {
-            if (!p.isTranslating && !hasResults) {
-              return;
-            }
-          }
-        }
-
-        // Detect completion for History Saving
-        if (isTranslating && !p.isTranslating) {
-          // Translation just finished
-          if (
-            p.translations &&
-            p.translations.length > 0 &&
-            p.translations.some((t: any) => t.text)
-          ) {
-            const newEntry: HistoryItem = {
-              id: crypto.randomUUID(),
-              timestamp: Date.now(),
-              sourceText: p.inputQuery || inputQuery,
-              sourceLang: p.detectedLang || p.sourceLang || sourceLang,
-              targetLang: p.targetLang || targetLang,
-              isAutoDetect: isAutoDetect,
-              detectedLang: p.detectedLang || detectedLang || "",
-              translations: p.translations.map((t: any) => ({
-                text: t.text,
-                reason: t.reason,
-              })),
-              detailedExplanation: p.detailedExplanation
-                ? $state.snapshot(p.detailedExplanation)
-                : null,
-              styleLevels: p.styleLevels ? $state.snapshot(p.styleLevels) : {},
-            };
-            history = [newEntry, ...history].slice(0, 50);
-            localStorage.setItem("howlingual_history", JSON.stringify(history));
-
-            persistLastResult(); // Helper function
-
-            const usageTokens = Math.max(
-              0,
-              (p.techMetrics?.inputTokens ?? 0) +
-                (p.techMetrics?.outputTokens ?? 0),
-            );
-            recordUsage(1, usageTokens);
-          }
-          lastTranslatedText = p.inputQuery || inputQuery;
-        }
-
-        isTranslating = p.isTranslating;
-        if (!p.isTranslating) {
-          // Only stop detecting if we're not in the manual threshold-waiting state
-          if (
-            !isAutoDetect ||
-            inputQuery.trim().length >= 5 ||
-            !inputQuery.trim()
-          ) {
-            isDetecting = false;
-          }
-        }
-        translations = p.translations; // Direct sync
-
-        if ("detailedExplanation" in p) {
-          detailedExplanation = p.detailedExplanation || null;
-          showExplanation = Boolean(p.detailedExplanation);
-        } else if (p.isTranslating) {
-          detailedExplanation = null;
-          showExplanation = false;
-        }
-        if ("errorMessage" in p) {
-          errorMessage = p.errorMessage || "";
-        }
-        if (p.inputQuery && p.inputQuery !== inputQuery) {
-          inputQuery = p.inputQuery;
-        }
-
-        // Sync Language Settings
-        // Only accept updates if we have enough text to trust the backend (or if manual)
-        // This prevents "flash" updates where backend sees 1 char and says "English"
-        if (!isAutoDetect || inputQuery.trim().length >= 5) {
-          if (p.sourceLang) {
-            if (isAutoDetect && p.sourceLang !== AUTO_DETECT_LABEL) {
-              const incoming = p.detectedLang || p.sourceLang;
-              const localDetect = detectLanguageSimple(inputQuery);
-              detectedLang = localDetect === "日本語" ? "日本語" : incoming;
-              isDetecting = false;
-            } else {
-              applySourceLangFromSync(p.sourceLang, p.detectedLang);
-            }
-          } else if (p.detectedLang && isAutoDetect) {
-            const localDetect = detectLanguageSimple(inputQuery);
-            detectedLang = localDetect === "日本語" ? "日本語" : p.detectedLang;
-            isDetecting = false;
-          }
-        }
-
-        if (p.targetLang) {
-          targetLang = p.targetLang;
-        }
-
-        // Sync Metrics
-        if (p.techMetrics) {
-          syncTechMetrics(p.techMetrics);
-        }
-
-        // Auto-resize if needed
-        void tick().then(autoResize);
+        applyTranslationUpdate(event.payload);
       });
+
+      try {
+        const state = await invoke<any>("request_translation_state");
+        applyTranslationUpdate(state);
+      } catch (error) {
+        console.warn("Failed to request translation state", error);
+      }
     })();
 
     return () => {
@@ -640,7 +701,6 @@
             // Clear previous results but keep input if user typed something
             translations = [];
             detailedExplanation = null;
-            showExplanation = false;
             isTranslating = false;
             errorMessage = "";
             resetTechMetrics();
@@ -751,9 +811,8 @@
     if (event.key === "howlingual_history") {
       try {
         const newValue = event.newValue ? JSON.parse(event.newValue) : [];
-        // Only update if different to avoid redundant renders?
-        // Simple assignment is safer for sync.
-        history = newValue;
+        history = normalizeStoredHistoryItems(newValue);
+        historyLoaded = true;
         console.log("[Sync] History updated from storage event");
       } catch (e) {
         console.warn("Failed to sync history", e);
@@ -763,6 +822,7 @@
       try {
         const parsed = JSON.parse(event.newValue);
         applySettingsFromParsed(parsed);
+        void migrateLegacyApiKeys(parsed);
         if (parsed.quickShortcut) {
           const isMac = navigator.userAgent.includes("Mac");
           quickShortcut = parsed.quickShortcut.replace(
@@ -777,7 +837,10 @@
       }
     } else if (event.key === "howlingual_favorites") {
       try {
-        favorites = event.newValue ? JSON.parse(event.newValue) : [];
+        favorites = normalizeStoredHistoryItems(
+          event.newValue ? JSON.parse(event.newValue) : [],
+        );
+        favoritesLoaded = true;
         console.log("[Sync] Favorites updated from storage event");
       } catch (e) {
         console.warn("Failed to sync favorites", e);
@@ -793,26 +856,31 @@
     window.addEventListener("storage", handleStorageChange);
   });
 
+  function scheduleIdle(callback: () => void) {
+    const requestIdle =
+      typeof window !== "undefined"
+        ? (window as any).requestIdleCallback
+        : null;
+    if (typeof requestIdle === "function") {
+      requestIdle(callback, { timeout: 1500 });
+      return;
+    }
+    window.setTimeout(callback, 0);
+  }
+
   onMount(() => {
-    refreshUsageStats();
+    scheduleIdle(refreshUsageStats);
   });
 
   // Auto-save settings when changed
   $effect(() => {
     if (!settingsReady) return;
-    const sanitizedApiKeys = rememberApiKeys
-      ? apiKeys
-      : {
-          gemini: "",
-          openai: "",
-          anthropic: "",
-          groq: "",
-          cerebras: "",
-        };
     const settings = {
       model: selectedModel,
       provider: selectedProvider,
-      apiKeys: sanitizedApiKeys,
+      ...(Object.keys(pendingLegacyApiKeys).length > 0
+        ? { apiKeys: pendingLegacyApiKeys }
+        : {}),
       defaultTargetLang: defaultTargetLang,
       theme: theme,
       appLanguage: appLanguage,
@@ -895,25 +963,10 @@
       return;
     }
 
-    if (model) {
-      selectedModel = model as AiModel;
-      const inferred =
-        getProviderForModel(model) ||
-        (provider && isAiProvider(provider) ? provider : null);
-      if (inferred) {
-        selectedProvider = inferred;
-      }
-      return;
-    }
-
     if (provider && isAiProvider(provider)) {
       selectedProvider = provider;
-      const fallback =
-        lastSelectedModels[provider] ?? getDefaultModelForProvider(provider);
-      if (fallback) {
-        selectedModel = fallback as AiModel;
-      }
     }
+    ensureModelMatchesProvider();
   }
 
   function ensureModelMatchesProvider() {
@@ -921,30 +974,59 @@
       (m) => m.provider === selectedProvider && m.value === selectedModel,
     );
     if (!valid) {
-      const fallback =
-        lastSelectedModels[selectedProvider] ??
-        getDefaultModelForProvider(selectedProvider);
+      const remembered = lastSelectedModels[selectedProvider];
+      const fallback = availableModels.some(
+        (model) =>
+          model.provider === selectedProvider && model.value === remembered,
+      )
+        ? remembered
+        : getDefaultModelForProvider(selectedProvider);
       if (fallback) {
         selectedModel = fallback as AiModel;
       }
     }
   }
 
+  function isPlainObject(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  }
+
+  function isAppLanguage(value: unknown): value is AppLanguage {
+    return value === "ja" || value === "en" || value === "zh" || value === "ko";
+  }
+
+  function isTheme(value: unknown): value is "dark" | "light" {
+    return value === "dark" || value === "light";
+  }
+
+  function isOcrEngine(value: unknown): value is "paddle" | "windows" {
+    return value === "paddle" || value === "windows";
+  }
+
+  function mergeLastSelectedModels(value: unknown) {
+    if (!isPlainObject(value)) return;
+    const next = { ...lastSelectedModels };
+    for (const [provider, model] of Object.entries(value)) {
+      if (isAiProvider(provider) && typeof model === "string") {
+        next[provider] = model;
+      }
+    }
+    lastSelectedModels = next;
+  }
+
   function applySettingsFromParsed(parsed: any) {
-    if (!parsed || typeof parsed !== "object") return;
+    if (!isPlainObject(parsed)) return;
 
-    if (parsed.lastSelectedModels) {
-      lastSelectedModels = {
-        ...lastSelectedModels,
-        ...parsed.lastSelectedModels,
-      };
-    }
+    mergeLastSelectedModels(parsed.lastSelectedModels);
 
-    if (parsed.model || parsed.provider) {
-      syncProviderAndModel(parsed.model, parsed.provider);
-    } else {
-      ensureModelMatchesProvider();
+    const parsedModel =
+      typeof parsed.model === "string" ? parsed.model : undefined;
+    const parsedProvider =
+      typeof parsed.provider === "string" ? parsed.provider : undefined;
+    if (parsedModel || parsedProvider) {
+      syncProviderAndModel(parsedModel, parsedProvider);
     }
+    ensureModelMatchesProvider();
 
     if (selectedProvider && selectedModel) {
       if (lastSelectedModels[selectedProvider] !== selectedModel) {
@@ -955,36 +1037,74 @@
       }
     }
 
-    if (parsed.rememberApiKeys !== undefined)
+    if (typeof parsed.rememberApiKeys === "boolean")
       rememberApiKeys = parsed.rememberApiKeys;
-    const shouldApplyKeys =
-      parsed.rememberApiKeys !== undefined
-        ? parsed.rememberApiKeys
-        : rememberApiKeys;
-    if (parsed.apiKeys && shouldApplyKeys) {
-      apiKeys = { ...apiKeys, ...parsed.apiKeys };
-    }
-    if (parsed.defaultTargetLang)
+    if (typeof parsed.defaultTargetLang === "string")
       defaultTargetLang = parsed.defaultTargetLang;
-    if (parsed.theme) theme = parsed.theme;
-    if (parsed.appLanguage) appLanguage = parsed.appLanguage;
-    if (parsed.allowRewrite !== undefined) allowRewrite = parsed.allowRewrite;
-    if (parsed.quickShortcut) quickShortcut = parsed.quickShortcut;
-    if (parsed.autoRunQuick !== undefined) autoRunQuick = parsed.autoRunQuick;
-    if (parsed.autoStartEnabled !== undefined)
+    if (isTheme(parsed.theme)) theme = parsed.theme;
+    if (isAppLanguage(parsed.appLanguage)) appLanguage = parsed.appLanguage;
+    if (typeof parsed.allowRewrite === "boolean")
+      allowRewrite = parsed.allowRewrite;
+    if (typeof parsed.quickShortcut === "string")
+      quickShortcut = parsed.quickShortcut;
+    if (typeof parsed.autoRunQuick === "boolean")
+      autoRunQuick = parsed.autoRunQuick;
+    if (typeof parsed.autoStartEnabled === "boolean")
       autoStartEnabled = parsed.autoStartEnabled;
-    if (parsed.startMinimized !== undefined)
+    if (typeof parsed.startMinimized === "boolean")
       startMinimized = parsed.startMinimized;
-    if (parsed.clipboardOpsEnabled !== undefined)
+    if (typeof parsed.clipboardOpsEnabled === "boolean")
       clipboardOpsEnabled = parsed.clipboardOpsEnabled;
-    if (parsed.ocrEngine) ocrEngine = parsed.ocrEngine;
+    if (isOcrEngine(parsed.ocrEngine)) ocrEngine = parsed.ocrEngine;
     if (
-      parsed.translationCount &&
+      typeof parsed.translationCount === "number" &&
       [1, 2, 3].includes(parsed.translationCount)
     )
-      translationCount = parsed.translationCount;
+      translationCount = parsed.translationCount as 1 | 2 | 3;
 
     document.documentElement.setAttribute("data-theme", theme);
+  }
+
+  async function migrateLegacyApiKeys(parsed: unknown) {
+    if (!isPlainObject(parsed) || !isPlainObject(parsed.apiKeys)) return;
+
+    const persist =
+      typeof parsed.rememberApiKeys === "boolean"
+        ? parsed.rememberApiKeys
+        : rememberApiKeys;
+    const providers: AiProvider[] = [
+      "openai",
+      "gemini",
+      "anthropic",
+      "groq",
+      "cerebras",
+    ];
+    const remainingKeys: Record<string, string> = {};
+    for (const provider of providers) {
+      const value = parsed.apiKeys[provider];
+      if (typeof value === "string" && value.trim()) {
+        remainingKeys[provider] = value;
+      }
+    }
+    pendingLegacyApiKeys = remainingKeys;
+
+    for (const provider of providers) {
+      const value = remainingKeys[provider];
+      if (!value) continue;
+      try {
+        apiKeyStatus = await invoke<ApiKeyStatus>("set_api_key", {
+          payload: {
+            provider,
+            value,
+            persist,
+          },
+        });
+        const { [provider]: _migrated, ...pending } = pendingLegacyApiKeys;
+        pendingLegacyApiKeys = pending;
+      } catch (error) {
+        console.warn(`Failed to migrate ${provider} API key`, error);
+      }
+    }
   }
 
   let styleLevels: Record<string, number> = $state(
@@ -1012,12 +1132,13 @@
   });
 
   function triggerResetStyles() {
+    rememberConfirmationFocus();
     showResetConfirmation = true;
   }
 
   function confirmResetStyles() {
     customStyles = getDefaultStyles(appLanguage);
-    showResetConfirmation = false;
+    closeResetConfirmation();
   }
   // Auto-save style levels whenever they change (after initial load)
   $effect(() => {
@@ -1163,32 +1284,48 @@
     );
   }
 
-  function getApiKeyLabel(provider: AiProvider) {
-    switch (provider) {
-      case "openai":
-        return t(appLanguage, "openaiApiKey");
-      case "gemini":
-        return t(appLanguage, "geminiApiKey");
-      case "anthropic":
-        return t(appLanguage, "anthropicApiKey");
-      case "groq":
-        return t(appLanguage, "groqApiKey");
-      case "cerebras":
-        return t(appLanguage, "cerebrasApiKey");
+  async function refreshApiKeyStatus() {
+    try {
+      apiKeyStatus = await invoke<ApiKeyStatus>("get_api_key_status");
+    } catch (error) {
+      console.warn("Failed to load API key status", error);
     }
   }
 
-  function getApiKeyPlaceholder(provider: AiProvider) {
-    switch (provider) {
-      case "gemini":
-        return "AIza...";
-      case "anthropic":
-        return "sk-ant-...";
-      case "groq":
-      case "cerebras":
-      case "openai":
-      default:
-        return "sk-...";
+  function clearPendingLegacyApiKey(provider: AiProvider) {
+    const { [provider]: _legacy, ...pending } = pendingLegacyApiKeys;
+    pendingLegacyApiKeys = pending;
+  }
+
+  async function saveSelectedApiKey() {
+    const provider = selectedProvider;
+    const value = apiKeyDrafts[provider]?.trim() ?? "";
+    if (!value) return;
+    try {
+      apiKeyStatus = await invoke<ApiKeyStatus>("set_api_key", {
+        payload: {
+          provider,
+          value,
+          persist: rememberApiKeys,
+        },
+      });
+      apiKeyDrafts = { ...apiKeyDrafts, [provider]: "" };
+      clearPendingLegacyApiKey(provider);
+    } catch (error) {
+      console.warn("Failed to save API key", error);
+    }
+  }
+
+  async function clearSelectedApiKey() {
+    const provider = selectedProvider;
+    try {
+      apiKeyStatus = await invoke<ApiKeyStatus>("clear_api_key", {
+        payload: { provider },
+      });
+      apiKeyDrafts = { ...apiKeyDrafts, [provider]: "" };
+      clearPendingLegacyApiKey(provider);
+    } catch (error) {
+      console.warn("Failed to clear API key", error);
     }
   }
 
@@ -1208,6 +1345,10 @@
   }
 
   let focusReturnTarget: HTMLElement | null = null;
+  let confirmationFocusReturnTarget: HTMLElement | null = null;
+  let resetConfirmationDialog = $state<HTMLDivElement | null>(null);
+  let clipboardOpsConfirmationDialog = $state<HTMLDivElement | null>(null);
+  let discardConfirmationDialog = $state<HTMLDivElement | null>(null);
 
   function rememberFocusTarget() {
     if (document.activeElement instanceof HTMLElement) {
@@ -1226,6 +1367,86 @@
     });
   }
 
+  function rememberConfirmationFocus() {
+    if (document.activeElement instanceof HTMLElement) {
+      confirmationFocusReturnTarget = document.activeElement;
+    }
+  }
+
+  function restoreConfirmationFocus() {
+    const target = confirmationFocusReturnTarget;
+    confirmationFocusReturnTarget = null;
+    if (!target) return;
+    void tick().then(() => {
+      if (target.isConnected) target.focus({ preventScroll: true });
+    });
+  }
+
+  function closeResetConfirmation() {
+    showResetConfirmation = false;
+    restoreConfirmationFocus();
+  }
+
+  function closeClipboardOpsConfirmation() {
+    showClipboardOpsConfirmation = false;
+    restoreConfirmationFocus();
+  }
+
+  function closeDiscardConfirmation() {
+    showDiscardConfirmation = false;
+    restoreConfirmationFocus();
+  }
+
+  function handleConfirmationKeydown(
+    event: KeyboardEvent,
+    dialog: HTMLElement | null,
+    close: () => void,
+  ) {
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key !== "Tab" || !dialog) return;
+    const focusable = Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    if (focusable.length === 0) {
+      event.preventDefault();
+      dialog.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  $effect(() => {
+    const dialog = showResetConfirmation
+      ? resetConfirmationDialog
+      : showClipboardOpsConfirmation
+        ? clipboardOpsConfirmationDialog
+        : showDiscardConfirmation
+          ? discardConfirmationDialog
+          : null;
+    if (!dialog) return;
+    void tick().then(() => {
+      const first = dialog.querySelector<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      (first ?? dialog).focus();
+    });
+  });
+
   function openSettingsModal() {
     rememberFocusTarget();
     settingsTab = "appearance";
@@ -1234,6 +1455,7 @@
 
   function openHistory() {
     rememberFocusTarget();
+    loadHistoryCollections();
     showHistory = true;
   }
 
@@ -1251,6 +1473,10 @@
     }
     if (e.key === "Escape") {
       e.preventDefault();
+
+      if (editingStyle) {
+        rememberConfirmationFocus();
+      }
 
       // Blur active element to prevent focus rings after closing
       if (document.activeElement instanceof HTMLElement) {
@@ -1279,11 +1505,15 @@
       }
 
       if (showResetConfirmation) {
-        showResetConfirmation = false;
+        closeResetConfirmation();
         return;
       }
       if (showDiscardConfirmation) {
-        showDiscardConfirmation = false;
+        closeDiscardConfirmation();
+        return;
+      }
+      if (showClipboardOpsConfirmation) {
+        closeClipboardOpsConfirmation();
         return;
       }
       if (editingStyle) {
@@ -1360,12 +1590,13 @@
   }
 
   function cancelEditStyle() {
+    rememberConfirmationFocus();
     showDiscardConfirmation = true;
   }
 
   function confirmDiscardStyle() {
     editingStyle = null;
-    showDiscardConfirmation = false;
+    closeDiscardConfirmation();
   }
 
   function deleteStyle(styleId: string) {
@@ -1374,16 +1605,6 @@
       "howlingual_custom_styles",
       JSON.stringify(customStyles),
     );
-  }
-
-  function resetStyles() {
-    if (confirm(t(appLanguage, "confirmReset"))) {
-      customStyles = [...getDefaultStyles(appLanguage)];
-      localStorage.setItem(
-        "howlingual_custom_styles",
-        JSON.stringify(customStyles),
-      );
-    }
   }
 
   async function addStyle() {
@@ -1436,11 +1657,7 @@
       isOpeningMain = true; // Flag to prevent compact window from clearing text
 
       // Build handover payload with full translation state
-      console.log(
-        "[handover] Current translations:",
-        translations.length,
-        translations,
-      );
+      console.log("[handover] Current translations:", translations.length);
       const handoverPayload = JSON.stringify({
         sourceText: inputQuery,
         translations: translations.map((t) => ({
@@ -1457,6 +1674,7 @@
         techMetrics: $state.snapshot(techMetrics),
         showTechInfo: showTechInfo,
         isTranslating: isTranslating, // Pass translating state
+        runId: ownedTranslationRunId,
       });
       console.log(
         "[handover] Sending payload:",
@@ -1466,6 +1684,8 @@
 
       // Use dedicated handover command with full state
       await invoke("handover_to_main", { text: handoverPayload });
+      ownedTranslationRunId = null;
+      pendingTranslationHistoryRun = false;
 
       // Hide the quick window after handover
       try {
@@ -1489,6 +1709,7 @@
       const data = JSON.parse(payload);
       if (typeof data === "object" && data !== null && "sourceText" in data) {
         console.log("[Handover] Restoring full state");
+        resetStreamRevealState();
         inputQuery = data.sourceText || "";
         lastTranslatedText = inputQuery;
         // Map translations to ensure reactive updates if needed
@@ -1502,7 +1723,6 @@
           translations = [];
         }
         detailedExplanation = data.detailedExplanation || null;
-        showExplanation = !!detailedExplanation;
 
         if (data.sourceLang) {
           applySourceLangFromSync(data.sourceLang, data.detectedLang);
@@ -1526,10 +1746,12 @@
 
         // Restore translating state if it was interrupted
         isTranslating = data.isTranslating || false;
+        ownedTranslationRunId =
+          isTranslating && typeof data.runId === "number" ? data.runId : null;
 
         await tick();
         await autoResize();
-        await emit("request_sync_state");
+        await syncSharedState(false);
       } else {
         // Valid JSON but not our state object? Treat as text.
         await applyQuickText(typeof data === "string" ? data : payload);
@@ -1541,8 +1763,13 @@
   }
 
   async function applyQuickText(text: string) {
+    if (isTranslating) {
+      const stopped = await stopTranslation();
+      if (!stopped) await waitForStop();
+    }
     // Clear ALL previous state when new text arrives
     inputQuery = ""; // Clear first to force reactivity
+    resetStreamRevealState();
     // Pre-populate empty translation slots (so card backgrounds are visible)
     translations = Array.from({ length: translationCount }, (_, i) => ({
       id: i + 1,
@@ -1550,7 +1777,6 @@
       reason: "",
     }));
     detailedExplanation = null;
-    showExplanation = false;
     errorMessage = "";
     autoScrollEnabled = true;
     lastStreamCharCount = 0;
@@ -1592,15 +1818,20 @@
   let syncTimer: ReturnType<typeof setTimeout> | null = null;
 
   async function syncSharedState(resetTranslations = false) {
-    await emit("sync_input_command", {
-      text: inputQuery,
-      sourceLang,
-      detectedLang,
-      isDetecting,
-      targetLang,
-      styles: $state.snapshot(styleLevels),
-      candidateCount: translationCount,
-      resetTranslations,
+    const canSyncRunDefinition = !isTranslating;
+    await invoke("sync_translation_context", {
+      payload: {
+        inputQuery: canSyncRunDefinition ? inputQuery : undefined,
+        sourceLang: canSyncRunDefinition ? sourceLang : undefined,
+        detectedLang: canSyncRunDefinition ? detectedLang : undefined,
+        isDetecting: canSyncRunDefinition ? isDetecting : undefined,
+        targetLang: canSyncRunDefinition ? targetLang : undefined,
+        styleLevels: canSyncRunDefinition
+          ? $state.snapshot(styleLevels)
+          : undefined,
+        candidateCount: canSyncRunDefinition ? translationCount : undefined,
+        resetTranslations,
+      },
     });
   }
 
@@ -1638,12 +1869,13 @@
 
   async function clearInput() {
     if (isTranslating) {
-      await stopTranslation();
+      const stopped = await stopTranslation();
+      if (!stopped) await waitForStop();
     }
     inputQuery = "";
+    resetStreamRevealState();
     translations = [];
     detailedExplanation = null;
-    showExplanation = false;
     errorMessage = "";
     lastStreamCharCount = 0;
     autoScrollEnabled = true;
@@ -1723,10 +1955,16 @@
 
   function toggleClipboardOps() {
     if (!clipboardOpsEnabled) {
-      const approved = confirm(t(appLanguage, "clipboardOpsConfirmEnable"));
-      if (!approved) return;
+      rememberConfirmationFocus();
+      showClipboardOpsConfirmation = true;
+      return;
     }
-    clipboardOpsEnabled = !clipboardOpsEnabled;
+    clipboardOpsEnabled = false;
+  }
+
+  function confirmEnableClipboardOps() {
+    clipboardOpsEnabled = true;
+    closeClipboardOpsConfirmation();
   }
 
   function applySourceLangFromSync(lang: string, detected?: string) {
@@ -1948,9 +2186,10 @@
       if (isSpeakingId === id) isSpeakingId = null;
     };
 
-    console.log(
-      `[UI] TTS triggered for: "${text.substring(0, 20)}..." (Lang: ${langCode})`,
-    );
+    console.log("[UI] TTS triggered:", {
+      length: text.length,
+      lang: langCode,
+    });
     window.speechSynthesis.speak(utterance);
   }
 
@@ -2093,9 +2332,16 @@
 
   // Auto-scroll during streaming (like modern AI chat apps)
   let autoScrollEnabled = $state(true);
+  let isProgrammaticScroll = false;
   let lastScrollTop = 0;
   let isAtBottom = $state(true);
   let lastStreamCharCount = $state(0);
+  let streamAutoScrollVersion = $state(0);
+  let lastHandledStreamAutoScrollVersion = 0;
+
+  function requestStreamAutoScroll() {
+    streamAutoScrollVersion += 1;
+  }
 
   function onMainScroll() {
     if (!scrollContainerEl || !textareaEl) return;
@@ -2127,7 +2373,9 @@
     isScrolledDown = scrollContainerEl.scrollTop > threshold;
 
     // Auto-scroll logic: detect if user scrolled up
-    if (isTranslating) {
+    if (isProgrammaticScroll) {
+      autoScrollEnabled = true;
+    } else if (isTranslating) {
       // Allow slight tolerance for "bottom"
       const isNearBottom = scrollHeight - scrollTop - clientHeight < 30;
 
@@ -2159,12 +2407,27 @@
       }
       autoScrollRafId = requestAnimationFrame(() => {
         autoScrollRafId = null;
-        if (scrollContainerEl && autoScrollEnabled) {
-          scrollContainerEl.scrollTo({
-            top: scrollContainerEl.scrollHeight,
-            behavior: "smooth",
+        const scrollToEnd = () => {
+          if (!scrollContainerEl || !autoScrollEnabled) return;
+          isProgrammaticScroll = true;
+          if (isTranslating) {
+            scrollContainerEl.scrollTop = scrollContainerEl.scrollHeight;
+          } else {
+            scrollContainerEl.scrollTo({
+              top: scrollContainerEl.scrollHeight,
+              behavior: "smooth",
+            });
+          }
+          checkBottomPosition();
+        };
+        scrollToEnd();
+        requestAnimationFrame(() => {
+          scrollToEnd();
+          requestAnimationFrame(() => {
+            isProgrammaticScroll = false;
+            checkBottomPosition();
           });
-        }
+        });
       });
     }
   }
@@ -2184,11 +2447,24 @@
   $effect(() => {
     if (!scrollContainerEl) return;
     translations;
+    detailedExplanation;
+    const autoScrollVersion = streamAutoScrollVersion;
     const currentCharCount = translations.reduce(
-      (sum, t) => sum + (t.text ? t.text.length : 0),
+      (sum, t) => sum + (t.text?.length ?? 0) + (t.reason?.length ?? 0),
+      0,
+    ) + (detailedExplanation?.points ?? []).reduce(
+      (sum, point) => sum + point.term.length + point.explanation.length,
       0,
     );
-    if (isTranslating && currentCharCount > lastStreamCharCount) {
+    const hasStreamScrollRequest =
+      autoScrollVersion > lastHandledStreamAutoScrollVersion;
+    if (hasStreamScrollRequest) {
+      lastHandledStreamAutoScrollVersion = autoScrollVersion;
+    }
+    if (
+      hasStreamScrollRequest ||
+      (isTranslating && currentCharCount > lastStreamCharCount)
+    ) {
       void tick().then(autoScrollToBottom);
     }
     lastStreamCharCount = currentCharCount;
@@ -2208,9 +2484,6 @@
       if (detailedExplanation) {
         detailedExplanation = null;
       }
-      if (showExplanation) {
-        showExplanation = false;
-      }
     }
   });
 
@@ -2221,14 +2494,202 @@
     { id: 2, text: "", reason: "" },
     { id: 3, text: "", reason: "" },
   ]);
+  const STREAM_REVEAL_MS = 560;
+  type StreamRevealSegment = {
+    key: number;
+    start: number;
+    end: number;
+  };
+  type StreamTextPart = {
+    key: string;
+    text: string;
+    reveal: boolean;
+  };
+  let streamRevealSegmentsById = $state<Record<number, StreamRevealSegment[]>>(
+    {},
+  );
+  let streamRevealSegmentKey = 0;
+  let previousTranslationTextById: Record<number, string> = {};
+  let streamRevealClearTimers: Record<string, ReturnType<typeof setTimeout>> =
+    {};
   let detailedExplanation: {
     points: { term: string; explanation: string }[];
   } | null = $state(null);
   let isTranslating = $state(false);
-  let showExplanation = $state(true);
   let isDetecting = $state(false);
 
   let errorMessage = $state("");
+
+  function getStreamRevealTimerKey(candidateId: number, segmentKey: number) {
+    return `${candidateId}:${segmentKey}`;
+  }
+
+  function clearStreamRevealTimer(timerKey: string) {
+    const timer = streamRevealClearTimers[timerKey];
+    if (timer) clearTimeout(timer);
+    delete streamRevealClearTimers[timerKey];
+  }
+
+  function removeStreamRevealSegment(candidateId: number, segmentKey: number) {
+    const current = streamRevealSegmentsById[candidateId];
+    if (!current) return;
+    const nextSegments = current.filter((segment) => segment.key !== segmentKey);
+    const next = { ...streamRevealSegmentsById };
+    if (nextSegments.length > 0) {
+      next[candidateId] = nextSegments;
+    } else {
+      delete next[candidateId];
+    }
+    streamRevealSegmentsById = next;
+  }
+
+  function clearStreamRevealSegmentsForCandidate(candidateId: number) {
+    for (const segment of streamRevealSegmentsById[candidateId] ?? []) {
+      clearStreamRevealTimer(getStreamRevealTimerKey(candidateId, segment.key));
+    }
+    if (!(candidateId in streamRevealSegmentsById)) return;
+    const next = { ...streamRevealSegmentsById };
+    delete next[candidateId];
+    streamRevealSegmentsById = next;
+  }
+
+  function addStreamRevealSegment(candidateId: number, start: number, end: number) {
+    if (end <= start) return;
+    const segment: StreamRevealSegment = {
+      key: ++streamRevealSegmentKey,
+      start,
+      end,
+    };
+    streamRevealSegmentsById = {
+      ...streamRevealSegmentsById,
+      [candidateId]: [
+        ...(streamRevealSegmentsById[candidateId] ?? []),
+        segment,
+      ],
+    };
+    const timerKey = getStreamRevealTimerKey(candidateId, segment.key);
+    streamRevealClearTimers[timerKey] = setTimeout(() => {
+      removeStreamRevealSegment(candidateId, segment.key);
+      delete streamRevealClearTimers[timerKey];
+    }, STREAM_REVEAL_MS);
+  }
+
+  function resetStreamRevealState() {
+    Object.keys(streamRevealClearTimers).forEach((timerKey) => {
+      clearStreamRevealTimer(timerKey);
+    });
+    streamRevealSegmentsById = {};
+    previousTranslationTextById = {};
+  }
+
+  function normalizeIncomingTranslations(items: any[]) {
+    return items.map((item, index) => ({
+      id: Number(item?.id ?? index + 1),
+      text: item?.text ?? "",
+      reason: item?.reason ?? "",
+    }));
+  }
+
+  function areTranslationsEqual(
+    current: { id: number; text: string; reason: string }[],
+    next: { id: number; text: string; reason: string }[],
+  ) {
+    if (current.length !== next.length) return false;
+    return current.every(
+      (item, index) =>
+        item.id === next[index].id &&
+        item.text === next[index].text &&
+        item.reason === next[index].reason,
+    );
+  }
+
+  function trackStreamReveal(
+    nextTranslations: { id: number; text: string; reason: string }[],
+    shouldReveal: boolean,
+  ) {
+    const activeIds = new Set<number>();
+    for (const item of nextTranslations) {
+      activeIds.add(item.id);
+      const previousText = previousTranslationTextById[item.id] ?? "";
+      const nextText = item.text ?? "";
+      if (nextText !== previousText) {
+        if (nextText && shouldReveal) {
+          if (previousText && nextText.startsWith(previousText)) {
+            addStreamRevealSegment(item.id, previousText.length, nextText.length);
+          } else {
+            clearStreamRevealSegmentsForCandidate(item.id);
+            addStreamRevealSegment(item.id, 0, nextText.length);
+          }
+        } else {
+          clearStreamRevealSegmentsForCandidate(item.id);
+        }
+      }
+      previousTranslationTextById[item.id] = nextText;
+    }
+
+    Object.keys(previousTranslationTextById).forEach((id) => {
+      const numericId = Number(id);
+      if (!activeIds.has(numericId)) {
+        delete previousTranslationTextById[numericId];
+        clearStreamRevealSegmentsForCandidate(numericId);
+      }
+    });
+  }
+
+  function applyIncomingTranslations(items: any[], shouldReveal = isTranslating) {
+    const nextTranslations = normalizeIncomingTranslations(items);
+    trackStreamReveal(nextTranslations, shouldReveal);
+    const changed = !areTranslationsEqual(translations, nextTranslations);
+    if (changed) {
+      translations = nextTranslations;
+    }
+    return changed;
+  }
+
+  function getStreamTextParts(item: { id: number; text: string }): StreamTextPart[] {
+    const text = item.text ?? "";
+    const segments = (streamRevealSegmentsById[item.id] ?? [])
+      .map((segment) => ({
+        ...segment,
+        start: Math.max(0, Math.min(segment.start, text.length)),
+        end: Math.max(0, Math.min(segment.end, text.length)),
+      }))
+      .filter((segment) => segment.end > segment.start)
+      .sort((a, b) => a.start - b.start);
+
+    if (segments.length === 0) {
+      return text ? [{ key: `plain-${item.id}`, text, reveal: false }] : [];
+    }
+
+    const parts: StreamTextPart[] = [];
+    let cursor = 0;
+    for (const segment of segments) {
+      if (segment.start > cursor) {
+        parts.push({
+          key: `plain-${item.id}-${cursor}-${segment.start}`,
+          text: text.slice(cursor, segment.start),
+          reveal: false,
+        });
+      }
+      if (segment.end > cursor) {
+        const start = Math.max(cursor, segment.start);
+        parts.push({
+          key: `reveal-${item.id}-${segment.key}`,
+          text: text.slice(start, segment.end),
+          reveal: true,
+        });
+        cursor = segment.end;
+      }
+    }
+    if (cursor < text.length) {
+      parts.push({
+        key: `plain-${item.id}-${cursor}-end`,
+        text: text.slice(cursor),
+        reveal: false,
+      });
+    }
+    return parts;
+  }
 
   // ====== Permission State (macOS only) ======
   let permissions = $state({
@@ -2294,6 +2755,72 @@
     styleLevels: Record<string, number>;
   };
 
+  function normalizeStoredHistoryItems(value: unknown): HistoryItem[] {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((item): item is Record<string, unknown> => isPlainObject(item))
+      .filter(
+        (item) =>
+          typeof item.sourceText === "string" &&
+          typeof item.targetLang === "string" &&
+          Array.isArray(item.translations),
+      )
+      .map((item) => ({
+        id: typeof item.id === "string" ? item.id : crypto.randomUUID(),
+        timestamp:
+          typeof item.timestamp === "number" && Number.isFinite(item.timestamp)
+            ? item.timestamp
+            : Date.now(),
+        sourceText: item.sourceText as string,
+        sourceLang:
+          typeof item.sourceLang === "string" ? item.sourceLang : AUTO_DETECT_LABEL,
+        targetLang: item.targetLang as string,
+        isAutoDetect:
+          typeof item.isAutoDetect === "boolean" ? item.isAutoDetect : undefined,
+        detectedLang:
+          typeof item.detectedLang === "string" ? item.detectedLang : "",
+        translations: (item.translations as unknown[])
+          .filter((translation): translation is Record<string, unknown> =>
+            isPlainObject(translation),
+          )
+          .map((translation) => ({
+            text:
+              typeof translation.text === "string" ? translation.text : "",
+            reason:
+              typeof translation.reason === "string"
+                ? translation.reason
+                : "",
+          })),
+        detailedExplanation:
+          isPlainObject(item.detailedExplanation) &&
+          Array.isArray(item.detailedExplanation.points)
+            ? {
+                points: item.detailedExplanation.points
+                  .filter((point): point is Record<string, unknown> =>
+                    isPlainObject(point),
+                  )
+                  .map((point) => ({
+                    term: typeof point.term === "string" ? point.term : "",
+                    explanation:
+                      typeof point.explanation === "string"
+                        ? point.explanation
+                        : "",
+                  })),
+              }
+            : null,
+        styleLevels: isPlainObject(item.styleLevels)
+          ? (Object.fromEntries(
+              Object.entries(item.styleLevels).filter(
+                (entry): entry is [string, number] =>
+                  typeof entry[1] === "number",
+              ),
+            ) as Record<string, number>)
+          : {},
+      }))
+      .filter((item) => item.translations.length > 0)
+      .slice(0, 50);
+  }
+
   let history: HistoryItem[] = $state([]);
   let favorites: HistoryItem[] = $state([]);
   let showHistory = $state(false);
@@ -2336,6 +2863,7 @@
   }
 
   function toggleFavorite(item: HistoryItem) {
+    loadHistoryCollections();
     const itemKey = buildFavoriteKey(item);
     const existingIdx = favorites.findIndex(
       (f) => f.id === item.id || buildFavoriteKey(f) === itemKey,
@@ -2373,11 +2901,13 @@
   }
 
   function deleteHistoryItem(id: string) {
+    loadHistoryCollections();
     history = history.filter((h) => h.id !== id);
     localStorage.setItem("howlingual_history", JSON.stringify(history));
   }
 
   function moveFavorite(index: number, direction: "up" | "down") {
+    loadHistoryCollections();
     const newIdx = direction === "up" ? index - 1 : index + 1;
     if (newIdx < 0 || newIdx >= favorites.length) return;
     const newFavs = [...favorites];
@@ -2387,41 +2917,45 @@
   }
 
   function deleteFavorite(id: string) {
+    loadHistoryCollections();
     favorites = favorites.filter((f) => f.id !== id);
     localStorage.setItem("howlingual_favorites", JSON.stringify(favorites));
   }
 
+  let historyLoaded = false;
+  let favoritesLoaded = false;
+  function loadHistoryCollections() {
+    if (!historyLoaded) {
+      historyLoaded = true;
+      const savedHistory = localStorage.getItem("howlingual_history");
+      if (savedHistory) {
+        try {
+          history = normalizeStoredHistoryItems(JSON.parse(savedHistory));
+        } catch (e) {
+          console.error("Failed to load history", e);
+        }
+      }
+    }
+
+    if (!favoritesLoaded) {
+      favoritesLoaded = true;
+      const savedFavs = localStorage.getItem("howlingual_favorites");
+      if (savedFavs) {
+        try {
+          favorites = normalizeStoredHistoryItems(JSON.parse(savedFavs));
+        } catch (e) {
+          console.error("Failed to load favorites", e);
+        }
+      }
+    }
+  }
+
   onMount(() => {
-    // Scroll handling
-    const container = scrollContainerEl;
-    if (container) {
-      // ... (existing resize observer logic inside onMount if any? No, existing code uses actions)
-    }
-
-    const savedHistory = localStorage.getItem("howlingual_history");
-    if (savedHistory) {
-      try {
-        history = JSON.parse(savedHistory);
-      } catch (e) {
-        console.error("Failed to load history", e);
-      }
-    }
-
-    const savedFavs = localStorage.getItem("howlingual_favorites");
-    if (savedFavs) {
-      try {
-        favorites = JSON.parse(savedFavs);
-      } catch (e) {
-        console.error("Failed to load favorites", e);
-      }
-    }
-
-    /* Duplicate customStyles loading removed - already handled in first onMount */
-
-    /* Last result loading disabled by user request */
+    loadHistoryCollections();
   });
 
   function loadHistory(item: HistoryItem) {
+    resetStreamRevealState();
     inputQuery = item.sourceText;
     lastTranslatedText = item.sourceText;
     // We try to match sourceLang/targetLang to available options if possible,
@@ -2441,10 +2975,8 @@
     // Restore explanation
     if (item.detailedExplanation) {
       detailedExplanation = item.detailedExplanation;
-      showExplanation = true;
     } else {
       detailedExplanation = null;
-      showExplanation = false;
     }
 
     // Restore source/target if they exist in current list
@@ -2503,9 +3035,38 @@
     localStorage.setItem(LAST_RESULT_KEY, JSON.stringify(snapshot));
   }
 
+  function persistCompletedResult(p: any) {
+    if (
+      !Array.isArray(p.translations) ||
+      !p.translations.some((translation: any) => translation?.text)
+    ) {
+      return;
+    }
+    const snapshot: LastResultSnapshot = {
+      timestamp: Date.now(),
+      sourceText: p.inputQuery || inputQuery,
+      sourceLang: p.sourceLang || sourceLang,
+      targetLang: p.targetLang || targetLang,
+      detectedLang: p.detectedLang || detectedLang || "",
+      isAutoDetect,
+      translations: p.translations.map((translation: any) => ({
+        text: translation.text || "",
+        reason: translation.reason || "",
+      })),
+      detailedExplanation: p.detailedExplanation
+        ? $state.snapshot(p.detailedExplanation)
+        : null,
+      styleLevels: p.styleLevels
+        ? $state.snapshot(p.styleLevels)
+        : $state.snapshot(styleLevels),
+    };
+    localStorage.setItem(LAST_RESULT_KEY, JSON.stringify(snapshot));
+  }
+
   function applyLastResult(snapshot: LastResultSnapshot) {
     if (!snapshot || isTranslating) return;
     if (!Array.isArray(snapshot.translations)) return;
+    resetStreamRevealState();
     inputQuery = snapshot.sourceText || "";
     lastTranslatedText = inputQuery;
     isAutoDetect = snapshot.isAutoDetect;
@@ -2519,10 +3080,8 @@
     }));
     if (snapshot.detailedExplanation?.points?.length) {
       detailedExplanation = snapshot.detailedExplanation;
-      showExplanation = true;
     } else {
       detailedExplanation = null;
-      showExplanation = false;
     }
     styleLevels = { ...styleLevels, ...snapshot.styleLevels };
   }
@@ -2638,318 +3197,6 @@
     };
   });
 
-  type TranslationCandidateState = {
-    id: number;
-    text: string;
-    reason: string;
-  };
-
-  type TranslationServiceState = {
-    inputQuery: string;
-    sourceLang: string;
-    detectedLang: string;
-    targetLang: string;
-    translations: TranslationCandidateState[];
-    detailedExplanation: AiResponse["detailed_explanation"] | null;
-    styleLevels: Record<string, number>;
-    techMetrics: TechMetrics;
-    isTranslating: boolean;
-    errorMessage: string;
-  };
-
-  type TranslationCommandPayload = {
-    text: string;
-    sourceLang: string;
-    targetLang: string;
-    styles: Record<string, number>;
-    styleMeta?: Record<string, { name: string; prompt?: string }>;
-    model: AiModel;
-    provider?: AiProvider | null;
-    explanationLang?: string;
-    apiKeys?: Record<string, string>;
-    initialTokens?: number;
-    candidateCount?: number;
-  };
-
-  const makeEmptyTranslationSlots = (count: number) =>
-    Array.from({ length: Math.max(1, count) }, (_, index) => ({
-      id: index + 1,
-      text: "",
-      reason: "",
-    }));
-
-  let translationServiceAbortController: AbortController | null = null;
-  let translationServiceState: TranslationServiceState = {
-    inputQuery: "",
-    sourceLang: AUTO_DETECT_LABEL,
-    detectedLang: "",
-    targetLang: "日本語",
-    translations: [],
-    detailedExplanation: null,
-    styleLevels: {},
-    techMetrics: { ...EMPTY_TECH_METRICS },
-    isTranslating: false,
-    errorMessage: "",
-  };
-
-  function getTranslationServiceMetrics(params: {
-    startedAt: number;
-    firstTokenAt: number;
-    model: string;
-    text: string;
-    translations: TranslationCandidateState[];
-    initialTokens?: number;
-    usage?: UsageMetadata;
-    isStreaming: boolean;
-  }): TechMetrics {
-    const now = Date.now();
-    const time = Math.max(0, (now - params.startedAt) / 1000);
-    const translatedChars = params.translations.reduce(
-      (sum, item) => sum + item.text.length + item.reason.length,
-      0,
-    );
-    const firstTokenAt =
-      params.firstTokenAt || (translatedChars > 0 || params.usage ? now : 0);
-    const waitTime = firstTokenAt
-      ? Math.max(0, (firstTokenAt - params.startedAt) / 1000)
-      : time;
-    const genTime = firstTokenAt ? Math.max(0, time - waitTime) : 0;
-    const outputTokens =
-      params.usage?.output_tokens ?? Math.max(0, Math.ceil(translatedChars / 4));
-
-    return {
-      time,
-      waitTime,
-      genTime,
-      model: params.model,
-      inputTokens:
-        params.usage?.input_tokens ??
-        params.initialTokens ??
-        Math.max(0, Math.ceil(params.text.length / 1.5)),
-      outputTokens,
-      tokensPerSec: genTime > 0 ? outputTokens / genTime : 0,
-      streamMode: params.isStreaming,
-      isReal: Boolean(params.usage),
-      firstTokenReceived: Boolean(firstTokenAt),
-    };
-  }
-
-  function mergeTranslationPartial(
-    current: TranslationCandidateState[],
-    partial: Partial<AiResponse>,
-    candidateCount: number,
-  ) {
-    const next =
-      current.length > 0
-        ? current.map((item) => ({ ...item }))
-        : makeEmptyTranslationSlots(candidateCount);
-
-    partial.candidates?.forEach((candidate, index) => {
-      next[index] = {
-        id: index + 1,
-        text: candidate.text ?? next[index]?.text ?? "",
-        reason: candidate.reason ?? next[index]?.reason ?? "",
-      };
-    });
-
-    return next;
-  }
-
-  async function emitTranslationServiceUpdate(
-    patch: Partial<TranslationServiceState> = {},
-  ) {
-    translationServiceState = {
-      ...translationServiceState,
-      ...patch,
-    };
-    await emit("translation_update", translationServiceState);
-  }
-
-  async function handleTranslationCommand(payload: TranslationCommandPayload) {
-    translationServiceAbortController?.abort();
-    const abortController = new AbortController();
-    translationServiceAbortController = abortController;
-
-    const candidateCount = payload.candidateCount ?? 3;
-    const startedAt = Date.now();
-    let firstTokenAt = 0;
-    let nextTranslations = makeEmptyTranslationSlots(candidateCount);
-
-    await emitTranslationServiceUpdate({
-      inputQuery: payload.text,
-      sourceLang: payload.sourceLang,
-      detectedLang: "",
-      targetLang: payload.targetLang,
-      translations: nextTranslations,
-      detailedExplanation: null,
-      styleLevels: payload.styles,
-      techMetrics: {
-        ...EMPTY_TECH_METRICS,
-        model: payload.model,
-        inputTokens:
-          payload.initialTokens ?? Math.max(0, Math.ceil(payload.text.length / 1.5)),
-        streamMode: true,
-      },
-      isTranslating: true,
-      errorMessage: "",
-    });
-
-    try {
-      await translateTextStream(
-        payload.text,
-        payload.sourceLang,
-        payload.targetLang,
-        payload.styles,
-        payload.model,
-        (partial, usage) => {
-          if (abortController.signal.aborted) return;
-          nextTranslations = mergeTranslationPartial(
-            nextTranslations,
-            partial,
-            candidateCount,
-          );
-          if (
-            firstTokenAt === 0 &&
-            (nextTranslations.some((item) => item.text || item.reason) || usage)
-          ) {
-            firstTokenAt = Date.now();
-          }
-          void emitTranslationServiceUpdate({
-            detectedLang:
-              partial.detected_source_language ??
-              translationServiceState.detectedLang,
-            sourceLang:
-              partial.detected_source_language ??
-              translationServiceState.sourceLang,
-            translations: nextTranslations,
-            detailedExplanation:
-              partial.detailed_explanation ??
-              translationServiceState.detailedExplanation,
-            techMetrics: getTranslationServiceMetrics({
-              startedAt,
-              firstTokenAt,
-              model: payload.model,
-              text: payload.text,
-              translations: nextTranslations,
-              initialTokens: payload.initialTokens,
-              usage,
-              isStreaming: true,
-            }),
-          });
-        },
-        payload.explanationLang ?? "日本語",
-        payload.styleMeta ?? {},
-        payload.apiKeys ?? {},
-        {
-          provider: payload.provider,
-          signal: abortController.signal,
-        },
-        candidateCount,
-      );
-
-      if (!abortController.signal.aborted) {
-        await emitTranslationServiceUpdate({
-          isTranslating: false,
-          techMetrics: getTranslationServiceMetrics({
-            startedAt,
-            firstTokenAt,
-            model: payload.model,
-            text: payload.text,
-            translations: nextTranslations,
-            initialTokens: payload.initialTokens,
-            isStreaming: true,
-          }),
-        });
-      }
-    } catch (error) {
-      if (abortController.signal.aborted) return;
-      await emitTranslationServiceUpdate({
-        isTranslating: false,
-        errorMessage: getFriendlyServiceError(error),
-        techMetrics: getTranslationServiceMetrics({
-          startedAt,
-          firstTokenAt,
-          model: payload.model,
-          text: payload.text,
-          translations: nextTranslations,
-          initialTokens: payload.initialTokens,
-          isStreaming: true,
-        }),
-      });
-    } finally {
-      if (translationServiceAbortController === abortController) {
-        translationServiceAbortController = null;
-      }
-    }
-  }
-
-  function getFriendlyServiceError(error: unknown) {
-    if (error instanceof Error) return error.message;
-    return String(error);
-  }
-
-  function shouldHandleTranslationServiceEvents() {
-    try {
-      return getCurrentWindow().label === "main";
-    } catch {
-      return true;
-    }
-  }
-
-  onMount(() => {
-    if (!shouldHandleTranslationServiceEvents()) return;
-
-    const unlistenStart = listen<TranslationCommandPayload>(
-      "start_translation_command",
-      (event) => {
-        void handleTranslationCommand(event.payload);
-      },
-    );
-    const unlistenStop = listen("stop_translation_command", () => {
-      translationServiceAbortController?.abort();
-      void emitTranslationServiceUpdate({ isTranslating: false });
-    });
-    const unlistenSync = listen<any>("sync_input_command", (event) => {
-      const payload = event.payload ?? {};
-      const textChanged =
-        payload.text !== undefined &&
-        payload.text !== translationServiceState.inputQuery;
-      const resetTranslations =
-        Boolean(payload.resetTranslations) ||
-        (textChanged && !translationServiceState.isTranslating);
-      void emitTranslationServiceUpdate({
-        inputQuery: payload.text ?? translationServiceState.inputQuery,
-        sourceLang: payload.sourceLang ?? translationServiceState.sourceLang,
-        detectedLang: payload.detectedLang ?? translationServiceState.detectedLang,
-        targetLang: payload.targetLang ?? translationServiceState.targetLang,
-        styleLevels: payload.styles ?? translationServiceState.styleLevels,
-        translations: resetTranslations ? [] : translationServiceState.translations,
-        detailedExplanation: resetTranslations
-          ? null
-          : translationServiceState.detailedExplanation,
-        errorMessage: resetTranslations ? "" : translationServiceState.errorMessage,
-        techMetrics: resetTranslations
-          ? { ...EMPTY_TECH_METRICS }
-          : translationServiceState.techMetrics,
-      });
-    });
-    const unlistenRequest = listen("request_sync_state", () => {
-      void emitTranslationServiceUpdate();
-    });
-
-    return () => {
-      translationServiceAbortController?.abort();
-      void Promise.all([
-        unlistenStart,
-        unlistenStop,
-        unlistenSync,
-        unlistenRequest,
-      ]).then((unlisteners) => {
-        unlisteners.forEach((unlisten) => unlisten());
-      });
-    };
-  });
-
   type DailyUsage = {
     date: string;
     count: number;
@@ -2984,12 +3231,29 @@
     return { date: dateKey, count: 0, tokens: 0 };
   }
 
+  function normalizeUsageMap(value: unknown): Record<string, DailyUsage> {
+    if (!isPlainObject(value)) return {};
+    const normalized: Record<string, DailyUsage> = {};
+    for (const [date, item] of Object.entries(value)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isPlainObject(item)) continue;
+      const count = item.count;
+      const tokens = item.tokens;
+      normalized[date] = {
+        date,
+        count: typeof count === "number" && Number.isFinite(count) ? count : 0,
+        tokens:
+          typeof tokens === "number" && Number.isFinite(tokens) ? tokens : 0,
+      };
+    }
+    return normalized;
+  }
+
   function loadUsageMap(): Record<string, DailyUsage> {
     try {
       const raw = localStorage.getItem(USAGE_STORAGE_KEY);
       if (!raw) return {};
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") return parsed;
+      return normalizeUsageMap(parsed);
     } catch (e) {
       console.warn("[Usage] Failed to load usage stats", e);
     }
@@ -3113,10 +3377,10 @@
     syncShowTechInfoFromStorage();
     isTranslating = true;
     autoScrollEnabled = true; // Enable auto-scroll for new translation
-    showExplanation = false; // Hide explanation during translation
     showSourceLangMenu = false; // Close menu if open
     showTargetLangMenu = false; // Close menu if open
     // Clear content and set slots based on translationCount setting
+    resetStreamRevealState();
     const slots: { id: number; text: string; reason: string }[] = [];
     for (let i = 1; i <= translationCount; i++) {
       slots.push({ id: i, text: "", reason: "" });
@@ -3146,38 +3410,74 @@
     }
 
     try {
-      // Use service-based translation to keep quick/main in sync
       const styleMeta = Object.fromEntries(
         customStyles.map((s) => [s.id, { name: s.name, prompt: s.prompt }]),
       );
-      await emit("start_translation_command", {
-        text: inputQuery,
-        sourceLang,
-        targetLang,
-        styles: styleLevels,
-        styleMeta,
-        model: currentModel,
-        provider: selectedProvider,
-        explanationLang: getLanguageName(appLanguage),
-        apiKeys: $state.snapshot(apiKeys),
-        initialTokens: Math.ceil(inputQuery.length / 1.5) + 40,
-        candidateCount: translationCount,
+      pendingTranslationHistoryRun = true;
+      pendingStopRequested = false;
+      ownedTranslationRunId = null;
+      const runId = await invoke<number>("start_translation", {
+        payload: {
+          text: inputQuery,
+          sourceLang,
+          targetLang,
+          styles: $state.snapshot(styleLevels),
+          styleMeta,
+          model: currentModel,
+          provider: selectedProvider,
+          explanationLang: getLanguageName(appLanguage),
+          initialTokens: Math.ceil(inputQuery.length / 1.5) + 40,
+          candidateCount: translationCount,
+        },
       });
+      ownedTranslationRunId = runId;
+      pendingTranslationHistoryRun = false;
+      if (pendingStopRequested) {
+        pendingStopRequested = false;
+        await stopTranslation();
+        return;
+      }
+      const currentState = await invoke<any>("request_translation_state");
+      if (currentState?.runId === runId) {
+        applyTranslationUpdate(currentState);
+      }
     } catch (error) {
       console.error("Translation failed:", error);
       errorMessage = "Translation failed: " + String(error);
       isTranslating = false;
+      pendingTranslationHistoryRun = false;
+      pendingStopRequested = false;
+      ownedTranslationRunId = null;
     }
   }
 
   let isHoveringTranslate = $state(false);
 
-  async function stopTranslation() {
-    isTranslating = false;
+  async function waitForStop(maxMs = 3000): Promise<void> {
+    const deadline = Date.now() + maxMs;
+    while (isTranslating && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 30));
+    }
+  }
+
+  async function stopTranslation(): Promise<boolean> {
+    const runId = ownedTranslationRunId;
+    if (runId === null) {
+      pendingStopRequested = true;
+      return false;
+    }
+    stoppingTranslationRunIds.add(runId);
     try {
-      await emit("stop_translation_command");
+      await invoke("stop_translation", { runId });
+      isTranslating = false;
+      pendingTranslationHistoryRun = false;
+      pendingStopRequested = false;
+      ownedTranslationRunId = null;
+      return true;
     } catch (e) {
+      stoppingTranslationRunIds.delete(runId);
       console.error("Failed to stop translation:", e);
+      return false;
     }
   }
 
@@ -3208,6 +3508,7 @@
     if (styleLevelsReady) {
       persistStyleLevels();
     }
+    resetStreamRevealState();
     if (handleBeforeUnloadRef) {
       window.removeEventListener("beforeunload", handleBeforeUnloadRef);
     }
@@ -3301,6 +3602,7 @@
         <button
           class="icon-btn compact-ocr-btn"
           onclick={startOCR}
+          aria-label={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
           title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
         >
           <svg
@@ -3499,6 +3801,7 @@
                 <button
                   class="textarea-action-btn"
                   onclick={clearInput}
+                  aria-label={t(appLanguage, "clearText") || "テキストをクリア"}
                   title={t(appLanguage, "clearText") || "テキストをクリア"}
                 >
                   <svg
@@ -3526,6 +3829,8 @@
                       console.error("Failed to read clipboard:", e);
                     }
                   }}
+                  aria-label={t(appLanguage, "pasteFromClipboard") ||
+                    "クリップボードから貼り付け"}
                   title={t(appLanguage, "pasteFromClipboard") ||
                     "クリップボードから貼り付け"}
                 >
@@ -3649,6 +3954,11 @@
               isTranslating &&
               isHoveringTranslate}
             title={isScrolledDown
+              ? t(appLanguage, "scrollToTop")
+              : isTranslating
+                ? t(appLanguage, "stopTranslation") || "翻訳を停止"
+                : t(appLanguage, "translate")}
+            aria-label={isScrolledDown
               ? t(appLanguage, "scrollToTop")
               : isTranslating
                 ? t(appLanguage, "stopTranslation") || "翻訳を停止"
@@ -3812,7 +4122,15 @@
                     ></div>
                     <div class="skeleton-line secondary"></div>
                   {:else}
-                    <p class="translated-text">{item.text}</p>
+                    <p class="translated-text">
+                      {#each getStreamTextParts(item) as part (part.key)}
+                        {#if part.reveal}
+                          <span class="stream-reveal">{part.text}</span>
+                        {:else}
+                          {part.text}
+                        {/if}
+                      {/each}
+                    </p>
                   {/if}
                   <div class="card-footer">
                     {#if item.reason}
@@ -3839,6 +4157,7 @@
                       <button
                         class="icon-btn replace-btn"
                         class:replaced={replacedId === item.id}
+                        aria-label={t(appLanguage, "replaceSelection")}
                         title={t(appLanguage, "replaceSelection")}
                         disabled={!canReplaceSelection}
                         onclick={() => handleReplace(item.id, item.text)}
@@ -3876,6 +4195,7 @@
                       <div class="action-menu">
                         <button
                           class="icon-btn action-menu-trigger"
+                          aria-label={t(appLanguage, "moreActions")}
                           title={t(appLanguage, "moreActions")}
                           aria-expanded={actionMenuOpenId === item.id}
                           onclick={() => toggleActionMenu(item.id)}
@@ -4025,6 +4345,7 @@
             <button
               class="stack-indicator"
               onclick={() => (isStackExpanded = true)}
+              aria-label={t(appLanguage, "showMore") || "もっと見る"}
               title={t(appLanguage, "showMore") || "もっと見る"}
             >
               <div class="stack-layer layer-1"></div>
@@ -4105,7 +4426,7 @@
                       id: crypto.randomUUID(),
                       timestamp: Date.now(),
                       sourceText: inputQuery,
-                      sourceLang: detectedLang || sourceLang,
+                      sourceLang,
                       targetLang: targetLang,
                       isAutoDetect: isAutoDetect,
                       detectedLang: detectedLang || "",
@@ -4174,6 +4495,7 @@
       <button
         class="icon-btn header-btn history-btn"
         class:animating={historyAnimating}
+        aria-label={t(appLanguage, "history")}
         title={t(appLanguage, "history")}
         onclick={openHistory}
         onmouseenter={triggerHistoryAnim}
@@ -4196,6 +4518,7 @@
       <button
         class="icon-btn header-btn settings-btn"
         class:animating={settingsAnimating}
+        aria-label={t(appLanguage, "settings")}
         title={t(appLanguage, "settings")}
         onclick={openSettings}
         onmouseenter={triggerSettingsAnim}
@@ -4225,6 +4548,7 @@
           <button
             class="win-btn-inline minimize"
             onclick={() => getCurrentWindow().minimize()}
+            aria-label={t(appLanguage, "minimizeWindow")}
             title={t(appLanguage, "minimizeWindow")}
           >
             <svg
@@ -4242,6 +4566,7 @@
           <button
             class="win-btn-inline maximize"
             onclick={() => getCurrentWindow().toggleMaximize()}
+            aria-label={t(appLanguage, "maximizeWindow")}
             title={t(appLanguage, "maximizeWindow")}
           >
             <svg
@@ -4266,6 +4591,7 @@
           <button
             class="win-btn-inline close"
             onclick={() => hideWindow()}
+            aria-label={t(appLanguage, "closeWindow")}
             title={t(appLanguage, "closeWindow")}
           >
             <svg
@@ -4474,7 +4800,8 @@
               {#if inputQuery.trim()}
                 <button
                   class="textarea-action-btn"
-                  onclick={() => (inputQuery = "")}
+                  onclick={clearInput}
+                  aria-label={t(appLanguage, "clearText") || "テキストをクリア"}
                   title={t(appLanguage, "clearText") || "テキストをクリア"}
                 >
                   <svg
@@ -4502,6 +4829,8 @@
                       console.error("Failed to read clipboard:", e);
                     }
                   }}
+                  aria-label={t(appLanguage, "pasteFromClipboard") ||
+                    "クリップボードから貼り付け"}
                   title={t(appLanguage, "pasteFromClipboard") ||
                     "クリップボードから貼り付け"}
                 >
@@ -4650,6 +4979,7 @@
             class="action-btn ocr-main-btn ocr-btn-animated"
             class:hidden={isScrolledDown}
             onclick={startOCR}
+            aria-label={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
             title={t(appLanguage, "startOCR") || "画面から文字を読み取る"}
           >
             <svg
@@ -4682,6 +5012,11 @@
               isTranslating &&
               isHoveringTranslate}
             title={isScrolledDown
+              ? t(appLanguage, "scrollToTop")
+              : isTranslating
+                ? t(appLanguage, "stopTranslation") || "翻訳を停止"
+                : t(appLanguage, "translate")}
+            aria-label={isScrolledDown
               ? t(appLanguage, "scrollToTop")
               : isTranslating
                 ? t(appLanguage, "stopTranslation") || "翻訳を停止"
@@ -4783,7 +5118,7 @@
             <span class="tech-divider">|</span>
             <span class="tech-item tech-tokens">
               <span class="token-row">
-                <span class="tech-label">In:</span>
+                <span class="tech-label">↑</span>
                 {#if isTranslating && !techMetrics.isReal}
                   <div
                     class="skeleton-line"
@@ -4794,7 +5129,7 @@
                 {/if}
               </span>
               <span class="token-row">
-                <span class="tech-label">Out:</span>
+                <span class="tech-label">↓</span>
                 {#if isTranslating && !techMetrics.isReal}
                   <div
                     class="skeleton-line"
@@ -4939,19 +5274,6 @@
           {:else if isTranslating && translations.every((t) => !t.text)}
             <!-- Loading State -->
             <div class="loading-state-container" in:fade={{ duration: 200 }}>
-              <div
-                class="shortcut-hint"
-                style="margin-bottom: 8px; text-align: center;"
-              >
-                {techMetrics.firstTokenReceived
-                  ? "ストリーム受信中..."
-                  : "ストリーム待機中..."}
-                {#if techMetrics.time > 0}
-                  <span style="margin-left: 6px;"
-                    >({techMetrics.time.toFixed(1)}s)</span
-                  >
-                {/if}
-              </div>
               {#each Array.from({ length: translationCount }, (_, i) => i + 1) as idx}
                 <div
                   class="skeleton-card"
@@ -4973,7 +5295,15 @@
                     ></div>
                     <div class="skeleton-line secondary"></div>
                   {:else}
-                    <p class="translated-text">{item.text}</p>
+                    <p class="translated-text">
+                      {#each getStreamTextParts(item) as part (part.key)}
+                        {#if part.reveal}
+                          <span class="stream-reveal">{part.text}</span>
+                        {:else}
+                          {part.text}
+                        {/if}
+                      {/each}
+                    </p>
                   {/if}
                   <div class="card-footer">
                     {#if item.reason}
@@ -5006,6 +5336,9 @@
                         class="icon-btn"
                         class:active={isSpeakingId === item.id}
                         class:animating={speakAnimating[item.id]}
+                        aria-label={isSpeakingId === item.id
+                          ? t(appLanguage, "stop")
+                          : t(appLanguage, "speak")}
                         title={isSpeakingId === item.id
                           ? t(appLanguage, "stop")
                           : t(appLanguage, "speak")}
@@ -5057,6 +5390,7 @@
                         class="icon-btn"
                         class:animating={copyAnimating[item.id]}
                         class:copied={copiedId === item.id}
+                        aria-label={t(appLanguage, "copy")}
                         title={t(appLanguage, "copy")}
                         onclick={() => handleCopy(item.id, item.text)}
                         onmouseenter={() => triggerCopyAnim(item.id)}
@@ -5155,8 +5489,10 @@
                     id: crypto.randomUUID(),
                     timestamp: Date.now(),
                     sourceText: inputQuery,
-                    sourceLang: detectedLang || sourceLang,
+                    sourceLang,
                     targetLang: targetLang,
+                    isAutoDetect,
+                    detectedLang: detectedLang || "",
                     translations: translations.map((t) => ({
                       text: t.text,
                       reason: t.reason,
@@ -5925,15 +6261,44 @@
                   <!-- API Key for Selected Provider -->
                   <div class="settings-section">
                     <label class="settings-label" for="api-key-input">
-                      {getApiKeyLabel(selectedProvider)}
+                      {getApiKeyLabel(appLanguage, selectedProvider)}
                     </label>
                     <input
                       id="api-key-input"
                       type="password"
                       class="settings-input"
-                      bind:value={apiKeys[selectedProvider]}
-                      placeholder={getApiKeyPlaceholder(selectedProvider)}
+                      bind:value={apiKeyDrafts[selectedProvider]}
+                      placeholder={getApiKeyPlaceholder(
+                        appLanguage,
+                        selectedProvider,
+                        apiKeyStatus[selectedProvider],
+                      )}
                     />
+                    <div class="api-key-row">
+                      <span class="settings-note">
+                        {getApiKeyStatusLabel(
+                          appLanguage,
+                          apiKeyStatus[selectedProvider],
+                        )}
+                      </span>
+                      <div class="api-key-actions">
+                        <button
+                          class="rich-btn primary"
+                          type="button"
+                          disabled={!apiKeyDrafts[selectedProvider]?.trim()}
+                          onclick={saveSelectedApiKey}
+                        >
+                          {t(appLanguage, "save")}
+                        </button>
+                        <button
+                          class="rich-btn secondary"
+                          type="button"
+                          onclick={clearSelectedApiKey}
+                        >
+                          {t(appLanguage, "delete")}
+                        </button>
+                      </div>
+                    </div>
                   </div>
 
                   <!-- Model Selection (Filtered) -->
@@ -6046,6 +6411,7 @@
                                 class="icon-btn-small"
                                 onclick={() => moveStyle(i, "up")}
                                 disabled={i === 0}
+                                aria-label={t(appLanguage, "moveUp")}
                                 title={t(appLanguage, "moveUp")}
                               >
                                 <svg
@@ -6063,6 +6429,7 @@
                                 class="icon-btn-small"
                                 onclick={() => moveStyle(i, "down")}
                                 disabled={i === customStyles.length - 1}
+                                aria-label={t(appLanguage, "moveDown")}
                                 title={t(appLanguage, "moveDown")}
                               >
                                 <svg
@@ -6082,6 +6449,7 @@
                             >
                               <button
                                 class="icon-btn-small"
+                                aria-label={t(appLanguage, "editStyle")}
                                 title={t(appLanguage, "editStyle")}
                                 onclick={() => openStyleEditor(style)}
                               >
@@ -6103,6 +6471,7 @@
                               </button>
                               <button
                                 class="icon-btn-small danger"
+                                aria-label={t(appLanguage, "delete")}
                                 title={t(appLanguage, "delete")}
                                 onclick={() => deleteStyle(style.id)}
                               >
@@ -6582,26 +6951,79 @@
       type="button"
       class="overlay-dismiss"
       aria-label={t(appLanguage, "close")}
-      onclick={() => (showResetConfirmation = false)}
+      onclick={closeResetConfirmation}
       tabindex="-1"
     ></button>
     <div
+      bind:this={resetConfirmationDialog}
       class="modal-card glass"
       onclick={(e) => e.stopPropagation()}
       role="dialog"
       aria-modal="true"
+      aria-labelledby="reset-confirm-title"
       tabindex="-1"
-      onkeydown={(e) => e.stopPropagation()}
+      onkeydown={(e) =>
+        handleConfirmationKeydown(
+          e,
+          resetConfirmationDialog,
+          closeResetConfirmation,
+        )}
     >
-      <h3>{t(appLanguage, "confirmReset")}</h3>
+      <h3 id="reset-confirm-title">{t(appLanguage, "confirmReset")}</h3>
       <div class="modal-actions">
         <button
           class="rich-btn secondary"
-          onclick={() => (showResetConfirmation = false)}
+          onclick={closeResetConfirmation}
           >{t(appLanguage, "close")}</button
         >
         <button class="rich-btn danger" onclick={confirmResetStyles}
           >{t(appLanguage, "resetStyles")}</button
+        >
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showClipboardOpsConfirmation && !isCaptureMode}
+  <div
+    class="modal-overlay"
+    transition:fade={{ duration: 200 }}
+  >
+    <button
+      type="button"
+      class="overlay-dismiss"
+      aria-label={t(appLanguage, "close")}
+      onclick={closeClipboardOpsConfirmation}
+      tabindex="-1"
+    ></button>
+    <div
+      bind:this={clipboardOpsConfirmationDialog}
+      class="modal-card glass"
+      onclick={(e) => e.stopPropagation()}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="clipboard-ops-confirm-title"
+      aria-describedby="clipboard-ops-confirm-message"
+      tabindex="-1"
+      onkeydown={(e) =>
+        handleConfirmationKeydown(
+          e,
+          clipboardOpsConfirmationDialog,
+          closeClipboardOpsConfirmation,
+        )}
+    >
+      <h3 id="clipboard-ops-confirm-title">{t(appLanguage, "clipboardOps")}</h3>
+      <p id="clipboard-ops-confirm-message" class="modal-message">
+        {t(appLanguage, "clipboardOpsConfirmEnable")}
+      </p>
+      <div class="modal-actions">
+        <button
+          class="rich-btn secondary"
+          onclick={closeClipboardOpsConfirmation}
+          >{t(appLanguage, "cancel")}</button
+        >
+        <button class="rich-btn danger" onclick={confirmEnableClipboardOps}
+          >{t(appLanguage, "clipboardOps")}</button
         >
       </div>
     </div>
@@ -6617,22 +7039,29 @@
       type="button"
       class="overlay-dismiss"
       aria-label={t(appLanguage, "close")}
-      onclick={() => (showDiscardConfirmation = false)}
+      onclick={closeDiscardConfirmation}
       tabindex="-1"
     ></button>
     <div
+      bind:this={discardConfirmationDialog}
       class="modal-card glass"
       onclick={(e) => e.stopPropagation()}
       role="dialog"
       aria-modal="true"
+      aria-labelledby="discard-confirm-title"
       tabindex="-1"
-      onkeydown={(e) => e.stopPropagation()}
+      onkeydown={(e) =>
+        handleConfirmationKeydown(
+          e,
+          discardConfirmationDialog,
+          closeDiscardConfirmation,
+        )}
     >
-      <h3>{t(appLanguage, "confirmDiscard")}</h3>
+      <h3 id="discard-confirm-title">{t(appLanguage, "confirmDiscard")}</h3>
       <div class="modal-actions">
         <button
           class="rich-btn secondary"
-          onclick={() => (showDiscardConfirmation = false)}
+          onclick={closeDiscardConfirmation}
         >
           {t(appLanguage, "cancel")}
         </button>
@@ -6668,6 +7097,27 @@
   .settings-note.top {
     margin-top: 0;
     margin-bottom: 8px;
+  }
+  .api-key-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 10px;
+  }
+  .api-key-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .api-key-actions .rich-btn {
+    flex: 0 0 auto;
+    min-width: 72px;
+    padding: 8px 12px;
+  }
+  .rich-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+    transform: none;
   }
   .container {
     display: flex;
@@ -6913,6 +7363,7 @@
 
   .output-area.compact-output {
     gap: 10px;
+    overflow-anchor: none;
   }
 
   .stack-collapse-row,
@@ -8085,6 +8536,35 @@
     user-select: text;
     cursor: text;
     white-space: pre-wrap; /* Preserve newlines */
+  }
+
+  .compact-shell .translated-text {
+    overflow-wrap: anywhere;
+  }
+
+  .stream-reveal {
+    display: inline;
+    animation: streamReveal 560ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    will-change: filter, opacity;
+  }
+
+  @keyframes streamReveal {
+    from {
+      filter: blur(6px);
+      opacity: 0.35;
+    }
+    to {
+      filter: blur(0);
+      opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .stream-reveal {
+      animation: none;
+      filter: none;
+      opacity: 1;
+    }
   }
 
   /* Error Display */
@@ -9267,6 +9747,14 @@
     margin-bottom: 24px;
     font-size: 18px;
     color: var(--text-main);
+    text-align: center;
+  }
+
+  .modal-message {
+    margin: -8px 0 20px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1.6;
     text-align: center;
   }
 

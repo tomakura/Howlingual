@@ -18,13 +18,18 @@ export type AiModelEntry = {
 export const DEFAULT_MODELS_BY_PROVIDER: Record<AiProvider, string> = {
 	openai: "gpt-5.4-mini",
 	gemini: "gemini-2.5-flash",
-	anthropic: "claude-sonnet-4-20250514",
+	anthropic: "claude-sonnet-4-6",
 	groq: "openai/gpt-oss-20b",
 	cerebras: "gpt-oss-120b",
 };
 
 function inferReasoning(value: string): boolean {
-	return value.startsWith("o1") || value.startsWith("o3") || value.startsWith("o4");
+	return (
+		value.startsWith("gpt-5.5") ||
+		value.startsWith("o1") ||
+		value.startsWith("o3") ||
+		value.startsWith("o4")
+	);
 }
 
 function inferSpeed(value: string, provider: AiProvider, reasoning: boolean): ModelSpeed {
@@ -56,9 +61,10 @@ function inferQuality(value: string, provider: AiProvider): ModelQuality {
 	if (
 		value.includes("opus") ||
 		value.includes("sonnet-4") ||
+		value.includes("gpt-5.5") ||
 		value.includes("gpt-5.4") ||
 		value.includes("gpt-5.2") ||
-		value.includes("gemini-3-pro") ||
+		value.includes("gemini-3.1-pro") ||
 		value.includes("gemini-2.5-pro") ||
 		value.includes("120b") ||
 		value.includes("235b") ||
@@ -114,6 +120,12 @@ function buildModel(
 }
 
 export const AI_MODELS: AiModelEntry[] = [
+	buildModel("GPT-5.5", "gpt-5.5", "openai", {
+		reasoning: true,
+		speed: "balanced",
+		quality: "best",
+		streamingExperience: "normal",
+	}),
 	buildModel("GPT-5.4 Pro", "gpt-5.4-pro", "openai", {
 		reasoning: true,
 		speed: "deliberate",
@@ -191,11 +203,15 @@ export const AI_MODELS: AiModelEntry[] = [
 		quality: "best",
 		streamingExperience: "delayed",
 	}),
-	buildModel("Gemini 3 Pro Preview", "gemini-3-pro-preview", "gemini", {
+	buildModel("Gemini 3.1 Pro Preview", "gemini-3.1-pro-preview", "gemini", {
 		speed: "balanced",
 		quality: "best",
 	}),
 	buildModel("Gemini 3 Flash Preview", "gemini-3-flash-preview", "gemini", {
+		speed: "fast",
+		streamingExperience: "great",
+	}),
+	buildModel("Gemini 3.1 Flash-Lite Preview", "gemini-3.1-flash-lite-preview", "gemini", {
 		speed: "fast",
 		streamingExperience: "great",
 	}),
@@ -219,6 +235,19 @@ export const AI_MODELS: AiModelEntry[] = [
 	buildModel("Gemini 2.0 Flash-Lite", "gemini-2.0-flash-lite", "gemini", {
 		speed: "fast",
 		quality: "good",
+		streamingExperience: "great",
+	}),
+	buildModel("Claude Opus 4.7", "claude-opus-4-7", "anthropic", {
+		speed: "deliberate",
+		quality: "best",
+		streamingExperience: "delayed",
+	}),
+	buildModel("Claude Sonnet 4.6", "claude-sonnet-4-6", "anthropic", {
+		speed: "balanced",
+		quality: "best",
+	}),
+	buildModel("Claude Haiku 4.5", "claude-haiku-4-5-20251001", "anthropic", {
+		speed: "fast",
 		streamingExperience: "great",
 	}),
 	buildModel("Claude Opus 4.1", "claude-opus-4-1-20250805", "anthropic", {
@@ -259,12 +288,6 @@ export const AI_MODELS: AiModelEntry[] = [
 		speed: "balanced",
 	}),
 	buildModel(
-		"Llama 4 Maverick 17B",
-		"meta-llama/llama-4-maverick-17b-128e-instruct",
-		"groq",
-		{ speed: "balanced" },
-	),
-	buildModel(
 		"Llama 4 Scout 17B",
 		"meta-llama/llama-4-scout-17b-16e-instruct",
 		"groq",
@@ -300,7 +323,6 @@ export const STREAMING_MODELS_BY_PROVIDER: Record<AiProvider, string[]> = {
 		"openai/gpt-oss-20b",
 		"moonshotai/kimi-k2-instruct-0905",
 		"qwen/qwen3-32b",
-		"meta-llama/llama-4-maverick-17b-128e-instruct",
 		"meta-llama/llama-4-scout-17b-16e-instruct",
 		"llama-3.3-70b-versatile",
 		"llama-3.1-8b-instant",
@@ -312,6 +334,7 @@ export const STREAMING_MODELS_BY_PROVIDER: Record<AiProvider, string[]> = {
 		"zai-glm-4.7",
 	],
 	openai: [
+		"gpt-5.5",
 		"gpt-5.4",
 		"gpt-5.4-mini",
 		"gpt-5.4-nano",
@@ -335,8 +358,9 @@ export const STREAMING_MODELS_BY_PROVIDER: Record<AiProvider, string[]> = {
 		"o1",
 	],
 	gemini: [
-		"gemini-3-pro-preview",
+		"gemini-3.1-pro-preview",
 		"gemini-3-flash-preview",
+		"gemini-3.1-flash-lite-preview",
 		"gemini-2.5-pro",
 		"gemini-2.5-flash",
 		"gemini-2.5-flash-lite",
@@ -344,6 +368,9 @@ export const STREAMING_MODELS_BY_PROVIDER: Record<AiProvider, string[]> = {
 		"gemini-2.0-flash-lite",
 	],
 	anthropic: [
+		"claude-opus-4-7",
+		"claude-sonnet-4-6",
+		"claude-haiku-4-5-20251001",
 		"claude-opus-4-1-20250805",
 		"claude-opus-4-20250514",
 		"claude-sonnet-4-20250514",

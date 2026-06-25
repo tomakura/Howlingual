@@ -258,7 +258,7 @@ const OPENAI_STREAMING_MODELS: &[&str] = &[
     "o1",
 ];
 
-const OPENAI_RESPONSES_ONLY_MODELS: &[&str] = &["gpt-5.4-pro"];
+const OPENAI_RESPONSES_ONLY_MODELS: &[&str] = &["gpt-5.4-pro", "gpt-5.5"];
 
 const GEMINI_STREAMING_MODELS: &[&str] = &[
     "gemini-3-pro-preview",
@@ -1559,26 +1559,28 @@ pub fn sync_translation_context(
     payload: SyncTranslationContextPayload,
 ) -> Result<(), String> {
     let next = with_backend_state(&state, |inner| {
-        if let Some(input_query) = payload.input_query {
-            inner.state.input_query = input_query;
-        }
-        if let Some(source_lang) = payload.source_lang {
-            inner.state.source_lang = source_lang;
-        }
-        if let Some(detected_lang) = payload.detected_lang {
-            inner.state.detected_lang = detected_lang;
-        }
-        if let Some(is_detecting) = payload.is_detecting {
-            inner.state.is_detecting = is_detecting;
-        }
-        if let Some(target_lang) = payload.target_lang {
-            inner.state.target_lang = target_lang;
-        }
-        if let Some(style_levels) = payload.style_levels {
-            inner.state.style_levels = style_levels;
-        }
-        if let Some(candidate_count) = payload.candidate_count {
-            inner.state.candidate_count = candidate_count.clamp(1, 6);
+        if !inner.state.is_translating {
+            if let Some(input_query) = payload.input_query {
+                inner.state.input_query = input_query;
+            }
+            if let Some(source_lang) = payload.source_lang {
+                inner.state.source_lang = source_lang;
+            }
+            if let Some(detected_lang) = payload.detected_lang {
+                inner.state.detected_lang = detected_lang;
+            }
+            if let Some(is_detecting) = payload.is_detecting {
+                inner.state.is_detecting = is_detecting;
+            }
+            if let Some(target_lang) = payload.target_lang {
+                inner.state.target_lang = target_lang;
+            }
+            if let Some(style_levels) = payload.style_levels {
+                inner.state.style_levels = style_levels;
+            }
+            if let Some(candidate_count) = payload.candidate_count {
+                inner.state.candidate_count = candidate_count.clamp(1, 6);
+            }
         }
         if payload.reset_translations.unwrap_or(false) && !inner.state.is_translating {
             inner.state.detected_lang.clear();
@@ -1659,9 +1661,15 @@ pub fn get_api_key_status(
 pub fn stop_translation(
     app: AppHandle,
     state: State<'_, TranslationBackendState>,
-    _run_id: Option<u64>,
+    run_id: Option<u64>,
 ) -> Result<(), String> {
+    let Some(run_id) = run_id else {
+        return Ok(());
+    };
     let next = with_backend_state(&state, |inner| {
+        if inner.state.run_id != run_id {
+            return None;
+        }
         inner.state.run_id = inner.state.run_id.saturating_add(1);
         inner.state.is_translating = false;
         inner.state.error_message.clear();
@@ -1671,9 +1679,11 @@ pub fn stop_translation(
         inner.state.tech_metrics.gen_time = 0.0;
         inner.state.tech_metrics.tokens_per_sec = 0.0;
         set_updated(&mut inner.state);
-        inner.state.clone()
+        Some(inner.state.clone())
     })?;
-    emit_state(&app, &next);
+    if let Some(next) = next {
+        emit_state(&app, &next);
+    }
     Ok(())
 }
 
@@ -1682,7 +1692,7 @@ pub fn start_translation(
     app: AppHandle,
     state: State<'_, TranslationBackendState>,
     payload: StartTranslationPayload,
-) -> Result<(), String> {
+) -> Result<u64, String> {
     let execution_plan = build_execution_plan(&payload.provider, &payload.model);
     let initial = with_backend_state(&state, |inner| {
         inner.state.run_id = inner.state.run_id.saturating_add(1);
@@ -1710,27 +1720,24 @@ pub fn start_translation(
         set_updated(&mut inner.state);
         inner.state.clone()
     })?;
+    let run_id = initial.run_id;
     emit_state(&app, &initial);
 
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let started_at = now_ms();
-        let (run_id, api_key): (u64, Option<String>) =
-            match app_handle.state::<TranslationBackendState>().0.lock() {
-                Ok(inner) => (
-                    inner.state.run_id,
-                    payload
-                        .api_key
-                        .as_ref()
-                        .map(|value| value.trim().to_string())
-                        .filter(|value| !value.is_empty())
-                        .or_else(|| resolve_api_key(&app_handle, &inner, payload.provider.as_str())),
-                ),
-                Err(_) => {
-                    log::error!("[translation] state lock failed");
-                    return;
-                }
-            };
+        let api_key = match app_handle.state::<TranslationBackendState>().0.lock() {
+            Ok(inner) => payload
+                .api_key
+                .as_ref()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .or_else(|| resolve_api_key(&app_handle, &inner, payload.provider.as_str())),
+            Err(_) => {
+                log::error!("[translation] state lock failed");
+                return;
+            }
+        };
 
         if let Ok(mut inner) = app_handle.state::<TranslationBackendState>().0.lock() {
             if inner.state.run_id == run_id {
@@ -1927,5 +1934,5 @@ pub fn start_translation(
         }
     });
 
-    Ok(())
+    Ok(run_id)
 }

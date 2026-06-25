@@ -1,6 +1,5 @@
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::borrow::Cow;
-use std::collections::HashMap;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::fs;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -31,6 +30,7 @@ use xcap::Monitor;
 mod ocr_engine;
 #[cfg(windows)]
 mod ocr_native;
+mod translation_backend;
 
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -95,15 +95,6 @@ struct ClipboardOpsEnabled(Mutex<bool>);
 impl Default for ClipboardOpsEnabled {
     fn default() -> Self {
         Self(Mutex::new(false))
-    }
-}
-
-// Store captured screen images for OCR (one per monitor)
-struct CapturedImages(Mutex<HashMap<String, image::RgbaImage>>);
-
-impl Default for CapturedImages {
-    fn default() -> Self {
-        Self(Mutex::new(HashMap::new()))
     }
 }
 
@@ -1149,14 +1140,16 @@ fn show_compact_window(
     window.set_focus()?;
     let _ = app.emit("window_shown", "compact");
 
-    // Store text in PendingText state for frontend to retrieve
-    if let Ok(mut pending) = app.state::<PendingText>().0.lock() {
-        *pending = text.clone();
+    // Store and emit text only when a new capture exists.
+    // `None` means "show the window without changing current input".
+    if let Some(payload) = text {
+        if let Ok(mut pending) = app.state::<PendingText>().0.lock() {
+            *pending = Some(payload.clone());
+        }
+        let _ = app.emit("text_captured", payload);
+    } else if let Ok(mut pending) = app.state::<PendingText>().0.lock() {
+        *pending = None;
     }
-
-    // Alwaus emit event! If None, emit empty string to clear/reset UI
-    let payload = text.unwrap_or_default();
-    let _ = app.emit("text_captured", payload);
 
     // Store cursor position for later use (e.g., opening main window)
     if let Ok(mut pos) = app.state::<LastCursorPos>().0.lock() {
@@ -1325,8 +1318,6 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
             );
         }
 
-        let mut capture_map = HashMap::new();
-
         // Get cursor position once to determine which monitor to focus
         let cursor_pos = get_cursor_position();
 
@@ -1344,22 +1335,10 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
                 mon_y
             );
 
-            let image = monitor.capture_image().map_err(|e| e.to_string())?;
-            log::info!(
-                "[ocr] Captured image dimensions for monitor {}: {}x{}",
-                index,
-                image.width(),
-                image.height()
+            let monitor_id = format!(
+                "{}_{}_{}_{}",
+                mon_x, mon_y, mon_width, mon_height
             );
-
-            let monitor_id = index.to_string();
-            // Use PHYSICAL dimensions from the captured image for the window size
-            #[cfg(not(target_os = "macos"))]
-            let img_width = image.width();
-            #[cfg(not(target_os = "macos"))]
-            let img_height = image.height();
-
-            capture_map.insert(monitor_id.clone(), image);
 
             let label = format!("{}{}", CAPTURE_WINDOW_PREFIX, monitor_id);
             let url = format!("/?view=capture&monitor={}", monitor_id);
@@ -1400,8 +1379,8 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
                 }
 
                 if let Err(e) = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                    width: img_width,
-                    height: img_height,
+                    width: mon_width,
+                    height: mon_height,
                 })) {
                     log::info!("[ocr] Failed to set window size: {}", e);
                 }
@@ -1430,10 +1409,6 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
                 let _ = window.set_focus();
             }
         }
-
-        if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
-            *lock = capture_map;
-        }
     }
 
     Ok(())
@@ -1459,12 +1434,39 @@ async fn finish_selection_ocr(
         height
     );
 
-    let image = {
-        let state = app.state::<CapturedImages>();
-        let mut lock = state.0.lock().map_err(|_| "Lock failed")?;
-        lock.remove(&monitor_id)
-            .ok_or_else(|| format!("No captured image found for monitor {}", monitor_id))?
+    let monitor_bounds = monitor_id
+        .split('_')
+        .map(str::parse::<i32>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| format!("Invalid monitor id: {}", monitor_id))?;
+    let [monitor_x, monitor_y, monitor_width, monitor_height] = monitor_bounds.as_slice() else {
+        return Err(format!("Invalid monitor id: {}", monitor_id));
     };
+    let selected_window_label = format!("{}{}", CAPTURE_WINDOW_PREFIX, monitor_id);
+    let selected_window = app.get_webview_window(&selected_window_label);
+    if let Some(window) = selected_window.as_ref() {
+        let _ = window.hide();
+    }
+    std::thread::sleep(Duration::from_millis(80));
+
+    let image_result = (|| -> Result<_, String> {
+        let monitors = Monitor::all().map_err(|e| e.to_string())?;
+        let monitor = monitors
+            .into_iter()
+            .find(|monitor| {
+                monitor.x().ok() == Some(*monitor_x)
+                    && monitor.y().ok() == Some(*monitor_y)
+                    && monitor.width().ok() == u32::try_from(*monitor_width).ok()
+                    && monitor.height().ok() == u32::try_from(*monitor_height).ok()
+            })
+            .ok_or_else(|| format!("No monitor found for id {}", monitor_id))?;
+        monitor.capture_image().map_err(|e| e.to_string())
+    })();
+    if let Some(window) = selected_window.as_ref() {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    let image = image_result?;
 
     // Validate crop bounds before cropping to avoid panics in crop_imm.
     // Image dimensions are in physical pixels (from screen capture)
@@ -1589,11 +1591,6 @@ fn cancel_selection_ocr(app: AppHandle) {
     if let Err(e) = close_capture_windows(&app) {
         log::info!("[ocr] Warning: Failed to close some capture windows: {}", e);
         // Don't clear state if windows might still be active
-    } else {
-        // Only clear the state if all windows were successfully closed
-        if let Ok(mut lock) = app.state::<CapturedImages>().0.lock() {
-            lock.clear();
-        }
     }
 
     // Restore original window
@@ -1857,6 +1854,13 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             greet,
+            translation_backend::sync_translation_context,
+            translation_backend::request_translation_state,
+            translation_backend::set_api_key,
+            translation_backend::clear_api_key,
+            translation_backend::get_api_key_status,
+            translation_backend::start_translation,
+            translation_backend::stop_translation,
             update_shortcut,
             open_main_window,
             get_pending_text,
@@ -1899,8 +1903,8 @@ pub fn run() {
             app.manage(HandoverText::default());
             app.manage(LastCursorPos::default());
             app.manage(ClipboardOpsEnabled::default());
-            app.manage(CapturedImages::default());
             app.manage(OcrOriginState::default());
+            app.manage(translation_backend::TranslationBackendState::default());
             #[cfg(windows)]
             {
                 app.manage(PaddleOcrState(Mutex::new(None)));
