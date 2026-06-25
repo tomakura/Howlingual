@@ -477,6 +477,7 @@
   });
 
   let pendingTranslationHistoryRun = false;
+  let pendingStopRequested = false;
   let ownedTranslationRunId: number | null = null;
   const completedHistoryRunIds = new Set<number>();
   const stoppingTranslationRunIds = new Set<number>();
@@ -3410,6 +3411,7 @@
         customStyles.map((s) => [s.id, { name: s.name, prompt: s.prompt }]),
       );
       pendingTranslationHistoryRun = true;
+      pendingStopRequested = false;
       ownedTranslationRunId = null;
       const runId = await invoke<number>("start_translation", {
         payload: {
@@ -3429,6 +3431,11 @@
         ownedTranslationRunId = runId;
         pendingTranslationHistoryRun = false;
       }
+      if (pendingStopRequested) {
+        pendingStopRequested = false;
+        await stopTranslation();
+        return;
+      }
       const currentState = await invoke<any>("request_translation_state");
       if (currentState?.runId === runId) {
         applyTranslationUpdate(currentState);
@@ -3438,6 +3445,7 @@
       errorMessage = "Translation failed: " + String(error);
       isTranslating = false;
       pendingTranslationHistoryRun = false;
+      pendingStopRequested = false;
       ownedTranslationRunId = null;
     }
   }
@@ -3447,7 +3455,7 @@
   async function stopTranslation(): Promise<boolean> {
     const runId = ownedTranslationRunId;
     if (runId === null) {
-      console.warn("Skip stop_translation before run ownership is known");
+      pendingStopRequested = true;
       return false;
     }
     stoppingTranslationRunIds.add(runId);
@@ -3455,6 +3463,7 @@
       await invoke("stop_translation", { runId });
       isTranslating = false;
       pendingTranslationHistoryRun = false;
+      pendingStopRequested = false;
       ownedTranslationRunId = null;
       return true;
     } catch (e) {

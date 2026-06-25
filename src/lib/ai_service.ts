@@ -474,7 +474,7 @@ function isReasoningModelName(modelName: string): boolean {
 }
 
 export function shouldUseOpenAIResponses(modelName: string): boolean {
-	return modelName.startsWith("gpt-5.5");
+	return modelName.startsWith("gpt-5.5") || modelName.startsWith("gpt-5.4-pro");
 }
 
 function getErrorStatus(err: unknown): number | undefined {
