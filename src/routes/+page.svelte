@@ -794,9 +794,8 @@
     if (event.key === "howlingual_history") {
       try {
         const newValue = event.newValue ? JSON.parse(event.newValue) : [];
-        // Only update if different to avoid redundant renders?
-        // Simple assignment is safer for sync.
-        history = newValue;
+        history = normalizeStoredHistoryItems(newValue);
+        historyCollectionsLoaded = true;
         console.log("[Sync] History updated from storage event");
       } catch (e) {
         console.warn("Failed to sync history", e);
@@ -820,7 +819,10 @@
       }
     } else if (event.key === "howlingual_favorites") {
       try {
-        favorites = event.newValue ? JSON.parse(event.newValue) : [];
+        favorites = normalizeStoredHistoryItems(
+          event.newValue ? JSON.parse(event.newValue) : [],
+        );
+        historyCollectionsLoaded = true;
         console.log("[Sync] Favorites updated from storage event");
       } catch (e) {
         console.warn("Failed to sync favorites", e);
@@ -975,18 +977,44 @@
     }
   }
 
-  function applySettingsFromParsed(parsed: any) {
-    if (!parsed || typeof parsed !== "object") return;
+  function isPlainObject(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  }
 
-    if (parsed.lastSelectedModels) {
-      lastSelectedModels = {
-        ...lastSelectedModels,
-        ...parsed.lastSelectedModels,
-      };
+  function isAppLanguage(value: unknown): value is AppLanguage {
+    return value === "ja" || value === "en" || value === "zh" || value === "ko";
+  }
+
+  function isTheme(value: unknown): value is "dark" | "light" {
+    return value === "dark" || value === "light";
+  }
+
+  function isOcrEngine(value: unknown): value is "paddle" | "windows" {
+    return value === "paddle" || value === "windows";
+  }
+
+  function mergeLastSelectedModels(value: unknown) {
+    if (!isPlainObject(value)) return;
+    const next = { ...lastSelectedModels };
+    for (const [provider, model] of Object.entries(value)) {
+      if (isAiProvider(provider) && typeof model === "string") {
+        next[provider] = model;
+      }
     }
+    lastSelectedModels = next;
+  }
 
-    if (parsed.model || parsed.provider) {
-      syncProviderAndModel(parsed.model, parsed.provider);
+  function applySettingsFromParsed(parsed: any) {
+    if (!isPlainObject(parsed)) return;
+
+    mergeLastSelectedModels(parsed.lastSelectedModels);
+
+    const parsedModel =
+      typeof parsed.model === "string" ? parsed.model : undefined;
+    const parsedProvider =
+      typeof parsed.provider === "string" ? parsed.provider : undefined;
+    if (parsedModel || parsedProvider) {
+      syncProviderAndModel(parsedModel, parsedProvider);
     } else {
       ensureModelMatchesProvider();
     }
@@ -1000,27 +1028,30 @@
       }
     }
 
-    if (parsed.rememberApiKeys !== undefined)
+    if (typeof parsed.rememberApiKeys === "boolean")
       rememberApiKeys = parsed.rememberApiKeys;
-    if (parsed.defaultTargetLang)
+    if (typeof parsed.defaultTargetLang === "string")
       defaultTargetLang = parsed.defaultTargetLang;
-    if (parsed.theme) theme = parsed.theme;
-    if (parsed.appLanguage) appLanguage = parsed.appLanguage;
-    if (parsed.allowRewrite !== undefined) allowRewrite = parsed.allowRewrite;
-    if (parsed.quickShortcut) quickShortcut = parsed.quickShortcut;
-    if (parsed.autoRunQuick !== undefined) autoRunQuick = parsed.autoRunQuick;
-    if (parsed.autoStartEnabled !== undefined)
+    if (isTheme(parsed.theme)) theme = parsed.theme;
+    if (isAppLanguage(parsed.appLanguage)) appLanguage = parsed.appLanguage;
+    if (typeof parsed.allowRewrite === "boolean")
+      allowRewrite = parsed.allowRewrite;
+    if (typeof parsed.quickShortcut === "string")
+      quickShortcut = parsed.quickShortcut;
+    if (typeof parsed.autoRunQuick === "boolean")
+      autoRunQuick = parsed.autoRunQuick;
+    if (typeof parsed.autoStartEnabled === "boolean")
       autoStartEnabled = parsed.autoStartEnabled;
-    if (parsed.startMinimized !== undefined)
+    if (typeof parsed.startMinimized === "boolean")
       startMinimized = parsed.startMinimized;
-    if (parsed.clipboardOpsEnabled !== undefined)
+    if (typeof parsed.clipboardOpsEnabled === "boolean")
       clipboardOpsEnabled = parsed.clipboardOpsEnabled;
-    if (parsed.ocrEngine) ocrEngine = parsed.ocrEngine;
+    if (isOcrEngine(parsed.ocrEngine)) ocrEngine = parsed.ocrEngine;
     if (
-      parsed.translationCount &&
+      typeof parsed.translationCount === "number" &&
       [1, 2, 3].includes(parsed.translationCount)
     )
-      translationCount = parsed.translationCount;
+      translationCount = parsed.translationCount as 1 | 2 | 3;
 
     document.documentElement.setAttribute("data-theme", theme);
   }
@@ -2560,6 +2591,72 @@
     styleLevels: Record<string, number>;
   };
 
+  function normalizeStoredHistoryItems(value: unknown): HistoryItem[] {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((item): item is Record<string, unknown> => isPlainObject(item))
+      .filter(
+        (item) =>
+          typeof item.sourceText === "string" &&
+          typeof item.targetLang === "string" &&
+          Array.isArray(item.translations),
+      )
+      .map((item) => ({
+        id: typeof item.id === "string" ? item.id : crypto.randomUUID(),
+        timestamp:
+          typeof item.timestamp === "number" && Number.isFinite(item.timestamp)
+            ? item.timestamp
+            : Date.now(),
+        sourceText: item.sourceText as string,
+        sourceLang:
+          typeof item.sourceLang === "string" ? item.sourceLang : AUTO_DETECT_LABEL,
+        targetLang: item.targetLang as string,
+        isAutoDetect:
+          typeof item.isAutoDetect === "boolean" ? item.isAutoDetect : undefined,
+        detectedLang:
+          typeof item.detectedLang === "string" ? item.detectedLang : "",
+        translations: (item.translations as unknown[])
+          .filter((translation): translation is Record<string, unknown> =>
+            isPlainObject(translation),
+          )
+          .map((translation) => ({
+            text:
+              typeof translation.text === "string" ? translation.text : "",
+            reason:
+              typeof translation.reason === "string"
+                ? translation.reason
+                : "",
+          })),
+        detailedExplanation:
+          isPlainObject(item.detailedExplanation) &&
+          Array.isArray(item.detailedExplanation.points)
+            ? {
+                points: item.detailedExplanation.points
+                  .filter((point): point is Record<string, unknown> =>
+                    isPlainObject(point),
+                  )
+                  .map((point) => ({
+                    term: typeof point.term === "string" ? point.term : "",
+                    explanation:
+                      typeof point.explanation === "string"
+                        ? point.explanation
+                        : "",
+                  })),
+              }
+            : null,
+        styleLevels: isPlainObject(item.styleLevels)
+          ? (Object.fromEntries(
+              Object.entries(item.styleLevels).filter(
+                (entry): entry is [string, number] =>
+                  typeof entry[1] === "number",
+              ),
+            ) as Record<string, number>)
+          : {},
+      }))
+      .filter((item) => item.translations.length > 0)
+      .slice(0, 50);
+  }
+
   let history: HistoryItem[] = $state([]);
   let favorites: HistoryItem[] = $state([]);
   let showHistory = $state(false);
@@ -2670,7 +2767,7 @@
     const savedHistory = localStorage.getItem("howlingual_history");
     if (savedHistory) {
       try {
-        history = JSON.parse(savedHistory);
+        history = normalizeStoredHistoryItems(JSON.parse(savedHistory));
       } catch (e) {
         console.error("Failed to load history", e);
       }
@@ -2679,7 +2776,7 @@
     const savedFavs = localStorage.getItem("howlingual_favorites");
     if (savedFavs) {
       try {
-        favorites = JSON.parse(savedFavs);
+        favorites = normalizeStoredHistoryItems(JSON.parse(savedFavs));
       } catch (e) {
         console.error("Failed to load favorites", e);
       }
@@ -2935,12 +3032,29 @@
     return { date: dateKey, count: 0, tokens: 0 };
   }
 
+  function normalizeUsageMap(value: unknown): Record<string, DailyUsage> {
+    if (!isPlainObject(value)) return {};
+    const normalized: Record<string, DailyUsage> = {};
+    for (const [date, item] of Object.entries(value)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isPlainObject(item)) continue;
+      const count = item.count;
+      const tokens = item.tokens;
+      normalized[date] = {
+        date,
+        count: typeof count === "number" && Number.isFinite(count) ? count : 0,
+        tokens:
+          typeof tokens === "number" && Number.isFinite(tokens) ? tokens : 0,
+      };
+    }
+    return normalized;
+  }
+
   function loadUsageMap(): Record<string, DailyUsage> {
     try {
       const raw = localStorage.getItem(USAGE_STORAGE_KEY);
       if (!raw) return {};
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") return parsed;
+      return normalizeUsageMap(parsed);
     } catch (e) {
       console.warn("[Usage] Failed to load usage stats", e);
     }
