@@ -16,10 +16,10 @@ jobs:
     strategy:
       fail-fast: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
 
@@ -27,7 +27,7 @@ jobs:
         run: corepack enable
 
       - name: Cache Yarn dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v5
         with:
           path: |
             .yarn/cache
@@ -56,7 +56,7 @@ jobs:
         run: yarn tauri:build:mac
 
       - name: Upload macOS DMG
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Howlingual-macos-universal
           path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/
@@ -72,10 +72,10 @@ jobs:
           - target: aarch64-pc-windows-msvc
             name: windows-arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
 
@@ -83,7 +83,7 @@ jobs:
         run: corepack enable
 
       - name: Cache Yarn dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v5
         with:
           path: |
             .yarn/cache
@@ -113,13 +113,13 @@ jobs:
         run: yarn tauri build -- --target ${{ matrix.target }}
 
       - name: Upload Windows installer (NSIS)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Howlingual-${{ matrix.name }}-nsis
           path: src-tauri/target/${{ matrix.target }}/release/bundle/nsis/
 
       - name: Upload Windows installer (MSI)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         if: always()
         with:
           name: Howlingual-${{ matrix.name }}-msi
@@ -132,10 +132,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: ./artifacts
 
