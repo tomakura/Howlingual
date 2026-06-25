@@ -18,7 +18,7 @@
 }
 
 @font-face {
-	font-family: 'Jost';
+	font-family: Jost;
 	src: url('./Fonts/Jost/Jost-VariableFont_wght.woff') format('woff');
 	font-weight: 100 900;
 	font-style: normal;

@@ -258,7 +258,7 @@ const OPENAI_STREAMING_MODELS: &[&str] = &[
     "o1",
 ];
 
-const OPENAI_RESPONSES_ONLY_MODELS: &[&str] = &["gpt-5.4-pro"];
+const OPENAI_RESPONSES_ONLY_MODELS: &[&str] = &["gpt-5.4-pro", "gpt-5.5"];
 
 const GEMINI_STREAMING_MODELS: &[&str] = &[
     "gemini-3-pro-preview",
@@ -1559,8 +1559,10 @@ pub fn sync_translation_context(
     payload: SyncTranslationContextPayload,
 ) -> Result<(), String> {
     let next = with_backend_state(&state, |inner| {
-        if let Some(input_query) = payload.input_query {
-            inner.state.input_query = input_query;
+        if !inner.state.is_translating {
+            if let Some(input_query) = payload.input_query {
+                inner.state.input_query = input_query;
+            }
         }
         if let Some(source_lang) = payload.source_lang {
             inner.state.source_lang = source_lang;
@@ -1661,8 +1663,10 @@ pub fn stop_translation(
     state: State<'_, TranslationBackendState>,
     run_id: Option<u64>,
 ) -> Result<(), String> {
-    let _ = run_id;
     let next = with_backend_state(&state, |inner| {
+        if run_id.is_some_and(|run_id| inner.state.run_id != run_id) {
+            return None;
+        }
         inner.state.run_id = inner.state.run_id.saturating_add(1);
         inner.state.is_translating = false;
         inner.state.error_message.clear();
@@ -1672,9 +1676,11 @@ pub fn stop_translation(
         inner.state.tech_metrics.gen_time = 0.0;
         inner.state.tech_metrics.tokens_per_sec = 0.0;
         set_updated(&mut inner.state);
-        inner.state.clone()
+        Some(inner.state.clone())
     })?;
-    emit_state(&app, &next);
+    if let Some(next) = next {
+        emit_state(&app, &next);
+    }
     Ok(())
 }
 

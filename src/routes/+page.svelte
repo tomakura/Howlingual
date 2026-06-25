@@ -348,6 +348,7 @@
   onMount(() => {
     const params = new URLSearchParams(window.location.search);
     const viewParam = params.get("view");
+    let settingsInitialization = Promise.resolve();
 
     void detectWindowMode();
     const saved = localStorage.getItem("howlingual_settings");
@@ -355,6 +356,7 @@
       try {
         const parsed = JSON.parse(saved);
         applySettingsFromParsed(parsed);
+        settingsInitialization = migrateLegacyApiKeys(parsed);
       } catch (e) {
         console.warn("Failed to parse saved settings", e);
       }
@@ -469,7 +471,9 @@
       });
     }
 
-    settingsReady = true;
+    void settingsInitialization.finally(() => {
+      settingsReady = true;
+    });
   });
 
   let pendingTranslationHistoryRun = false;
@@ -525,7 +529,7 @@
           id: crypto.randomUUID(),
           timestamp: Date.now(),
           sourceText: p.inputQuery || inputQuery,
-          sourceLang: p.detectedLang || p.sourceLang || sourceLang,
+          sourceLang: p.sourceLang || sourceLang,
           targetLang: p.targetLang || targetLang,
           isAutoDetect: isAutoDetect,
           detectedLang: p.detectedLang || detectedLang || "",
@@ -542,7 +546,7 @@
         history = [newEntry, ...history].slice(0, 50);
         localStorage.setItem("howlingual_history", JSON.stringify(history));
 
-        persistLastResult();
+        persistCompletedResult(p);
 
         const usageTokens = Math.max(
           0,
@@ -805,6 +809,7 @@
       try {
         const parsed = JSON.parse(event.newValue);
         applySettingsFromParsed(parsed);
+        void migrateLegacyApiKeys(parsed);
         if (parsed.quickShortcut) {
           const isMac = navigator.userAgent.includes("Mac");
           quickShortcut = parsed.quickShortcut.replace(
@@ -1054,6 +1059,38 @@
       translationCount = parsed.translationCount as 1 | 2 | 3;
 
     document.documentElement.setAttribute("data-theme", theme);
+  }
+
+  async function migrateLegacyApiKeys(parsed: unknown) {
+    if (!isPlainObject(parsed) || !isPlainObject(parsed.apiKeys)) return;
+
+    const persist =
+      typeof parsed.rememberApiKeys === "boolean"
+        ? parsed.rememberApiKeys
+        : rememberApiKeys;
+    const providers: AiProvider[] = [
+      "openai",
+      "gemini",
+      "anthropic",
+      "groq",
+      "cerebras",
+    ];
+
+    for (const provider of providers) {
+      const value = parsed.apiKeys[provider];
+      if (typeof value !== "string" || !value.trim()) continue;
+      try {
+        apiKeyStatus = await invoke<ApiKeyStatus>("set_api_key", {
+          payload: {
+            provider,
+            value,
+            persist,
+          },
+        });
+      } catch (error) {
+        console.warn(`Failed to migrate ${provider} API key`, error);
+      }
+    }
   }
 
   let styleLevels: Record<string, number> = $state(
@@ -1661,7 +1698,7 @@
   async function syncSharedState(resetTranslations = false) {
     await invoke("sync_translation_context", {
       payload: {
-        inputQuery,
+        inputQuery: isTranslating ? undefined : inputQuery,
         sourceLang,
         detectedLang,
         isDetecting,
@@ -2864,6 +2901,34 @@
     localStorage.setItem(LAST_RESULT_KEY, JSON.stringify(snapshot));
   }
 
+  function persistCompletedResult(p: any) {
+    if (
+      !Array.isArray(p.translations) ||
+      !p.translations.some((translation: any) => translation?.text)
+    ) {
+      return;
+    }
+    const snapshot: LastResultSnapshot = {
+      timestamp: Date.now(),
+      sourceText: p.inputQuery || inputQuery,
+      sourceLang: p.sourceLang || sourceLang,
+      targetLang: p.targetLang || targetLang,
+      detectedLang: p.detectedLang || detectedLang || "",
+      isAutoDetect,
+      translations: p.translations.map((translation: any) => ({
+        text: translation.text || "",
+        reason: translation.reason || "",
+      })),
+      detailedExplanation: p.detailedExplanation
+        ? $state.snapshot(p.detailedExplanation)
+        : null,
+      styleLevels: p.styleLevels
+        ? $state.snapshot(p.styleLevels)
+        : $state.snapshot(styleLevels),
+    };
+    localStorage.setItem(LAST_RESULT_KEY, JSON.stringify(snapshot));
+  }
+
   function applyLastResult(snapshot: LastResultSnapshot) {
     if (!snapshot || isTranslating) return;
     if (!Array.isArray(snapshot.translations)) return;
@@ -3242,11 +3307,12 @@
   let isHoveringTranslate = $state(false);
 
   async function stopTranslation() {
+    const runId = ownedTranslationRunId;
     isTranslating = false;
     pendingTranslationHistoryRun = false;
     ownedTranslationRunId = null;
     try {
-      await invoke("stop_translation", { runId: null });
+      await invoke("stop_translation", { runId });
     } catch (e) {
       console.error("Failed to stop translation:", e);
     }

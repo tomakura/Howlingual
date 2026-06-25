@@ -27,7 +27,11 @@ async function bundleModule(entry, outfileName, external = []) {
 const aiService = await bundleModule("src/lib/ai_service.ts", "ai_service.mjs");
 const aiModels = await bundleModule("src/lib/ai_models.ts", "ai_models.mjs");
 
-const { parsePartialAiResponseFromStream } = aiService;
+const {
+	buildOpenAIResponsesBody,
+	parsePartialAiResponseFromStream,
+	shouldUseOpenAIResponses,
+} = aiService;
 const { AI_MODELS, STREAMING_MODELS_BY_PROVIDER } = aiModels;
 
 assert.equal(typeof parsePartialAiResponseFromStream, "function");
@@ -58,6 +62,23 @@ const cappedChunk = parsePartialAiResponseFromStream(
 assert.deepEqual(
 	cappedChunk.candidates?.map((candidate) => candidate.text),
 	["one", "two"],
+);
+
+assert.equal(shouldUseOpenAIResponses("gpt-5.5"), true);
+assert.equal(shouldUseOpenAIResponses("gpt-5.4"), false);
+assert.deepEqual(
+	buildOpenAIResponsesBody("gpt-5.5", "user prompt", "system prompt", {
+		stream: true,
+	}),
+	{
+		model: "gpt-5.5",
+		instructions: "system prompt",
+		input: "user prompt",
+		store: false,
+		text: { format: { type: "json_object" }, verbosity: "low" },
+		reasoning: { effort: "low" },
+		stream: true,
+	},
 );
 
 const modelValues = new Set(AI_MODELS.map((model) => model.value));

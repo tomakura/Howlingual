@@ -473,7 +473,7 @@ function isReasoningModelName(modelName: string): boolean {
 	);
 }
 
-function shouldUseOpenAIResponses(modelName: string): boolean {
+export function shouldUseOpenAIResponses(modelName: string): boolean {
 	return modelName.startsWith("gpt-5.5");
 }
 
@@ -689,7 +689,7 @@ function responseOutputText(response: any): string {
 	return chunks.join("");
 }
 
-function buildOpenAIResponsesBody(
+export function buildOpenAIResponsesBody(
 	modelName: string,
 	prompt: string,
 	systemPrompt: string,
@@ -886,7 +886,10 @@ async function callAnthropic(
 }
 
 // Helper to safely parse partial JSON while avoiding repeated repair parses per token.
-function tryParsePartialJson(jsonStr: string): Partial<AiResponse> | null {
+function tryParsePartialJson(
+	jsonStr: string,
+	candidateCount = 3,
+): Partial<AiResponse> | null {
 	const cleaned = normalizeJsonText(jsonStr);
 	const start = cleaned.indexOf("{");
 	const trimmed = (start >= 0 ? cleaned.slice(start) : cleaned).replace(
@@ -909,7 +912,7 @@ function tryParsePartialJson(jsonStr: string): Partial<AiResponse> | null {
 		}
 	}
 
-	return parsePartialAiResponseFromStream(trimmed);
+	return parsePartialAiResponseFromStream(trimmed, candidateCount);
 }
 
 // Stream Translation Router
@@ -965,7 +968,8 @@ export async function translateTextStream(
 			onUpdate,
 			systemPrompt,
 			apiKeys.google?.trim() || apiKeys.gemini?.trim(),
-			signal
+			signal,
+			candidateCount,
 		);
 	} else if (provider === "groq") {
 		await streamGroq(
@@ -976,6 +980,7 @@ export async function translateTextStream(
 			apiKeys.groq?.trim(),
 			signal,
 			plan.jsonMode,
+			candidateCount,
 		);
 	} else if (provider === "cerebras") {
 		await streamCerebras(
@@ -986,9 +991,18 @@ export async function translateTextStream(
 			apiKeys.cerebras?.trim(),
 			signal,
 			plan.jsonMode,
+			candidateCount,
 		);
 	} else if (provider === "anthropic" || model.startsWith("claude")) {
-		await streamAnthropic(model, userPrompt, onUpdate, systemPrompt, apiKeys.anthropic?.trim(), signal);
+		await streamAnthropic(
+			model,
+			userPrompt,
+			onUpdate,
+			systemPrompt,
+			apiKeys.anthropic?.trim(),
+			signal,
+			candidateCount,
+		);
 	} else if (provider === "openai" || model.startsWith("gpt") || model.startsWith("o3")) {
 		await streamOpenAI(
 			model,
@@ -998,6 +1012,7 @@ export async function translateTextStream(
 			apiKeys.openai?.trim(),
 			signal,
 			plan.jsonMode,
+			candidateCount,
 		);
 	} else {
 		throw new Error(`Unsupported model: ${model}`);
@@ -1011,7 +1026,8 @@ async function streamGemini(
 	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void,
 	systemPrompt: string,
 	apiKey?: string,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	candidateCount = 3,
 ) {
 	const genAI = getGeminiClient(apiKey);
 
@@ -1033,7 +1049,7 @@ async function streamGemini(
 		const chunkText = chunk.text();
 		accumulatedText += chunkText;
 
-		const partial = tryParsePartialJson(accumulatedText);
+		const partial = tryParsePartialJson(accumulatedText, candidateCount);
 		if (partial) {
 			const key = getPartialStreamKey(partial);
 			if (key !== lastPartialKey) {
@@ -1069,7 +1085,8 @@ async function streamOpenAICompatible(
 	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void,
 	systemPrompt: string,
 	signal?: AbortSignal,
-	jsonMode = true
+	jsonMode = true,
+	candidateCount = 3,
 ) {
 	const requestParams: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming = {
 		model: modelName,
@@ -1099,7 +1116,8 @@ async function streamOpenAICompatible(
 		const content = chunk.choices[0]?.delta?.content || "";
 
 		if (chunk.usage) {
-			const partialForUsage = tryParsePartialJson(accumulatedText) || {};
+			const partialForUsage =
+				tryParsePartialJson(accumulatedText, candidateCount) || {};
 			onUpdate(partialForUsage, {
 				input_tokens: chunk.usage.prompt_tokens,
 				output_tokens: chunk.usage.completion_tokens,
@@ -1109,7 +1127,7 @@ async function streamOpenAICompatible(
 
 		if (content) {
 			accumulatedText += content;
-			const partial = tryParsePartialJson(accumulatedText);
+			const partial = tryParsePartialJson(accumulatedText, candidateCount);
 			if (partial) {
 				const key = getPartialStreamKey(partial);
 				if (key !== lastPartialKey) {
@@ -1140,7 +1158,8 @@ async function streamOpenAIResponses(
 	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void,
 	systemPrompt: string,
 	signal?: AbortSignal,
-	jsonMode = true
+	jsonMode = true,
+	candidateCount = 3,
 ) {
 	const stream = await openai.responses.create(
 		buildOpenAIResponsesBody(modelName, prompt, systemPrompt, {
@@ -1158,7 +1177,7 @@ async function streamOpenAIResponses(
 		if (signal?.aborted) return;
 		if (event.type === "response.output_text.delta" && event.delta) {
 			accumulatedText += event.delta;
-			const partial = tryParsePartialJson(accumulatedText);
+			const partial = tryParsePartialJson(accumulatedText, candidateCount);
 			if (partial) {
 				const key = getPartialStreamKey(partial);
 				if (key !== lastPartialKey) {
@@ -1200,6 +1219,7 @@ async function streamProviderChatCompletion(params: {
 	systemPrompt: string;
 	signal?: AbortSignal;
 	jsonMode: boolean;
+	candidateCount: number;
 }) {
 	const requestParams: any = {
 		model: params.modelName,
@@ -1225,7 +1245,10 @@ async function streamProviderChatCompletion(params: {
 		signal: params.signal,
 		onDelta: (delta) => {
 			accumulatedText += delta;
-			const partial = tryParsePartialJson(accumulatedText);
+			const partial = tryParsePartialJson(
+				accumulatedText,
+				params.candidateCount,
+			);
 			if (partial) {
 				const key = getPartialStreamKey(partial);
 				if (key !== lastPartialKey) {
@@ -1235,7 +1258,8 @@ async function streamProviderChatCompletion(params: {
 			}
 		},
 		onUsage: (usage) => {
-			const partialForUsage = tryParsePartialJson(accumulatedText) || {};
+			const partialForUsage =
+				tryParsePartialJson(accumulatedText, params.candidateCount) || {};
 			params.onUpdate(partialForUsage, usage);
 		},
 	});
@@ -1257,7 +1281,8 @@ async function streamOpenAI(
 	systemPrompt: string,
 	apiKey?: string,
 	signal?: AbortSignal,
-	jsonMode = true
+	jsonMode = true,
+	candidateCount = 3,
 ) {
 	const openai = getOpenAIClient(apiKey);
 	if (shouldUseOpenAIResponses(modelName)) {
@@ -1269,6 +1294,7 @@ async function streamOpenAI(
 			systemPrompt,
 			signal,
 			jsonMode,
+			candidateCount,
 		);
 		return;
 	}
@@ -1280,6 +1306,7 @@ async function streamOpenAI(
 		systemPrompt,
 		signal,
 		jsonMode,
+		candidateCount,
 	);
 }
 
@@ -1290,7 +1317,8 @@ async function streamGroq(
 	systemPrompt: string,
 	apiKey?: string,
 	signal?: AbortSignal,
-	jsonMode = true
+	jsonMode = true,
+	candidateCount = 3,
 ) {
 	const resolvedKey = resolveGroqApiKey(apiKey);
 	await streamProviderChatCompletion({
@@ -1302,6 +1330,7 @@ async function streamGroq(
 		systemPrompt,
 		signal,
 		jsonMode,
+		candidateCount,
 	});
 }
 
@@ -1312,7 +1341,8 @@ async function streamCerebras(
 	systemPrompt: string,
 	apiKey?: string,
 	signal?: AbortSignal,
-	jsonMode = true
+	jsonMode = true,
+	candidateCount = 3,
 ) {
 	const resolvedKey = resolveCerebrasApiKey(apiKey);
 	await streamProviderChatCompletion({
@@ -1324,6 +1354,7 @@ async function streamCerebras(
 		systemPrompt,
 		signal,
 		jsonMode,
+		candidateCount,
 	});
 }
 
@@ -1334,7 +1365,8 @@ async function streamAnthropic(
 	onUpdate: (data: Partial<AiResponse>, usage?: UsageMetadata) => void,
 	systemPrompt: string,
 	apiKey?: string,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	candidateCount = 3,
 ) {
 	const anthropic = getAnthropicClient(apiKey);
 
@@ -1372,7 +1404,7 @@ async function streamAnthropic(
 			const jsonStart = accumulatedText.indexOf('{');
 			if (jsonStart !== -1) {
 				const jsonPart = accumulatedText.substring(jsonStart);
-				const partial = tryParsePartialJson(jsonPart);
+				const partial = tryParsePartialJson(jsonPart, candidateCount);
 				if (partial) {
 					const key = getPartialStreamKey(partial);
 					if (key !== lastPartialKey) {

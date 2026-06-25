@@ -1335,7 +1335,10 @@ async fn start_selection_ocr(app: AppHandle, origin: Option<String>) -> Result<(
                 mon_y
             );
 
-            let monitor_id = index.to_string();
+            let monitor_id = format!(
+                "{}_{}_{}_{}",
+                mon_x, mon_y, mon_width, mon_height
+            );
 
             let label = format!("{}{}", CAPTURE_WINDOW_PREFIX, monitor_id);
             let url = format!("/?view=capture&monitor={}", monitor_id);
@@ -1431,9 +1434,14 @@ async fn finish_selection_ocr(
         height
     );
 
-    let monitor_index = monitor_id
-        .parse::<usize>()
+    let monitor_bounds = monitor_id
+        .split('_')
+        .map(str::parse::<i32>)
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|_| format!("Invalid monitor id: {}", monitor_id))?;
+    let [monitor_x, monitor_y, monitor_width, monitor_height] = monitor_bounds.as_slice() else {
+        return Err(format!("Invalid monitor id: {}", monitor_id));
+    };
     let selected_window_label = format!("{}{}", CAPTURE_WINDOW_PREFIX, monitor_id);
     let selected_window = app.get_webview_window(&selected_window_label);
     if let Some(window) = selected_window.as_ref() {
@@ -1441,12 +1449,19 @@ async fn finish_selection_ocr(
     }
     std::thread::sleep(Duration::from_millis(80));
 
-    let monitor = Monitor::all()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .nth(monitor_index)
-        .ok_or_else(|| format!("No monitor found for id {}", monitor_id))?;
-    let image = monitor.capture_image().map_err(|e| e.to_string())?;
+    let image = {
+        let monitors = Monitor::all().map_err(|e| e.to_string())?;
+        let monitor = monitors
+            .into_iter()
+            .find(|monitor| {
+                monitor.x().ok() == Some(*monitor_x)
+                    && monitor.y().ok() == Some(*monitor_y)
+                    && monitor.width().ok() == u32::try_from(*monitor_width).ok()
+                    && monitor.height().ok() == u32::try_from(*monitor_height).ok()
+            })
+            .ok_or_else(|| format!("No monitor found for id {}", monitor_id))?;
+        monitor.capture_image().map_err(|e| e.to_string())?
+    };
     if let Some(window) = selected_window.as_ref() {
         let _ = window.show();
         let _ = window.set_focus();
