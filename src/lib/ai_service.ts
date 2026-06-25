@@ -458,7 +458,7 @@ function getPartialStreamKey(partial: Partial<AiResponse>) {
 	for (const point of partial.detailed_explanation?.points ?? []) {
 		values.push(point.term ?? "", point.explanation ?? "");
 	}
-	return values.join("\u001f");
+	return JSON.stringify(values);
 }
 
 function isReasoningModelName(modelName: string): boolean {

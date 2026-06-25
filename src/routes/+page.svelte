@@ -494,6 +494,9 @@
     if (ownedTranslationRunId !== p.runId) return false;
     if (completedHistoryRunIds.has(p.runId)) return false;
     completedHistoryRunIds.add(p.runId);
+    if (completedHistoryRunIds.size > 200) {
+      completedHistoryRunIds.delete(completedHistoryRunIds.values().next().value!);
+    }
     ownedTranslationRunId = null;
     return true;
   }
@@ -1762,7 +1765,7 @@
   async function applyQuickText(text: string) {
     if (isTranslating) {
       const stopped = await stopTranslation();
-      if (!stopped) return;
+      if (!stopped) await waitForStop();
     }
     // Clear ALL previous state when new text arrives
     inputQuery = ""; // Clear first to force reactivity
@@ -1867,7 +1870,7 @@
   async function clearInput() {
     if (isTranslating) {
       const stopped = await stopTranslation();
-      if (!stopped) return;
+      if (!stopped) await waitForStop();
     }
     inputQuery = "";
     resetStreamRevealState();
@@ -3427,10 +3430,8 @@
           candidateCount: translationCount,
         },
       });
-      if (pendingTranslationHistoryRun) {
-        ownedTranslationRunId = runId;
-        pendingTranslationHistoryRun = false;
-      }
+      ownedTranslationRunId = runId;
+      pendingTranslationHistoryRun = false;
       if (pendingStopRequested) {
         pendingStopRequested = false;
         await stopTranslation();
@@ -3451,6 +3452,13 @@
   }
 
   let isHoveringTranslate = $state(false);
+
+  async function waitForStop(maxMs = 3000): Promise<void> {
+    const deadline = Date.now() + maxMs;
+    while (isTranslating && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 30));
+    }
+  }
 
   async function stopTranslation(): Promise<boolean> {
     const runId = ownedTranslationRunId;
