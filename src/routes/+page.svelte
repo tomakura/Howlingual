@@ -19,7 +19,6 @@
     type AiProvider,
     getDefaultModelForProvider,
     getModelEntry,
-    getProviderForModel,
     isAiProvider,
   } from "$lib/ai_models";
   import CaptureOverlay from "$lib/components/CaptureOverlay.svelte";
@@ -952,25 +951,10 @@
       return;
     }
 
-    if (model) {
-      selectedModel = model as AiModel;
-      const inferred =
-        getProviderForModel(model) ||
-        (provider && isAiProvider(provider) ? provider : null);
-      if (inferred) {
-        selectedProvider = inferred;
-      }
-      return;
-    }
-
     if (provider && isAiProvider(provider)) {
       selectedProvider = provider;
-      const fallback =
-        lastSelectedModels[provider] ?? getDefaultModelForProvider(provider);
-      if (fallback) {
-        selectedModel = fallback as AiModel;
-      }
     }
+    ensureModelMatchesProvider();
   }
 
   function ensureModelMatchesProvider() {
@@ -978,9 +962,13 @@
       (m) => m.provider === selectedProvider && m.value === selectedModel,
     );
     if (!valid) {
-      const fallback =
-        lastSelectedModels[selectedProvider] ??
-        getDefaultModelForProvider(selectedProvider);
+      const remembered = lastSelectedModels[selectedProvider];
+      const fallback = availableModels.some(
+        (model) =>
+          model.provider === selectedProvider && model.value === remembered,
+      )
+        ? remembered
+        : getDefaultModelForProvider(selectedProvider);
       if (fallback) {
         selectedModel = fallback as AiModel;
       }
@@ -1025,9 +1013,8 @@
       typeof parsed.provider === "string" ? parsed.provider : undefined;
     if (parsedModel || parsedProvider) {
       syncProviderAndModel(parsedModel, parsedProvider);
-    } else {
-      ensureModelMatchesProvider();
     }
+    ensureModelMatchesProvider();
 
     if (selectedProvider && selectedModel) {
       if (lastSelectedModels[selectedProvider] !== selectedModel) {
@@ -1133,12 +1120,13 @@
   });
 
   function triggerResetStyles() {
+    rememberConfirmationFocus();
     showResetConfirmation = true;
   }
 
   function confirmResetStyles() {
     customStyles = getDefaultStyles(appLanguage);
-    showResetConfirmation = false;
+    closeResetConfirmation();
   }
   // Auto-save style levels whenever they change (after initial load)
   $effect(() => {
@@ -1338,6 +1326,10 @@
   }
 
   let focusReturnTarget: HTMLElement | null = null;
+  let confirmationFocusReturnTarget: HTMLElement | null = null;
+  let resetConfirmationDialog = $state<HTMLDivElement | null>(null);
+  let clipboardOpsConfirmationDialog = $state<HTMLDivElement | null>(null);
+  let discardConfirmationDialog = $state<HTMLDivElement | null>(null);
 
   function rememberFocusTarget() {
     if (document.activeElement instanceof HTMLElement) {
@@ -1355,6 +1347,86 @@
       }
     });
   }
+
+  function rememberConfirmationFocus() {
+    if (document.activeElement instanceof HTMLElement) {
+      confirmationFocusReturnTarget = document.activeElement;
+    }
+  }
+
+  function restoreConfirmationFocus() {
+    const target = confirmationFocusReturnTarget;
+    confirmationFocusReturnTarget = null;
+    if (!target) return;
+    void tick().then(() => {
+      if (target.isConnected) target.focus({ preventScroll: true });
+    });
+  }
+
+  function closeResetConfirmation() {
+    showResetConfirmation = false;
+    restoreConfirmationFocus();
+  }
+
+  function closeClipboardOpsConfirmation() {
+    showClipboardOpsConfirmation = false;
+    restoreConfirmationFocus();
+  }
+
+  function closeDiscardConfirmation() {
+    showDiscardConfirmation = false;
+    restoreConfirmationFocus();
+  }
+
+  function handleConfirmationKeydown(
+    event: KeyboardEvent,
+    dialog: HTMLElement | null,
+    close: () => void,
+  ) {
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key !== "Tab" || !dialog) return;
+    const focusable = Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    if (focusable.length === 0) {
+      event.preventDefault();
+      dialog.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  $effect(() => {
+    const dialog = showResetConfirmation
+      ? resetConfirmationDialog
+      : showClipboardOpsConfirmation
+        ? clipboardOpsConfirmationDialog
+        : showDiscardConfirmation
+          ? discardConfirmationDialog
+          : null;
+    if (!dialog) return;
+    void tick().then(() => {
+      const first = dialog.querySelector<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      (first ?? dialog).focus();
+    });
+  });
 
   function openSettingsModal() {
     rememberFocusTarget();
@@ -1410,18 +1482,19 @@
       }
 
       if (showResetConfirmation) {
-        showResetConfirmation = false;
+        closeResetConfirmation();
         return;
       }
       if (showDiscardConfirmation) {
-        showDiscardConfirmation = false;
+        closeDiscardConfirmation();
         return;
       }
       if (showClipboardOpsConfirmation) {
-        showClipboardOpsConfirmation = false;
+        closeClipboardOpsConfirmation();
         return;
       }
       if (editingStyle) {
+        rememberConfirmationFocus();
         showDiscardConfirmation = true;
         return;
       }
@@ -1495,12 +1568,13 @@
   }
 
   function cancelEditStyle() {
+    rememberConfirmationFocus();
     showDiscardConfirmation = true;
   }
 
   function confirmDiscardStyle() {
     editingStyle = null;
-    showDiscardConfirmation = false;
+    closeDiscardConfirmation();
   }
 
   function deleteStyle(styleId: string) {
@@ -1578,6 +1652,7 @@
         techMetrics: $state.snapshot(techMetrics),
         showTechInfo: showTechInfo,
         isTranslating: isTranslating, // Pass translating state
+        runId: ownedTranslationRunId,
       });
       console.log(
         "[handover] Sending payload:",
@@ -1587,6 +1662,8 @@
 
       // Use dedicated handover command with full state
       await invoke("handover_to_main", { text: handoverPayload });
+      ownedTranslationRunId = null;
+      pendingTranslationHistoryRun = false;
 
       // Hide the quick window after handover
       try {
@@ -1647,6 +1724,8 @@
 
         // Restore translating state if it was interrupted
         isTranslating = data.isTranslating || false;
+        ownedTranslationRunId =
+          isTranslating && typeof data.runId === "number" ? data.runId : null;
 
         await tick();
         await autoResize();
@@ -1662,6 +1741,10 @@
   }
 
   async function applyQuickText(text: string) {
+    if (isTranslating) {
+      const stopped = await stopTranslation();
+      if (!stopped) return;
+    }
     // Clear ALL previous state when new text arrives
     inputQuery = ""; // Clear first to force reactivity
     resetStreamRevealState();
@@ -1850,6 +1933,7 @@
 
   function toggleClipboardOps() {
     if (!clipboardOpsEnabled) {
+      rememberConfirmationFocus();
       showClipboardOpsConfirmation = true;
       return;
     }
@@ -1858,7 +1942,7 @@
 
   function confirmEnableClipboardOps() {
     clipboardOpsEnabled = true;
-    showClipboardOpsConfirmation = false;
+    closeClipboardOpsConfirmation();
   }
 
   function applySourceLangFromSync(lang: string, detected?: string) {
@@ -2775,7 +2859,6 @@
   }
 
   function isFavorited(sourceText: string): boolean {
-    loadHistoryCollections();
     const key = buildFavoriteKey({
       sourceText,
       translations: translations.map((t) => ({
@@ -2787,7 +2870,6 @@
   }
 
   function isFavoritedById(id: string): boolean {
-    loadHistoryCollections();
     const item = history.find((h) => h.id === id);
     if (item) {
       const key = buildFavoriteKey(item);
@@ -2845,6 +2927,10 @@
       }
     }
   }
+
+  onMount(() => {
+    loadHistoryCollections();
+  });
 
   function loadHistory(item: HistoryItem) {
     resetStreamRevealState();
@@ -6828,28 +6914,28 @@
       type="button"
       class="overlay-dismiss"
       aria-label={t(appLanguage, "close")}
-      onclick={() => (showResetConfirmation = false)}
+      onclick={closeResetConfirmation}
       tabindex="-1"
     ></button>
     <div
+      bind:this={resetConfirmationDialog}
       class="modal-card glass"
       onclick={(e) => e.stopPropagation()}
       role="dialog"
       aria-modal="true"
       tabindex="-1"
-      onkeydown={(e) => {
-        e.stopPropagation();
-        if (e.key === "Escape") {
-          e.preventDefault();
-          showResetConfirmation = false;
-        }
-      }}
+      onkeydown={(e) =>
+        handleConfirmationKeydown(
+          e,
+          resetConfirmationDialog,
+          closeResetConfirmation,
+        )}
     >
       <h3>{t(appLanguage, "confirmReset")}</h3>
       <div class="modal-actions">
         <button
           class="rich-btn secondary"
-          onclick={() => (showResetConfirmation = false)}
+          onclick={closeResetConfirmation}
           >{t(appLanguage, "close")}</button
         >
         <button class="rich-btn danger" onclick={confirmResetStyles}
@@ -6869,10 +6955,11 @@
       type="button"
       class="overlay-dismiss"
       aria-label={t(appLanguage, "close")}
-      onclick={() => (showClipboardOpsConfirmation = false)}
+      onclick={closeClipboardOpsConfirmation}
       tabindex="-1"
     ></button>
     <div
+      bind:this={clipboardOpsConfirmationDialog}
       class="modal-card glass"
       onclick={(e) => e.stopPropagation()}
       role="dialog"
@@ -6880,13 +6967,12 @@
       aria-labelledby="clipboard-ops-confirm-title"
       aria-describedby="clipboard-ops-confirm-message"
       tabindex="-1"
-      onkeydown={(e) => {
-        e.stopPropagation();
-        if (e.key === "Escape") {
-          e.preventDefault();
-          showClipboardOpsConfirmation = false;
-        }
-      }}
+      onkeydown={(e) =>
+        handleConfirmationKeydown(
+          e,
+          clipboardOpsConfirmationDialog,
+          closeClipboardOpsConfirmation,
+        )}
     >
       <h3 id="clipboard-ops-confirm-title">{t(appLanguage, "clipboardOps")}</h3>
       <p id="clipboard-ops-confirm-message" class="modal-message">
@@ -6895,7 +6981,7 @@
       <div class="modal-actions">
         <button
           class="rich-btn secondary"
-          onclick={() => (showClipboardOpsConfirmation = false)}
+          onclick={closeClipboardOpsConfirmation}
           >{t(appLanguage, "cancel")}</button
         >
         <button class="rich-btn danger" onclick={confirmEnableClipboardOps}
@@ -6915,28 +7001,28 @@
       type="button"
       class="overlay-dismiss"
       aria-label={t(appLanguage, "close")}
-      onclick={() => (showDiscardConfirmation = false)}
+      onclick={closeDiscardConfirmation}
       tabindex="-1"
     ></button>
     <div
+      bind:this={discardConfirmationDialog}
       class="modal-card glass"
       onclick={(e) => e.stopPropagation()}
       role="dialog"
       aria-modal="true"
       tabindex="-1"
-      onkeydown={(e) => {
-        e.stopPropagation();
-        if (e.key === "Escape") {
-          e.preventDefault();
-          showDiscardConfirmation = false;
-        }
-      }}
+      onkeydown={(e) =>
+        handleConfirmationKeydown(
+          e,
+          discardConfirmationDialog,
+          closeDiscardConfirmation,
+        )}
     >
       <h3>{t(appLanguage, "confirmDiscard")}</h3>
       <div class="modal-actions">
         <button
           class="rich-btn secondary"
-          onclick={() => (showDiscardConfirmation = false)}
+          onclick={closeDiscardConfirmation}
         >
           {t(appLanguage, "cancel")}
         </button>
