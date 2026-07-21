@@ -1859,6 +1859,7 @@ pub fn run() {
             translation_backend::set_api_key,
             translation_backend::clear_api_key,
             translation_backend::get_api_key_status,
+            translation_backend::fetch_provider_models,
             translation_backend::start_translation,
             translation_backend::stop_translation,
             update_shortcut,

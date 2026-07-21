@@ -18,7 +18,7 @@ export type AiModelEntry = {
 export const DEFAULT_MODELS_BY_PROVIDER: Record<AiProvider, string> = {
 	openai: "gpt-5.4-mini",
 	gemini: "gemini-2.5-flash",
-	anthropic: "claude-sonnet-4-6",
+	anthropic: "claude-sonnet-5",
 	groq: "openai/gpt-oss-20b",
 	cerebras: "gpt-oss-120b",
 };
@@ -237,6 +237,15 @@ export const AI_MODELS: AiModelEntry[] = [
 		quality: "good",
 		streamingExperience: "great",
 	}),
+	buildModel("Claude Sonnet 5", "claude-sonnet-5", "anthropic", {
+		speed: "balanced",
+		quality: "best",
+	}),
+	buildModel("Claude Opus 4.8", "claude-opus-4-8", "anthropic", {
+		speed: "deliberate",
+		quality: "best",
+		streamingExperience: "delayed",
+	}),
 	buildModel("Claude Opus 4.7", "claude-opus-4-7", "anthropic", {
 		speed: "deliberate",
 		quality: "best",
@@ -368,6 +377,8 @@ export const STREAMING_MODELS_BY_PROVIDER: Record<AiProvider, string[]> = {
 		"gemini-2.0-flash-lite",
 	],
 	anthropic: [
+		"claude-sonnet-5",
+		"claude-opus-4-8",
 		"claude-opus-4-7",
 		"claude-sonnet-4-6",
 		"claude-haiku-4-5-20251001",
@@ -431,4 +442,25 @@ export function getRecommendedModelForProvider(provider: AiProvider): AiModelEnt
 
 export function getModelsForProvider(provider: AiProvider): AiModelEntry[] {
 	return AI_MODELS.filter((model) => model.provider === provider);
+}
+
+export type FetchedModel = { id: string; displayName?: string };
+
+/**
+ * プロバイダーのAPIから取得したモデル一覧を既存のキュレート済みリストに追加(union)する。
+ * 既存エントリは削除・上書きしない。未知のIDのみ buildModel() で自動分類して追加する。
+ */
+export function mergeFetchedModels(
+	base: AiModelEntry[],
+	provider: AiProvider,
+	fetched: FetchedModel[],
+): AiModelEntry[] {
+	const existingValues = new Set(
+		base.filter((m) => m.provider === provider).map((m) => m.value),
+	);
+	const additions = fetched
+		.filter((f) => !existingValues.has(f.id))
+		.map((f) => buildModel(f.displayName || f.id, f.id, provider));
+	if (additions.length === 0) return base;
+	return [...base, ...additions];
 }
