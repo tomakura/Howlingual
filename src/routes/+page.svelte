@@ -1130,6 +1130,7 @@
         });
         const { [provider]: _migrated, ...pending } = pendingLegacyApiKeys;
         pendingLegacyApiKeys = pending;
+        void refreshModelsForProvider(provider, { silent: true });
       } catch (error) {
         console.warn(`Failed to migrate ${provider} API key`, error);
       }
@@ -1332,11 +1333,26 @@
   function readFetchedModelsCache(): FetchedModelsCache {
     try {
       const raw = localStorage.getItem(FETCHED_MODELS_CACHE_KEY);
-      return raw ? (JSON.parse(raw) as FetchedModelsCache) : {};
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return isPlainObject(parsed) ? (parsed as FetchedModelsCache) : {};
     } catch (error) {
       console.warn("Failed to read fetched models cache", error);
       return {};
     }
+  }
+
+  function sanitizeFetchedModels(value: unknown): FetchedModel[] {
+    if (!Array.isArray(value)) return [];
+    return value.filter(
+      (m): m is FetchedModel =>
+        Boolean(m) &&
+        typeof m === "object" &&
+        typeof (m as FetchedModel).id === "string" &&
+        (m as FetchedModel).id.length > 0 &&
+        ((m as FetchedModel).displayName === undefined ||
+          typeof (m as FetchedModel).displayName === "string"),
+    );
   }
 
   function loadFetchedModelsCache() {
@@ -1344,9 +1360,14 @@
     let merged = availableModels;
     for (const provider of Object.keys(cache) as AiProvider[]) {
       const entry = cache[provider];
-      if (!entry) continue;
-      merged = mergeFetchedModels(merged, provider, entry.models);
-      modelFetchedAt = { ...modelFetchedAt, [provider]: entry.fetchedAt };
+      if (!entry || typeof entry !== "object" || !Array.isArray(entry.models))
+        continue;
+      const models = sanitizeFetchedModels(entry.models);
+      if (models.length === 0) continue;
+      merged = mergeFetchedModels(merged, provider, models);
+      if (typeof entry.fetchedAt === "number") {
+        modelFetchedAt = { ...modelFetchedAt, [provider]: entry.fetchedAt };
+      }
     }
     availableModels = merged;
   }

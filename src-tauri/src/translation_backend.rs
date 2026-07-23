@@ -1744,35 +1744,63 @@ async fn fetch_anthropic_models(
     client: &reqwest::Client,
     api_key: &str,
 ) -> Result<Vec<FetchedModelInfo>, String> {
-    let res = client
-        .get("https://api.anthropic.com/v1/models")
-        .header("x-api-key", api_key)
-        .header("anthropic-version", "2023-06-01")
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let status = res.status();
-    let body = res.text().await.map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        return Err(extract_error_message(&body, status));
-    }
-    let json: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    let items = json
-        .get("data")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    Ok(items
-        .into_iter()
-        .filter_map(|item| {
-            let id = item.get("id").and_then(|v| v.as_str())?.to_string();
+    let mut models = Vec::new();
+    let mut after_id: Option<String> = None;
+
+    loop {
+        let mut url = "https://api.anthropic.com/v1/models?limit=1000".to_string();
+        if let Some(cursor) = &after_id {
+            url.push_str("&after_id=");
+            url.push_str(cursor);
+        }
+        let res = client
+            .get(&url)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = res.status();
+        let body = res.text().await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            return Err(extract_error_message(&body, status));
+        }
+        let json: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+        let items = json
+            .get("data")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if items.is_empty() {
+            break;
+        }
+        for item in &items {
+            let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
             let display_name = item
                 .get("display_name")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            Some(FetchedModelInfo { id, display_name })
-        })
-        .collect())
+            models.push(FetchedModelInfo {
+                id: id.to_string(),
+                display_name,
+            });
+        }
+        let has_more = json
+            .get("has_more")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if !has_more {
+            break;
+        }
+        let Some(last_id) = json.get("last_id").and_then(|v| v.as_str()) else {
+            break;
+        };
+        after_id = Some(last_id.to_string());
+    }
+
+    Ok(models)
 }
 
 async fn fetch_gemini_models(
@@ -1840,6 +1868,7 @@ pub async fn fetch_provider_models(
         return Err(format!("API key for {provider} is not configured."));
     };
     let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(|e| e.to_string())?;
     match provider.as_str() {
