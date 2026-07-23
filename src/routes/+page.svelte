@@ -1365,7 +1365,11 @@
       const models = sanitizeFetchedModels(entry.models);
       if (models.length === 0) continue;
       merged = mergeFetchedModels(merged, provider, models);
-      if (typeof entry.fetchedAt === "number") {
+      if (
+        typeof entry.fetchedAt === "number" &&
+        Number.isFinite(entry.fetchedAt) &&
+        entry.fetchedAt <= Date.now()
+      ) {
         modelFetchedAt = { ...modelFetchedAt, [provider]: entry.fetchedAt };
       }
     }
