@@ -83,6 +83,11 @@
     groq: "",
     cerebras: "",
   });
+  // 起動時の設定復元(syncProviderAndModel)で一旦フォールバックモデルに
+  // 上書きされた場合でも、後続のモデル取得成功時に元の選択を再適用するための一時記憶
+  let pendingRestoreModel: string | null = null;
+  let pendingRestoreProvider: AiProvider | null = null;
+  let apiKeyStatusLoaded: Promise<void> = Promise.resolve();
   let pendingLegacyApiKeys = $state<Record<string, string>>({});
   let rememberApiKeys = $state(true);
   let defaultTargetLang = $state("日本語");
@@ -217,9 +222,7 @@
 
   onMount(() => {
     loadFetchedModelsCache();
-    void refreshApiKeyStatus().then(() => {
-      maybeAutoRefreshModels(selectedProvider);
-    });
+    apiKeyStatusLoaded = refreshApiKeyStatus();
   });
 
   function detectLanguageSimple(text: string) {
@@ -388,6 +391,13 @@
         console.warn("Failed to parse saved settings", e);
       }
     }
+
+    // 保存済み設定の適用(selectedProviderの復元)が完了した後に、
+    // APIキー状態の取得も待ってから自動更新を行う(既定のopenaiで
+    // 誤って更新されるのを防ぐ)
+    void apiKeyStatusLoaded.then(() => {
+      maybeAutoRefreshModels(selectedProvider);
+    });
 
     // Load separated custom styles if available
     const savedStyles = localStorage.getItem("howlingual_custom_styles");
@@ -995,6 +1005,10 @@
     if (model) {
       selectedModel = model as AiModel;
     }
+    // ensureModelMatchesProvider がキャッシュ欠損時にフォールバックへ戻して
+    // しまっても、後からのモデル取得成功時に元の選択を再適用できるよう控えておく
+    pendingRestoreModel = model ?? null;
+    pendingRestoreProvider = selectedProvider;
     ensureModelMatchesProvider();
   }
 
@@ -1358,7 +1372,8 @@
   function loadFetchedModelsCache() {
     const cache = readFetchedModelsCache();
     let merged = availableModels;
-    for (const provider of Object.keys(cache) as AiProvider[]) {
+    for (const provider of Object.keys(cache)) {
+      if (!isAiProvider(provider)) continue;
       const entry = cache[provider];
       if (!entry || typeof entry !== "object" || !Array.isArray(entry.models))
         continue;
@@ -1401,6 +1416,25 @@
         provider,
       });
       availableModels = mergeFetchedModels(availableModels, provider, fetched);
+      // 起動時にキャッシュ欠損でフォールバックへ戻されていた選択を、
+      // 取得成功を機に元のモデルへ再適用する(一度きり)
+      if (
+        pendingRestoreProvider === provider &&
+        pendingRestoreModel &&
+        availableModels.some(
+          (m) => m.provider === provider && m.value === pendingRestoreModel,
+        )
+      ) {
+        lastSelectedModels = {
+          ...lastSelectedModels,
+          [provider]: pendingRestoreModel,
+        };
+        if (selectedProvider === provider) {
+          selectedModel = pendingRestoreModel as AiModel;
+        }
+        pendingRestoreModel = null;
+        pendingRestoreProvider = null;
+      }
       const fetchedAt = Date.now();
       modelFetchedAt = { ...modelFetchedAt, [provider]: fetchedAt };
       modelFetchErrors = { ...modelFetchErrors, [provider]: "" };
