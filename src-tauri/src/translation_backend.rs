@@ -192,6 +192,13 @@ pub struct ApiKeyStatus {
     pub cerebras: ApiKeyPresence,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchedModelInfo {
+    pub id: String,
+    pub display_name: Option<String>,
+}
+
 #[derive(Default)]
 struct TranslationBackendInner {
     state: TranslationStatePayload,
@@ -1655,6 +1662,247 @@ pub fn get_api_key_status(
     state: State<'_, TranslationBackendState>,
 ) -> Result<ApiKeyStatus, String> {
     with_backend_state(&state, |inner| api_key_statuses(&app, inner))
+}
+
+fn extract_error_message(body: &str, status: reqwest::StatusCode) -> String {
+    if let Ok(json) = serde_json::from_str::<Value>(body) {
+        if let Some(msg) = json
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+        {
+            return msg.to_string();
+        }
+    }
+    format!("HTTP {status}")
+}
+
+fn openai_chat_model_filter(id: &str) -> bool {
+    let lower = id.to_lowercase();
+    let has_prefix = lower.starts_with("gpt-")
+        || lower.starts_with("o1")
+        || lower.starts_with("o3")
+        || lower.starts_with("o4");
+    let excluded = [
+        "audio",
+        "realtime",
+        "transcribe",
+        "image",
+        "embedding",
+        "moderation",
+        "tts",
+        "instruct",
+        "search-preview",
+    ]
+    .iter()
+    .any(|kw| lower.contains(kw));
+    has_prefix && !excluded
+}
+
+fn groq_model_filter(id: &str) -> bool {
+    let lower = id.to_lowercase();
+    !["whisper", "tts", "guard", "playai"]
+        .iter()
+        .any(|kw| lower.contains(kw))
+}
+
+async fn fetch_openai_compatible_models(
+    client: &reqwest::Client,
+    url: &str,
+    api_key: &str,
+    filter: impl Fn(&str) -> bool,
+) -> Result<Vec<FetchedModelInfo>, String> {
+    let res = client
+        .get(url)
+        .headers(bearer_headers(api_key)?)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = res.status();
+    let body = res.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(extract_error_message(&body, status));
+    }
+    let json: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    let items = json
+        .get("data")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(items
+        .into_iter()
+        .filter_map(|item| item.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .filter(|id| filter(id))
+        .map(|id| FetchedModelInfo {
+            id,
+            display_name: None,
+        })
+        .collect())
+}
+
+async fn fetch_anthropic_models(
+    client: &reqwest::Client,
+    api_key: &str,
+) -> Result<Vec<FetchedModelInfo>, String> {
+    let mut models = Vec::new();
+    let mut after_id: Option<String> = None;
+
+    loop {
+        let mut url = "https://api.anthropic.com/v1/models?limit=1000".to_string();
+        if let Some(cursor) = &after_id {
+            url.push_str("&after_id=");
+            url.push_str(cursor);
+        }
+        let res = client
+            .get(&url)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = res.status();
+        let body = res.text().await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            return Err(extract_error_message(&body, status));
+        }
+        let json: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+        let items = json
+            .get("data")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if items.is_empty() {
+            break;
+        }
+        for item in &items {
+            let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let display_name = item
+                .get("display_name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            models.push(FetchedModelInfo {
+                id: id.to_string(),
+                display_name,
+            });
+        }
+        let has_more = json
+            .get("has_more")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if !has_more {
+            break;
+        }
+        let Some(last_id) = json.get("last_id").and_then(|v| v.as_str()) else {
+            break;
+        };
+        after_id = Some(last_id.to_string());
+    }
+
+    Ok(models)
+}
+
+async fn fetch_gemini_models(
+    client: &reqwest::Client,
+    api_key: &str,
+) -> Result<Vec<FetchedModelInfo>, String> {
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models?key={api_key}&pageSize=1000"
+    );
+    let res = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    let status = res.status();
+    let body = res.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(extract_error_message(&body, status));
+    }
+    let json: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    let items = json
+        .get("models")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(items
+        .into_iter()
+        .filter_map(|item| {
+            let name = item.get("name").and_then(|v| v.as_str())?;
+            let id = name.strip_prefix("models/").unwrap_or(name).to_string();
+            let methods = item
+                .get("supportedGenerationMethods")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let supports_generate = methods
+                .iter()
+                .any(|m| m.as_str() == Some("generateContent"));
+            if !supports_generate {
+                return None;
+            }
+            let lower = id.to_lowercase();
+            if ["embedding", "aqa", "imagen", "veo", "tts"]
+                .iter()
+                .any(|kw| lower.contains(kw))
+            {
+                return None;
+            }
+            let display_name = item
+                .get("displayName")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            Some(FetchedModelInfo { id, display_name })
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn fetch_provider_models(
+    app: AppHandle,
+    state: State<'_, TranslationBackendState>,
+    provider: String,
+) -> Result<Vec<FetchedModelInfo>, String> {
+    let api_key = {
+        let inner = state.0.lock().map_err(|_| "state lock failed".to_string())?;
+        resolve_api_key(&app, &inner, &provider)
+    };
+    let Some(api_key) = api_key else {
+        return Err(format!("API key for {provider} is not configured."));
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    match provider.as_str() {
+        "openai" => {
+            fetch_openai_compatible_models(
+                &client,
+                "https://api.openai.com/v1/models",
+                &api_key,
+                openai_chat_model_filter,
+            )
+            .await
+        }
+        "anthropic" => fetch_anthropic_models(&client, &api_key).await,
+        "gemini" => fetch_gemini_models(&client, &api_key).await,
+        "groq" => {
+            fetch_openai_compatible_models(
+                &client,
+                "https://api.groq.com/openai/v1/models",
+                &api_key,
+                groq_model_filter,
+            )
+            .await
+        }
+        "cerebras" => {
+            fetch_openai_compatible_models(
+                &client,
+                "https://api.cerebras.ai/v1/models",
+                &api_key,
+                |_| true,
+            )
+            .await
+        }
+        other => Err(format!("Unsupported provider: {other}")),
+    }
 }
 
 #[tauri::command]

@@ -17,9 +17,11 @@
     AI_MODELS,
     DEFAULT_MODELS_BY_PROVIDER,
     type AiProvider,
+    type FetchedModel,
     getDefaultModelForProvider,
     getModelEntry,
     isAiProvider,
+    mergeFetchedModels,
   } from "$lib/ai_models";
   import CaptureOverlay from "$lib/components/CaptureOverlay.svelte";
   import {
@@ -59,6 +61,33 @@
   );
   let apiKeyDrafts = $state<ApiKeyDrafts>(createEmptyApiKeyDrafts());
   let apiKeyStatus = $state<ApiKeyStatus>(createEmptyApiKeyStatus());
+  const emptyModelFetchStatus = (): Record<AiProvider, "idle" | "loading" | "error"> => ({
+    openai: "idle",
+    gemini: "idle",
+    anthropic: "idle",
+    groq: "idle",
+    cerebras: "idle",
+  });
+  let modelFetchStatus = $state(emptyModelFetchStatus());
+  let modelFetchedAt = $state<Record<AiProvider, number | null>>({
+    openai: null,
+    gemini: null,
+    anthropic: null,
+    groq: null,
+    cerebras: null,
+  });
+  let modelFetchErrors = $state<Record<AiProvider, string>>({
+    openai: "",
+    gemini: "",
+    anthropic: "",
+    groq: "",
+    cerebras: "",
+  });
+  // 起動時の設定復元(syncProviderAndModel)で一旦フォールバックモデルに
+  // 上書きされた場合でも、後続のモデル取得成功時に元の選択を再適用するための一時記憶
+  let pendingRestoreModel: string | null = null;
+  let pendingRestoreProvider: AiProvider | null = null;
+  let apiKeyStatusLoaded: Promise<void> = Promise.resolve();
   let pendingLegacyApiKeys = $state<Record<string, string>>({});
   let rememberApiKeys = $state(true);
   let defaultTargetLang = $state("日本語");
@@ -192,7 +221,8 @@
   });
 
   onMount(() => {
-    void refreshApiKeyStatus();
+    loadFetchedModelsCache();
+    apiKeyStatusLoaded = refreshApiKeyStatus();
   });
 
   function detectLanguageSimple(text: string) {
@@ -361,6 +391,13 @@
         console.warn("Failed to parse saved settings", e);
       }
     }
+
+    // 保存済み設定の適用(selectedProviderの復元)が完了した後に、
+    // APIキー状態の取得も待ってから自動更新を行う(既定のopenaiで
+    // 誤って更新されるのを防ぐ)
+    void apiKeyStatusLoaded.then(() => {
+      maybeAutoRefreshModels(selectedProvider);
+    });
 
     // Load separated custom styles if available
     const savedStyles = localStorage.getItem("howlingual_custom_styles");
@@ -956,16 +993,22 @@
   let settingsReady = $state(false);
 
   function syncProviderAndModel(model?: string, provider?: string) {
-    const entry = getModelEntry(model);
-    if (entry) {
-      selectedModel = entry.value as AiModel;
-      selectedProvider = entry.provider;
-      return;
-    }
-
+    // 自動取得済みモデル(静的なAI_MODELSには存在しない)も復元できるよう、
+    // まず保存されていたprovider/modelをそのまま信頼して反映し、
+    // 妥当性チェックは実行時の availableModels を見る ensureModelMatchesProvider に任せる。
     if (provider && isAiProvider(provider)) {
       selectedProvider = provider;
+    } else if (model) {
+      const entry = getModelEntry(model);
+      if (entry) selectedProvider = entry.provider;
     }
+    if (model) {
+      selectedModel = model as AiModel;
+    }
+    // ensureModelMatchesProvider がキャッシュ欠損時にフォールバックへ戻して
+    // しまっても、後からのモデル取得成功時に元の選択を再適用できるよう控えておく
+    pendingRestoreModel = model ?? null;
+    pendingRestoreProvider = selectedProvider;
     ensureModelMatchesProvider();
   }
 
@@ -1101,6 +1144,7 @@
         });
         const { [provider]: _migrated, ...pending } = pendingLegacyApiKeys;
         pendingLegacyApiKeys = pending;
+        void refreshModelsForProvider(provider, { silent: true });
       } catch (error) {
         console.warn(`Failed to migrate ${provider} API key`, error);
       }
@@ -1173,6 +1217,7 @@
     };
 
     selectedProvider = provider;
+    maybeAutoRefreshModels(provider);
 
     // 保存されていたモデルを復元
     if (lastSelectedModels[provider]) {
@@ -1292,6 +1337,125 @@
     }
   }
 
+  const FETCHED_MODELS_CACHE_KEY = "howlingual_fetched_models_v1";
+  const MODEL_CACHE_STALE_MS = 6 * 60 * 60 * 1000; // 6時間
+
+  type FetchedModelsCache = Partial<
+    Record<AiProvider, { models: FetchedModel[]; fetchedAt: number }>
+  >;
+
+  function readFetchedModelsCache(): FetchedModelsCache {
+    try {
+      const raw = localStorage.getItem(FETCHED_MODELS_CACHE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return isPlainObject(parsed) ? (parsed as FetchedModelsCache) : {};
+    } catch (error) {
+      console.warn("Failed to read fetched models cache", error);
+      return {};
+    }
+  }
+
+  function sanitizeFetchedModels(value: unknown): FetchedModel[] {
+    if (!Array.isArray(value)) return [];
+    return value.filter(
+      (m): m is FetchedModel =>
+        Boolean(m) &&
+        typeof m === "object" &&
+        typeof (m as FetchedModel).id === "string" &&
+        (m as FetchedModel).id.length > 0 &&
+        ((m as FetchedModel).displayName === undefined ||
+          typeof (m as FetchedModel).displayName === "string"),
+    );
+  }
+
+  function loadFetchedModelsCache() {
+    const cache = readFetchedModelsCache();
+    let merged = availableModels;
+    for (const provider of Object.keys(cache)) {
+      if (!isAiProvider(provider)) continue;
+      const entry = cache[provider];
+      if (!entry || typeof entry !== "object" || !Array.isArray(entry.models))
+        continue;
+      const models = sanitizeFetchedModels(entry.models);
+      if (models.length === 0) continue;
+      merged = mergeFetchedModels(merged, provider, models);
+      if (
+        typeof entry.fetchedAt === "number" &&
+        Number.isFinite(entry.fetchedAt) &&
+        entry.fetchedAt <= Date.now()
+      ) {
+        modelFetchedAt = { ...modelFetchedAt, [provider]: entry.fetchedAt };
+      }
+    }
+    availableModels = merged;
+  }
+
+  function saveFetchedModelsCache(
+    provider: AiProvider,
+    models: FetchedModel[],
+    fetchedAt: number,
+  ) {
+    try {
+      const cache = readFetchedModelsCache();
+      cache[provider] = { models, fetchedAt };
+      localStorage.setItem(FETCHED_MODELS_CACHE_KEY, JSON.stringify(cache));
+    } catch (error) {
+      console.warn("Failed to save fetched models cache", error);
+    }
+  }
+
+  async function refreshModelsForProvider(
+    provider: AiProvider,
+    opts: { silent?: boolean } = {},
+  ) {
+    if (modelFetchStatus[provider] === "loading") return;
+    modelFetchStatus = { ...modelFetchStatus, [provider]: "loading" };
+    try {
+      const fetched = await invoke<FetchedModel[]>("fetch_provider_models", {
+        provider,
+      });
+      availableModels = mergeFetchedModels(availableModels, provider, fetched);
+      // 起動時にキャッシュ欠損でフォールバックへ戻されていた選択を、
+      // 取得成功を機に元のモデルへ再適用する(一度きり)
+      if (
+        pendingRestoreProvider === provider &&
+        pendingRestoreModel &&
+        availableModels.some(
+          (m) => m.provider === provider && m.value === pendingRestoreModel,
+        )
+      ) {
+        lastSelectedModels = {
+          ...lastSelectedModels,
+          [provider]: pendingRestoreModel,
+        };
+        if (selectedProvider === provider) {
+          selectedModel = pendingRestoreModel as AiModel;
+        }
+        pendingRestoreModel = null;
+        pendingRestoreProvider = null;
+      }
+      const fetchedAt = Date.now();
+      modelFetchedAt = { ...modelFetchedAt, [provider]: fetchedAt };
+      modelFetchErrors = { ...modelFetchErrors, [provider]: "" };
+      modelFetchStatus = { ...modelFetchStatus, [provider]: "idle" };
+      saveFetchedModelsCache(provider, fetched, fetchedAt);
+    } catch (error) {
+      modelFetchStatus = { ...modelFetchStatus, [provider]: "error" };
+      modelFetchErrors = { ...modelFetchErrors, [provider]: String(error) };
+      if (!opts.silent) {
+        console.warn(`Failed to fetch models for ${provider}`, error);
+      }
+    }
+  }
+
+  function maybeAutoRefreshModels(provider: AiProvider) {
+    if (apiKeyStatus[provider] === "unset") return;
+    const fetchedAt = modelFetchedAt[provider];
+    if (fetchedAt && Date.now() - fetchedAt < MODEL_CACHE_STALE_MS) return;
+    void refreshModelsForProvider(provider, { silent: true });
+  }
+
   function clearPendingLegacyApiKey(provider: AiProvider) {
     const { [provider]: _legacy, ...pending } = pendingLegacyApiKeys;
     pendingLegacyApiKeys = pending;
@@ -1311,6 +1475,7 @@
       });
       apiKeyDrafts = { ...apiKeyDrafts, [provider]: "" };
       clearPendingLegacyApiKey(provider);
+      void refreshModelsForProvider(provider, { silent: true });
     } catch (error) {
       console.warn("Failed to save API key", error);
     }
@@ -6303,9 +6468,42 @@
 
                   <!-- Model Selection (Filtered) -->
                   <div class="settings-section">
-                    <label class="settings-label" for="model-select"
-                      >{t(appLanguage, "aiModel")}</label
+                    <div
+                      style="display: flex; align-items: center; justify-content: space-between;"
                     >
+                      <label class="settings-label" for="model-select"
+                        >{t(appLanguage, "aiModel")}</label
+                      >
+                      <button
+                        type="button"
+                        class="icon-btn-small"
+                        aria-label={t(appLanguage, "refreshModels")}
+                        title={t(appLanguage, "refreshModels")}
+                        disabled={modelFetchStatus[selectedProvider] ===
+                          "loading" ||
+                          apiKeyStatus[selectedProvider] === "unset"}
+                        onclick={() => refreshModelsForProvider(selectedProvider)}
+                      >
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          class:spin-icon={modelFetchStatus[selectedProvider] ===
+                            "loading"}
+                        >
+                          <polyline points="23 4 23 10 17 10"></polyline>
+                          <polyline points="1 20 1 14 7 14"></polyline>
+                          <path
+                            d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"
+                          ></path>
+                        </svg>
+                      </button>
+                    </div>
                     <select
                       id="model-select"
                       class="settings-select"
@@ -6315,6 +6513,24 @@
                         <option value={model.value}>{model.label}</option>
                       {/each}
                     </select>
+                    <div class="settings-note top">
+                      {#if modelFetchStatus[selectedProvider] === "loading"}
+                        {t(appLanguage, "modelsFetching")}
+                      {:else if modelFetchStatus[selectedProvider] === "error"}
+                        {t(appLanguage, "modelsFetchError")}: {modelFetchErrors[
+                          selectedProvider
+                        ]}
+                      {:else if apiKeyStatus[selectedProvider] === "unset"}
+                        {t(appLanguage, "modelsFetchNoKey")}
+                      {:else if modelFetchedAt[selectedProvider]}
+                        {t(appLanguage, "modelsLastUpdated").replace(
+                          "{time}",
+                          new Date(
+                            modelFetchedAt[selectedProvider] as number,
+                          ).toLocaleString(),
+                        )}
+                      {/if}
+                    </div>
                   </div>
 
                   {#if selectedProviderDoc}
@@ -8826,6 +9042,10 @@
     to {
       transform: rotate(360deg);
     }
+  }
+
+  .spin-icon {
+    animation: spin 0.8s linear infinite;
   }
 
   /* 読み上げボタン: 音波が順番に現れて消える */

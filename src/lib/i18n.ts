@@ -69,6 +69,11 @@ interface Translations {
 	confirmDiscard: string;
 	discard: string;
 	aiTabDescription: string;
+	refreshModels: string;
+	modelsFetching: string;
+	modelsLastUpdated: string;
+	modelsFetchError: string;
+	modelsFetchNoKey: string;
 	apiOverview: string;
 	apiOverviewDesc: string;
 	openDocs: string;
@@ -269,6 +274,11 @@ const translations: Record<AppLanguage, Translations> = {
 		confirmDiscard: "変更を破棄しますか？",
 		discard: "破棄して戻る",
 		aiTabDescription: "選択したAIプロバイダーのモデルが有効になります。",
+		refreshModels: "モデル一覧を更新",
+		modelsFetching: "モデル一覧を取得中...",
+		modelsLastUpdated: "最終更新: {time}",
+		modelsFetchError: "モデル一覧の取得に失敗しました",
+		modelsFetchNoKey: "APIキーを設定すると自動取得できます",
 		apiOverview: "API概要",
 		apiOverviewDesc: "選択中のプロバイダーの公式APIドキュメントを開きます。",
 		openDocs: "ドキュメントを開く",
@@ -448,6 +458,11 @@ const translations: Record<AppLanguage, Translations> = {
 		confirmDiscard: "Discard changes?",
 		discard: "Discard",
 		aiTabDescription: "The model from the selected AI provider will be active.",
+		refreshModels: "Refresh model list",
+		modelsFetching: "Fetching model list...",
+		modelsLastUpdated: "Last updated: {time}",
+		modelsFetchError: "Failed to fetch model list",
+		modelsFetchNoKey: "Set an API key to auto-fetch models",
 		apiOverview: "API Overview",
 		apiOverviewDesc: "Open the official API docs for the selected provider.",
 		openDocs: "Open docs",
@@ -627,6 +642,11 @@ const translations: Record<AppLanguage, Translations> = {
 		confirmDiscard: "放弃更改？",
 		discard: "丢弃",
 		aiTabDescription: "所选AI提供商的模型将处于活动状态。",
+		refreshModels: "刷新模型列表",
+		modelsFetching: "正在获取模型列表...",
+		modelsLastUpdated: "最后更新: {time}",
+		modelsFetchError: "获取模型列表失败",
+		modelsFetchNoKey: "设置API密钥后可自动获取",
 		apiOverview: "API 概览",
 		apiOverviewDesc: "打开当前所选提供商的官方 API 文档。",
 		openDocs: "打开文档",
@@ -806,6 +826,11 @@ const translations: Record<AppLanguage, Translations> = {
 		confirmDiscard: "변경 사항을 취소하시겠습니까?",
 		discard: "취소하고 뒤로",
 		aiTabDescription: "선택한 AI 제공업체의 모델이 활성화됩니다.",
+		refreshModels: "모델 목록 새로고침",
+		modelsFetching: "모델 목록을 가져오는 중...",
+		modelsLastUpdated: "마지막 업데이트: {time}",
+		modelsFetchError: "모델 목록을 가져오지 못했습니다",
+		modelsFetchNoKey: "API 키를 설정하면 자동으로 가져옵니다",
 		apiOverview: "API 개요",
 		apiOverviewDesc: "선택한 제공자의 공식 API 문서를 엽니다.",
 		openDocs: "문서 열기",
